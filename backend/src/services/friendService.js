@@ -6,6 +6,7 @@
  */
 
 const prisma = require('../prisma');
+const notificationService = require('./notificationService');
 
 /**
  * Send a friend request.
@@ -52,6 +53,23 @@ async function sendRequest(requesterId, addresseeId) {
     data: { requesterId, addresseeId, status: 'pending' },
   });
 
+  // Notify the recipient of the incoming request
+  try {
+    const requester = await prisma.user.findUnique({
+      where: { id: requesterId },
+      select: { id: true, displayName: true, avatarUrl: true },
+    });
+    await notificationService.createNotification(addresseeId, {
+      type: 'friend_request',
+      title: 'New friend request',
+      body: `${requester.displayName} sent you a friend request`,
+      actorId: requesterId,
+      data: { friendshipId: friendship.id, actorAvatarUrl: requester.avatarUrl, link: '/friends' },
+    });
+  } catch (err) {
+    console.error('[Friend] Notification failed:', err.message);
+  }
+
   return friendship;
 }
 
@@ -74,6 +92,23 @@ async function acceptRequest(friendshipId, userId) {
     where: { id: friendshipId },
     data: { status: 'accepted' },
   });
+
+  // Notify the original requester that their request was accepted
+  try {
+    const acceptor = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, displayName: true, avatarUrl: true },
+    });
+    await notificationService.createNotification(friendship.requesterId, {
+      type: 'friend_accept',
+      title: 'Friend request accepted',
+      body: `${acceptor.displayName} accepted your friend request`,
+      actorId: userId,
+      data: { friendshipId: friendship.id, actorAvatarUrl: acceptor.avatarUrl, link: '/friends' },
+    });
+  } catch (err) {
+    console.error('[Friend] Notification failed:', err.message);
+  }
 
   return updated;
 }

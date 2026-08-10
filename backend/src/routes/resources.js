@@ -11,6 +11,7 @@ const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
+const { storeFile, deleteStoredFile } = require('../utils/fileStorage');
 const { extractCohortYear } = require('../services/cohortService');
 
 const router = express.Router();
@@ -179,7 +180,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
-    const fileUrl = `/uploads/resources/${req.file.filename}`;
+    const fileUrl = await storeFile(req.file, { folder: 'comflex/resources', localUrlPrefix: '/uploads/resources' });
 
     const resource = await prisma.resource.create({
       data: {
@@ -225,11 +226,8 @@ router.delete('/:id', async (req, res, next) => {
 
     await prisma.resource.delete({ where: { id: req.params.id } });
 
-    // Try to delete physical file
-    const filePath = path.join(__dirname, '../../', resource.fileUrl);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    // Delete physical file (local disk or Cloudinary best-effort)
+    await deleteStoredFile(resource.fileUrl);
 
     return success(res, { message: 'File deleted' });
   } catch (err) {
@@ -280,10 +278,12 @@ router.get('/download/:id', async (req, res, next) => {
       });
     }
 
-    // Attempt to download physical file
-    const filePath = path.join(__dirname, '../../', resource.fileUrl);
-    if (fs.existsSync(filePath)) {
+    // Local file → stream from disk; Cloudinary URL → redirect to the CDN
+    const filePath = path.join(env.STORAGE_PATH, resource.fileUrl.replace('/uploads/', ''));
+    if (resource.fileUrl.startsWith('/uploads/') && fs.existsSync(filePath)) {
       res.download(filePath, resource.fileName);
+    } else if (resource.fileUrl.startsWith('http')) {
+      res.redirect(resource.fileUrl);
     } else {
       res.status(404).json({ error: 'File physical missing' });
     }

@@ -6,6 +6,7 @@
  */
 
 const prisma = require('../prisma');
+const notificationService = require('./notificationService');
 
 /**
  * Get paginated messages for a group (newest first), with read receipt info.
@@ -89,6 +90,30 @@ async function sendMessage(groupId, authorId, params) {
   await prisma.messageReadReceipt.create({
     data: { messageId: msg.id, userId: authorId },
   }).catch(() => {}); // Ignore if already exists
+
+  // Notify mentioned users (excluding the author) — fire-and-forget
+  const mentionIds = [...new Set((mentions || []).filter((id) => id && id !== authorId))];
+  if (mentionIds.length > 0) {
+    try {
+      const group = await prisma.cohortGroup.findUnique({
+        where: { id: groupId },
+        select: { displayName: true, name: true },
+      });
+      const groupName = group?.displayName || group?.name || 'a group';
+      const preview = (content || '').slice(0, 120);
+      for (const mentionedId of mentionIds) {
+        await notificationService.createNotification(mentionedId, {
+          type: 'mention',
+          title: `You were mentioned in ${groupName}`,
+          body: preview || 'You were mentioned in a message',
+          actorId: authorId,
+          data: { groupId, messageId: msg.id, link: `/groups/${groupId}` },
+        });
+      }
+    } catch (err) {
+      console.error('[Message] Mention notification failed:', err.message);
+    }
+  }
 
   return formatMessage({ ...msg, readReceipts: [{ userId: authorId, readAt: new Date() }], _count: { readReceipts: 1 } });
 }

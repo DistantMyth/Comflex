@@ -14,6 +14,7 @@ const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const dmService = require('../services/dmService');
 const { success, error } = require('../utils/apiResponse');
+const { storeFile } = require('../utils/fileStorage');
 
 const router = express.Router();
 
@@ -50,7 +51,7 @@ router.post('/upload', upload.single('attachment'), async (req, res, next) => {
     if (!req.file) {
       return error(res, 'UPLOAD_REQUIRED', 'No file uploaded.', 400);
     }
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileUrl = await storeFile(req.file, { folder: 'comflex/dm' });
     return success(res, {
       fileUrl,
       fileName: req.file.originalname,

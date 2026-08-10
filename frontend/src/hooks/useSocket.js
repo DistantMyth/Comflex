@@ -8,8 +8,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './useAuth';
+import { socketOrigin } from '../utils/resolveAsset';
 
-const SOCKET_URL = window.location.origin;
+// In dev, Vite proxies /socket.io to the backend. In production (Vercel → Render)
+// the socket must connect to the backend origin directly.
+const SOCKET_URL = socketOrigin();
 
 export function useSocket() {
   const { isAuthenticated } = useAuth();

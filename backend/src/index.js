@@ -27,6 +27,7 @@ const eventRoutes = require('./routes/events');
 const resourceRoutes = require('./routes/resources');
 const storeRoutes = require('./routes/store');
 const chatbotRoutes = require('./routes/chatbotRoutes');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -34,6 +35,12 @@ const httpServer = http.createServer(app);
 // ============================================================
 // MIDDLEWARE
 // ============================================================
+
+// Trust one reverse-proxy hop in production so req.ip resolves to the real
+// client IP (used by the IP rate limiter) instead of the proxy's address.
+if (env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
 
 // CORS — allow frontend origin (in dev, allow any origin for LAN access)
 app.use(cors({
@@ -66,6 +73,7 @@ app.use('/api/v1/events', eventRoutes);
 app.use('/api/v1/resources', resourceRoutes);
 app.use('/api/v1/store', storeRoutes);
 app.use('/api/v1/chatbot', chatbotRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

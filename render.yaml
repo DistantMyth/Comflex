@@ -1,0 +1,70 @@
+# Render Blueprint — Comflex Backend
+# Deploy: push this repo to GitHub → Render → "New" → "Blueprint"
+# (Render reads this render.yaml automatically)
+#
+# Free tier notes:
+#  - The free instance sleeps after 15 min of inactivity. Set up an
+#    UptimeRobot (uptimerobot.com, free) HTTP monitor on
+#    https://<your-app>.onrender.com/api/health with a 5-minute interval
+#    to keep it awake 24/7. See DEPLOY.md.
+#  - Render's filesystem is EPHEMERAL (/tmp). That is why every file upload
+#    is pushed to Cloudinary — set the three CLOUDINARY_* vars below.
+
+services:
+  - type: web
+    name: comflex-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install && npx prisma generate && npx prisma db push
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # MongoDB — create a FREE cluster at https://www.mongodb.com/atlas
+      # then paste the connection string (with your user/password) here.
+      - key: DATABASE_URL
+        sync: false
+      # Auth secrets — generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      # Seed admin (first-run setup wizard account)
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_ADMIN_DISPLAY_NAME
+        sync: false
+      # Google OAuth (same client id as Vercel's VITE_GOOGLE_CLIENT_ID)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      # CORS — your Vercel frontend URL, e.g. https://comflex.vercel.app
+      - key: FRONTEND_URL
+        sync: false
+      # Cloudinary (free) — https://cloudinary.com → Dashboard
+      # REQUIRED: without this, uploads land on Render's /tmp and get deleted.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      # Email: "console" logs reset links to the Render logs; "smtp" sends real mail
+      - key: EMAIL_PROVIDER
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      # Gemini — AI chatbot (free key from https://aistudio.google.com/apikey)
+      - key: GEMINI_API_KEY
+        sync: false
+      # Optional — EVM wallet that receives crypto credit purchases (Web3 store)
+      - key: TREASURY_ADDRESS
+        sync: false

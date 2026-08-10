@@ -13,7 +13,9 @@ const fs = require('fs');
 const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const userService = require('../services/userService');
+const { rateLimiter } = require('../middleware/rateLimit');
 const { success, error } = require('../utils/apiResponse');
+const { storeFile } = require('../utils/fileStorage');
 
 const router = express.Router();
 
@@ -71,15 +73,40 @@ router.get('/me', authMiddleware, async (req, res, next) => {
  * PATCH /api/v1/users/me
  * Update display name, bio, badge selection, CF handle, personal email, etc.
  */
+// Per-IP throttles for PATCH /me — the general one protects the endpoint,
+// the conditional one counts only verification-email sends so multi-account
+// attackers can't spam the email service from one IP.
+const patchMeIpLimit = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 100,
+  message: 'Too many profile update requests from this IP.',
+  keyPrefix: 'users-patch-ip',
+});
+const verifyEmailIpLimit = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  message: 'Too many verification emails requested from this IP.',
+  keyPrefix: 'verify-email-ip',
+  shouldCount: (req) => typeof req.body?.personalEmail === 'string' && req.body.personalEmail.length > 0,
+});
+
 router.patch(
   '/me',
   authMiddleware,
+  patchMeIpLimit,
+  verifyEmailIpLimit,
   [
     body('displayName').optional().trim().isLength({ min: 2, max: 50 }),
     body('bio').optional().isLength({ max: 500 }),
     body('displayBadges').optional().isArray({ max: 5 }),
     body('cfHandle').optional().isString(),
-    body('personalEmail').optional().isEmail().withMessage('Invalid personal email.'),
+    // personalEmail: valid email to (re)set, or null/'' to remove
+    body('personalEmail')
+      .optional({ values: 'null' })
+      .custom((value) =>
+        value === '' || (typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+      )
+      .withMessage('Invalid personal email.'),
   ],
   async (req, res, next) => {
     try {
@@ -90,10 +117,14 @@ router.patch(
         );
       }
 
-      // If setting personal email, trigger verification
-      if (req.body.personalEmail) {
+      // personalEmail handling: null/'' removes it, a real email triggers verification
+      if (req.body.personalEmail !== undefined) {
         const authService = require('../services/authService');
-        await authService.sendPersonalEmailVerification(req.user.id, req.body.personalEmail);
+        if (req.body.personalEmail === null || req.body.personalEmail === '') {
+          await authService.removePersonalEmail(req.user.id);
+        } else {
+          await authService.sendPersonalEmailVerification(req.user.id, req.body.personalEmail);
+        }
         delete req.body.personalEmail; // Don't pass to generic update
       }
 
@@ -110,14 +141,24 @@ router.patch(
  * POST /api/v1/users/me/avatar
  * Upload a profile picture (JPEG/PNG/WebP, max 5MB).
  */
+router.get('/me/personal-email/status', authMiddleware, async (req, res, next) => {
+  try {
+    const authService = require('../services/authService');
+    const status = authService.getVerifyRateLimitStatus(req.user.id);
+    return success(res, status);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/me/avatar', authMiddleware, upload.single('avatar'), async (req, res, next) => {
   try {
     if (!req.file) {
       return error(res, 'UPLOAD_REQUIRED', 'No file uploaded. Please attach an image.', 400);
     }
 
-    // In production, this would be an S3 URL; in dev, it's a local path
-    const avatarUrl = `/uploads/${req.file.filename}`;
+    // Cloudinary when configured (production-safe), local path in dev
+    const avatarUrl = await storeFile(req.file, { folder: 'comflex/avatars' });
     const user = await userService.updateAvatar(req.user.id, avatarUrl);
     return success(res, user);
   } catch (err) {

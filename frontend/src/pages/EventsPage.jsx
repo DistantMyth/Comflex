@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import Layout from '../components/Layout';
 import { eventApi } from '../api/eventApi';
 import { Link } from 'react-router-dom';
 
@@ -63,8 +62,7 @@ export default function EventsPage() {
   );
 
   return (
-    <Layout>
-      <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto">
         <h2 className="text-2xl font-bold mb-6 gradient-text">Events</h2>
         
         {loading ? (
@@ -109,6 +107,5 @@ export default function EventsPage() {
           </div>
         )}
       </div>
-    </Layout>
   );
 }

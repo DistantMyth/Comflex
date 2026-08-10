@@ -7,6 +7,7 @@ const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
+const { storeFile } = require('../utils/fileStorage');
 const { ethers } = require('ethers');
 
 const router = express.Router();
@@ -99,7 +100,7 @@ router.post('/admin/badges', upload.single('image'), [
     let imageUrl = req.body.imageUrl;
     
     if (req.file) {
-      imageUrl = `/uploads/${req.file.filename}`;
+      imageUrl = await storeFile(req.file, { folder: 'comflex/badges' });
     }
     
     if (!imageUrl) return error(res, 'VALIDATION', 'Image URL or file is required', 400);

@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { adminApi } from '../api/adminApi';
-import Layout from '../components/Layout';
+import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member', 'Restricted'];
 
@@ -15,8 +15,7 @@ export default function AdminDashboard() {
   const [tab, setTab] = useState('institution');
 
   return (
-    <Layout>
-      <div className="max-w-5xl mx-auto fade-in">
+    <div className="max-w-5xl mx-auto">
         <h1 className="text-2xl font-bold mb-6">Admin Dashboard</h1>
 
         {/* Tabs */}
@@ -50,7 +49,6 @@ export default function AdminDashboard() {
         {tab === 'users' && <UsersTab />}
         {tab === 'database' && <DatabaseTab />}
       </div>
-    </Layout>
   );
 }
 
@@ -739,7 +737,7 @@ function UsersTab() {
             <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
               {/* Avatar */}
               {u.avatarUrl ? (
-                <img src={u.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
+                <img src={resolveAsset(u.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover" />
               ) : (
                 <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-sm">
                   {u.displayName?.charAt(0)?.toUpperCase()}

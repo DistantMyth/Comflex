@@ -1,125 +1,236 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Comflex — Global Styles & Design System
-   Premium dark theme with glassmorphism and vibrant accents.
+   Comflex — Design System 2.0
+   Glassmorphism · Light + Dark · Inter + Space Grotesk
    ============================================================ */
 
-/* Custom theme variables */
-@theme {
-  --color-bg-primary: #05050f;
-  --color-bg-secondary: rgba(20, 20, 35, 0.35);
-  --color-bg-card: rgba(20, 20, 35, 0.5);
-  --color-bg-glass: rgba(30, 30, 50, 0.65);
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-hover: rgba(255, 255, 255, 0.15);
-  --color-accent: #3b82f6;
+:root {
+  color-scheme: light;
+
+  /* Brand */
+  --color-accent: #7c3aed;
   --color-accent-light: #8b5cf6;
-  --color-accent-dark: #2563eb;
+  --color-accent-dark: #6d28d9;
+  --color-secondary: #f43f5e;
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-danger: #e11d48;
+
+  /* Surfaces */
+  --color-bg-primary: #f3f4fa;
+  --color-bg-secondary: rgba(17, 24, 39, 0.035);
+  --color-bg-card: rgba(255, 255, 255, 0.78);
+  --color-bg-glass: rgba(255, 255, 255, 0.66);
+  --color-bg-input: rgba(255, 255, 255, 0.85);
+
+  /* Text */
+  --color-text-primary: #14141d;
+  --color-text-secondary: #4b4d63;
+  --color-text-muted: #83859c;
+
+  /* Lines */
+  --color-border: rgba(17, 24, 39, 0.10);
+  --color-border-hover: rgba(17, 24, 39, 0.22);
+
+  /* Rings */
+  --color-ring-0: #ef4444;
+  --color-ring-1: #f59e0b;
+  --color-ring-2: #7c3aed;
+  --color-ring-3: #10b981;
+
+  /* Effects */
+  --shadow-card: 0 8px 30px -12px rgba(23, 25, 50, 0.18);
+  --shadow-card-hover: 0 24px 50px -16px rgba(23, 25, 50, 0.28);
+  --shadow-glow: 0 8px 30px -8px rgba(124, 58, 237, 0.45);
+  --blur-glass: blur(22px) saturate(150%);
+
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --color-accent: #8b5cf6;
+  --color-accent-light: #a78bfa;
+  --color-accent-dark: #7c3aed;
+  --color-secondary: #fb7185;
   --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-text-primary: #f0f0f5;
-  --color-text-secondary: #a0a0b8;
-  --color-text-muted: #6b6b80;
+  --color-warning: #fbbf24;
+  --color-danger: #fb7185;
+
+  --color-bg-primary: #07070f;
+  --color-bg-secondary: rgba(255, 255, 255, 0.04);
+  --color-bg-card: rgba(255, 255, 255, 0.055);
+  --color-bg-glass: rgba(255, 255, 255, 0.07);
+  --color-bg-input: rgba(255, 255, 255, 0.05);
+
+  --color-text-primary: #f1f1f7;
+  --color-text-secondary: #a5a7bd;
+  --color-text-muted: #676980;
+
+  --color-border: rgba(255, 255, 255, 0.10);
+  --color-border-hover: rgba(255, 255, 255, 0.18);
+
   --color-ring-0: #ef4444;
   --color-ring-1: #f59e0b;
   --color-ring-2: #6c63ff;
   --color-ring-3: #10b981;
+
+  --shadow-card: 0 10px 34px -14px rgba(0, 0, 0, 0.55);
+  --shadow-card-hover: 0 26px 56px -18px rgba(0, 0, 0, 0.65);
+  --shadow-glow: 0 8px 34px -8px rgba(139, 92, 246, 0.55);
 }
 
-/* Base styles */
+/* ============================================================
+   Base
+   ============================================================ */
+
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background-color: var(--color-bg-primary);
-  background-image: radial-gradient(circle at 50% -20%, rgba(139, 92, 246, 0.35) 0%, transparent 70%);
+  background-image:
+    radial-gradient(1100px 600px at 85% -10%, color-mix(in srgb, var(--color-accent-light) 16%, transparent) 0%, transparent 60%),
+    radial-gradient(900px 500px at -10% 20%, color-mix(in srgb, var(--color-secondary) 10%, transparent) 0%, transparent 55%);
   background-attachment: fixed;
   color: var(--color-text-primary);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.35s ease, color 0.35s ease;
 }
 
-/* Glass card utility */
+/* Display font utility */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+/* ============================================================
+   Glass & Surfaces
+   ============================================================ */
+
 .glass-card {
   background: var(--color-bg-glass);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
   border: 1px solid var(--color-border);
-  border-top: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
 }
 
-/* Gradient text utility */
-.gradient-text {
-  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
+.card {
+  background: var(--color-bg-glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.glass-panel {
+  background: var(--color-bg-glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  border-right: 1px solid var(--color-border);
+}
+
+/* Hover lift for interactive cards */
+.hover-lift {
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* Gradient text */
+.gradient-text,
+.text-gradient {
+  background: linear-gradient(120deg, var(--color-accent) 0%, var(--color-accent-light) 40%, #38bdf8 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
-/* Input styles */
-input[type="text"],
-input[type="email"],
-input[type="password"],
-textarea {
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  color: var(--color-text-primary);
-  padding: 0.75rem 1rem;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  width: 100%;
-}
+/* ============================================================
+   Buttons
+   ============================================================ */
 
-input:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
-}
-
-/* Button base */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.75rem 1.5rem;
-  border-radius: 10px;
+  padding: 0.7rem 1.4rem;
+  border-radius: 14px;
   font-weight: 600;
   font-size: 0.875rem;
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   cursor: pointer;
-  border: none;
+  border: 1px solid transparent;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.btn:active {
+  transform: scale(0.97);
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--color-accent-light) 0%, var(--color-accent) 100%);
+  background: linear-gradient(135deg, var(--color-accent-light) 0%, var(--color-accent) 50%, #2563eb 100%);
+  background-size: 180% 180%;
   color: white;
-  box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+  box-shadow: var(--shadow-glow);
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 25px rgba(139, 92, 246, 0.45);
+  background-position: 100% 0;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 38px -8px color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  transform: translateX(-120%);
+  transition: transform 0.6s ease;
+  pointer-events: none;
+}
+
+.btn-primary:hover::after {
+  transform: translateX(120%);
 }
 
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
 }
 
 .btn-secondary {
   background: var(--color-bg-card);
   color: var(--color-text-primary);
   border: 1px solid var(--color-border);
+  backdrop-filter: blur(12px);
 }
 
 .btn-secondary:hover {
   border-color: var(--color-border-hover);
-  background: var(--color-bg-secondary);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card);
 }
 
 .btn-danger {
@@ -127,7 +238,127 @@ textarea:focus {
   color: white;
 }
 
-/* Spinner animation */
+.btn-danger:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+/* ============================================================
+   Inputs
+   ============================================================ */
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="url"],
+textarea,
+select,
+.input {
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  color: var(--color-text-primary);
+  padding: 0.72rem 1rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  width: 100%;
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+.input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* Inputs with leading/trailing icons (e.g. login email/password): Tailwind's
+   pl-*/pr-* utilities live inside a CSS layer, so the unlayered base input
+   padding above wins and the icon overlaps the placeholder. Re-assert the
+   icon padding here (specificity equal to input[type=...], defined later). */
+input.pl-9  { padding-left: 2.25rem; }
+input.pl-10 { padding-left: 2.5rem; }
+input.pl-11 { padding-left: 2.75rem; }
+input.pl-12 { padding-left: 3rem; }
+input.pr-9  { padding-right: 2.25rem; }
+input.pr-10 { padding-right: 2.5rem; }
+input.pr-11 { padding-right: 2.75rem; }
+input.pr-12 { padding-right: 3rem; }
+
+/* ============================================================
+   Alerts
+   ============================================================ */
+
+.alert {
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  border: 1px solid transparent;
+  backdrop-filter: blur(8px);
+}
+
+.alert-danger {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+  color: var(--color-danger);
+}
+
+.alert-success {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
+  color: var(--color-success);
+}
+
+.alert-warning {
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+  color: var(--color-warning);
+}
+
+.alert-info {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: var(--color-accent);
+}
+
+/* Tag/badge chip */
+.chip-accent {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+
+/* Ring badge colors */
+.ring-badge-0 { background: var(--color-ring-0); }
+.ring-badge-1 { background: var(--color-ring-1); }
+.ring-badge-2 { background: var(--color-ring-2); }
+.ring-badge-3 { background: var(--color-ring-3); }
+
+/* @Mention chip */
+.mention-chip {
+  display: inline;
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  color: var(--color-accent);
+  padding: 1px 5px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: inherit;
+  transition: background 0.15s ease;
+}
+.mention-chip:hover {
+  background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* ============================================================
+   Loaders
+   ============================================================ */
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -141,7 +372,6 @@ textarea:focus {
   animation: spin 0.6s linear infinite;
 }
 
-/* Skeleton loader */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -151,107 +381,121 @@ textarea:focus {
   background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-secondary) 50%, var(--color-bg-card) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s ease infinite;
-  border-radius: 8px;
-}
-
-/* Alert utilities — Tailwind v4 doesn't support bg-opacity with CSS vars */
-.alert {
   border-radius: 12px;
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
-  border: 1px solid transparent;
 }
 
-.alert-danger {
-  background: rgba(239, 68, 68, 0.1);
-  border-color: rgba(239, 68, 68, 0.3);
-  color: #f87171;
-}
+/* ============================================================
+   Avatars
+   ============================================================ */
 
-.alert-success {
-  background: rgba(16, 185, 129, 0.1);
-  border-color: rgba(16, 185, 129, 0.3);
-  color: #34d399;
-}
-
-.alert-warning {
-  background: rgba(245, 158, 11, 0.1);
-  border-color: rgba(245, 158, 11, 0.3);
-  color: #fbbf24;
-}
-
-.alert-info {
-  background: rgba(108, 99, 255, 0.1);
-  border-color: rgba(108, 99, 255, 0.3);
-  color: var(--color-accent-light);
-}
-
-/* Tag/badge chip with accent bg */
-.chip-accent {
-  background: rgba(108, 99, 255, 0.15);
-  color: var(--color-accent-light);
-}
-
-/* Ring badge colors */
-.ring-badge-0 { background: var(--color-ring-0); }
-.ring-badge-1 { background: var(--color-ring-1); }
-.ring-badge-2 { background: var(--color-ring-2); }
-.ring-badge-3 { background: var(--color-ring-3); }
-
-/* @Mention chip in messages */
-.mention-chip {
-  display: inline;
-  background: rgba(108, 99, 255, 0.2);
-  color: var(--color-accent-light);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-weight: 600;
-  font-size: inherit;
-  transition: background 0.15s ease;
-}
-.mention-chip:hover {
-  background: rgba(108, 99, 255, 0.35);
-}
-
-/* Fade-in animation */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.fade-in {
-  animation: fadeIn 0.4s ease forwards;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--color-bg-primary);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-border-hover);
-}
-
-/* Avatar gradient */
 .avatar-gradient {
   background: linear-gradient(135deg, #f472b6 0%, #8b5cf6 50%, #3b82f6 100%);
   color: white;
 }
 
 .avatar-glow {
-  box-shadow: 0 0 30px rgba(139, 92, 246, 0.5);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--color-accent-light) 45%, transparent);
 }
 
-/* Glass panel for aggressive glassmorphism (sidebars, full panels) */
-.glass-panel {
-  background: var(--color-bg-secondary);
-  backdrop-filter: blur(30px);
-  -webkit-backdrop-filter: blur(30px);
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+/* ============================================================
+   Animations
+   ============================================================ */
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in { animation: fadeIn 0.4s ease forwards; }
+.fade-in-up { animation: fadeInUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-22px) scale(1.05); }
+}
+
+.animate-float { animation: floaty 8s ease-in-out infinite; }
+.animate-float-slow { animation: floaty 12s ease-in-out infinite; }
+
+@keyframes gradientShift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradientShift 6s ease infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.animate-pulse-glow { animation: pulseGlow 3s ease-in-out infinite; }
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: marquee 28s linear infinite;
+}
+
+/* Stagger helpers (delay set inline per child) */
+[data-stagger] > * { animation: fadeInUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* ============================================================
+   Decorative background blobs
+   ============================================================ */
+
+.bg-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================================
+   Scrollbar
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-muted) 35%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+}
+
+/* ============================================================
+   Accessibility
+   ============================================================ */
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

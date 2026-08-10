@@ -8,10 +8,10 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { Settings, Users } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { groupApi } from '../api/groupApi';
-import Layout from '../components/Layout';
 import MessageBubble from '../components/MessageBubble';
 import GroupSidebar from '../components/GroupSidebar';
 import UserProfilePanel from '../components/UserProfilePanel';
@@ -19,6 +19,7 @@ import GroupSettingsPanel from '../components/GroupSettingsPanel';
 
 import { friendApi } from '../api/friendApi';
 import { storeApi } from '../api/storeApi';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function ChatPage() {
   const { id: groupId } = useParams();
@@ -457,18 +458,16 @@ export default function ChatPage() {
 
   if (loading) {
     return (
-      <Layout>
-        <div className="max-w-5xl mx-auto">
-          <div className="skeleton h-8 w-48 mb-4" />
-          <div className="skeleton h-96 w-full rounded-xl" />
-        </div>
-      </Layout>
+      <div className="max-w-5xl mx-auto">
+        <div className="skeleton h-8 w-48 mb-4" />
+        <div className="skeleton h-96 w-full rounded-xl" />
+      </div>
     );
   }
 
   return (
-    <Layout>
-      <div className="max-w-5xl mx-auto flex flex-col h-[calc(100vh-120px)] fade-in">
+    <>
+    <div className="max-w-5xl mx-auto flex flex-col h-[calc(100vh-120px)]">
         {/* Header */}
         <div className="flex items-center gap-4 mb-4 flex-shrink-0">
           <Link to="/groups" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors">
@@ -476,7 +475,7 @@ export default function ChatPage() {
           </Link>
           {/* Group avatar */}
           {group?.avatarUrl ? (
-            <img src={group.avatarUrl} alt="" className="w-10 h-10 rounded-xl object-cover" />
+            <img src={resolveAsset(group.avatarUrl)} alt="" className="w-10 h-10 rounded-xl object-cover" />
           ) : (
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-light)] flex items-center justify-center text-white font-bold">
               {group?.displayName?.charAt(0) || '#'}
@@ -494,17 +493,17 @@ export default function ChatPage() {
             {canManageSettings && (
               <button
                 onClick={() => setShowSettings(true)}
-                className="btn btn-secondary text-sm px-3 py-1.5"
+                className="btn btn-secondary text-sm px-3 py-2"
                 title="Group Settings"
               >
-                ⚙️ Settings
+                <Settings size={15} /> Settings
               </button>
             )}
             <button
               onClick={() => setShowSidebar(!showSidebar)}
-              className="btn btn-secondary text-sm px-3 py-1.5"
+              className="btn btn-secondary text-sm px-3 py-2"
             >
-              👥 {showSidebar ? 'Hide' : 'Members'}
+              <Users size={15} /> {showSidebar ? 'Hide' : 'Members'}
             </button>
           </div>
         </div>
@@ -560,7 +559,7 @@ export default function ChatPage() {
             <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-[var(--color-text-muted)] text-sm">
-                  No messages yet. Start the conversation! 💬
+                  No messages yet. Start the conversation!
                 </div>
               ) : (
                 messages.map((msg) => (
@@ -610,7 +609,7 @@ export default function ChatPage() {
                     onMouseEnter={() => setMentionIndex(i)}
                   >
                     {m.avatarUrl ? (
-                      <img src={m.avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
+                      <img src={resolveAsset(m.avatarUrl)} alt="" className="w-6 h-6 rounded-full object-cover" />
                     ) : (
                       <div className="w-6 h-6 rounded-full bg-[var(--color-accent-light)] flex items-center justify-center text-white text-xs font-bold">
                         {m.displayName?.charAt(0)?.toUpperCase()}
@@ -652,7 +651,7 @@ export default function ChatPage() {
             )}
 
             {/* Input Form */}
-            <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-[var(--color-border)] items-center">
+            <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-[var(--color-border)] items-center pb-20 lg:pb-3">
               <button 
                 type="button" 
                 onClick={() => fileInputRef.current?.click()} 
@@ -759,6 +758,6 @@ export default function ChatPage() {
           onGroupUpdated={(updated) => setGroup(prev => ({ ...prev, ...updated }))}
         />
       )}
-    </Layout>
+    </>
   );
 }

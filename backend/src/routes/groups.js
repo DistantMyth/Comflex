@@ -21,6 +21,7 @@ const env = require('../config/env');
 const { extractCohortYear, extractBranch } = require('../services/cohortService');
 const { emitToGroup } = require('../services/chatSocketService');
 const { success, error } = require('../utils/apiResponse');
+const { storeFile } = require('../utils/fileStorage');
 
 const router = express.Router();
 
@@ -289,7 +290,7 @@ router.post('/:id/avatar', requireGroupMember, requireGroupPermission('can_edit_
     if (!req.file) {
       return error(res, 'NO_FILE', 'No avatar file uploaded.', 400);
     }
-    const avatarUrl = `/uploads/groups/${req.file.filename}`;
+    const avatarUrl = await storeFile(req.file, { folder: 'comflex/groups', localUrlPrefix: '/uploads/groups' });
     const group = await groupService.updateGroup(req.params.id, { avatarUrl });
     return success(res, group);
   } catch (err) {
@@ -778,7 +779,7 @@ router.post(
       };
 
       if (req.file) {
-        params.fileUrl = `/uploads/messages/${req.file.filename}`;
+        params.fileUrl = await storeFile(req.file, { folder: 'comflex/messages', localUrlPrefix: '/uploads/messages' });
         params.fileName = req.file.originalname;
         params.fileSize = req.file.size;
         params.mimetype = req.file.mimetype;

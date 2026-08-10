@@ -32,6 +32,9 @@ export const authApi = {
   forgotPassword: (email) =>
     client.post('/auth/forgot-password', { email }),
 
+  resetEmailStatus: (email) =>
+    client.get(`/auth/reset-email-status?email=${encodeURIComponent(email)}`),
+
   resetPassword: (token, newPassword) =>
     client.post('/auth/reset-password', { token, newPassword }),
 

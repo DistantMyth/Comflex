@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { groupApi } from '../api/groupApi';
+import resolveAsset from '../utils/resolveAsset';
 
 const DEFAULT_RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member', 'Restricted'];
 
@@ -302,7 +303,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                   style={{ cursor: isGroupAdmin ? 'pointer' : 'default' }}
                 >
                   {group?.avatarUrl ? (
-                    <img src={group.avatarUrl} alt="" className="w-full h-full object-cover" />
+                    <img src={resolveAsset(group.avatarUrl)} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <span>{group?.displayName?.charAt(0) || '#'}</span>
                   )}
@@ -393,7 +394,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                         {inviteResults.map(u => (
                           <div key={u.id} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--color-bg-secondary)]">
                             {u.avatarUrl ? (
-                              <img src={u.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
+                              <img src={resolveAsset(u.avatarUrl)} alt="" className="w-8 h-8 rounded-full object-cover" />
                             ) : (
                               <div className="w-8 h-8 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white text-xs font-bold">
                                 {u.displayName?.charAt(0)?.toUpperCase()}
@@ -474,7 +475,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                       <div className="space-y-4">
                         <div className="flex items-center gap-3">
                           {m.avatarUrl ? (
-                            <img src={m.avatarUrl} alt="" className="w-12 h-12 rounded-full object-cover" />
+                            <img src={resolveAsset(m.avatarUrl)} alt="" className="w-12 h-12 rounded-full object-cover" />
                           ) : (
                             <div className="w-12 h-12 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold">
                               {m.displayName?.charAt(0)?.toUpperCase()}
@@ -549,7 +550,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                         onClick={() => canManageRoles && m.id !== currentUserId && setSelectedMember(m.id)}
                       >
                         {m.avatarUrl ? (
-                          <img src={m.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
+                          <img src={resolveAsset(m.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover" />
                         ) : (
                           <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white text-sm font-bold">
                             {m.displayName?.charAt(0)?.toUpperCase()}

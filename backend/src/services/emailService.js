@@ -10,6 +10,19 @@
  */
 
 const env = require('../config/env');
+const { createEmailSendLimiter, normalizeEmailKey } = require('../utils/emailRateLimit');
+
+// Chokepoint backstop: EVERY email send is capped per recipient address,
+// regardless of which flow triggered it. The per-flow limiters in authService
+// (verification / password reset) remain the primary control with tighter
+// caps; this guarantees that any future flow — welcome emails, invites,
+// event reminders — gets a baseline anti-abuse guard automatically, even if
+// it forgets its own limiter. Cap is generous (10/10min per recipient) so
+// combined legitimate flows never trip it.
+const recipientLimiter = createEmailSendLimiter({
+  maxSends: 10,
+  message: 'Too many emails sent to this address.',
+});
 
 /**
  * Internal: create the appropriate transport based on EMAIL_PROVIDER.
@@ -55,6 +68,7 @@ function getTransporter() {
  * @param {string} resetUrl - Full URL with reset token
  */
 async function sendPasswordReset(to, resetUrl) {
+  await recipientLimiter.check(normalizeEmailKey(to));
   const transporter = getTransporter();
   await transporter.sendMail({
     from: env.EMAIL_FROM,
@@ -79,6 +93,7 @@ async function sendPasswordReset(to, resetUrl) {
  * @param {string} verifyUrl - Full URL with verification token
  */
 async function sendEmailVerification(to, verifyUrl) {
+  await recipientLimiter.check(normalizeEmailKey(to));
   const transporter = getTransporter();
   await transporter.sendMail({
     from: env.EMAIL_FROM,

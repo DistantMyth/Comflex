@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import Layout from '../components/Layout';
 import { eventApi } from '../api/eventApi';
 import { Link } from 'react-router-dom';
 
@@ -85,8 +84,7 @@ export default function ManageEventsPage() {
   };
 
   return (
-    <Layout>
-      <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
         <div className="flex justify-between items-center bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
           <div>
             <h2 className="text-2xl font-bold gradient-text">Manage Events</h2>
@@ -228,6 +226,5 @@ export default function ManageEventsPage() {
         )}
 
       </div>
-    </Layout>
   );
 }

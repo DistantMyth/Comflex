@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import Layout from '../components/Layout';
 import { eventApi } from '../api/eventApi';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
+import resolveAsset from '../utils/resolveAsset';
 
 const CountdownClock = ({ targetDate, label }) => {
   const [timeLeft, setTimeLeft] = useState(0);
@@ -373,11 +373,11 @@ export default function EventDetailsPage() {
   };
 
   if (loading) {
-    return <Layout><div className="p-8">Loading event...</div></Layout>;
+    return <div className="p-8">Loading event...</div>;
   }
 
   if (!event) {
-    return <Layout><div className="p-8">Event not found.</div></Layout>;
+    return <div className="p-8">Event not found.</div>;
   }
 
   const userTeam = teams.find(t => t.members.some(m => m.userId === user.id));
@@ -395,8 +395,7 @@ export default function EventDetailsPage() {
   const isUpcoming = !isOngoing && !isCompleted;
 
   return (
-    <Layout>
-      <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
         <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-8 shadow-sm relative">
            <div className="flex justify-between items-start mb-2">
              <h2 className="text-3xl font-bold gradient-text">{event.title}</h2>
@@ -564,7 +563,7 @@ export default function EventDetailsPage() {
                       {event.organizers.map(org => (
                         <div key={org.id} className="p-3 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <img src={org.user.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(org.user.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
+                            <img src={resolveAsset(org.user.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(org.user.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
                             <div>
                               <div className="font-bold text-sm">{org.user.displayName}</div>
                               <div className="text-xs text-[var(--color-text-secondary)]">
@@ -613,7 +612,7 @@ export default function EventDetailsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                     {userTeam.members.map(m => (
                       <div key={m.userId} className="flex items-center gap-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] p-3 rounded-xl">
-                        <img src={m.user.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.user.displayName)}&background=random`} alt={m.user.displayName} className="w-8 h-8 rounded-full" />
+                        <img src={resolveAsset(m.user.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.user.displayName)}&background=random`} alt={m.user.displayName} className="w-8 h-8 rounded-full" />
                         <span className="font-medium text-sm">{m.user.displayName}</span>
                       </div>
                     ))}
@@ -626,7 +625,7 @@ export default function EventDetailsPage() {
                          {userTeam.invites.filter(i => i.status === 'pending').map(inv => (
                            <li key={inv.id} className="flex items-center justify-between text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] px-3 py-2 rounded-lg">
                              <div className="flex items-center gap-2">
-                               <img src={inv.invitedUser.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(inv.invitedUser.displayName)}&background=random`} className="w-5 h-5 rounded-full" />
+                               <img src={resolveAsset(inv.invitedUser.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(inv.invitedUser.displayName)}&background=random`} className="w-5 h-5 rounded-full" />
                                <span className="text-[var(--color-text-primary)] font-medium">{inv.invitedUser.displayName}</span>
                              </div>
                              <span className="text-xs text-[var(--color-text-muted)] italic">Waiting...</span>
@@ -655,8 +654,7 @@ export default function EventDetailsPage() {
                             return !isMember && !isInvited && isEligible;
                           }).map(u => (
                             <div key={u.id} className="flex items-center justify-between p-3 hover:bg-[var(--color-bg-secondary)] rounded-lg transition-colors">
-                              <div className="flex items-center gap-3">
-                                <img src={u.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
+                              <div className="flex items-center gap-3">                                 <img src={resolveAsset(u.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
                                 <div>
                                   <div className="font-medium text-sm">{u.displayName}</div>
                                   <div className="text-xs text-[var(--color-text-muted)]">{u.username || u.email}</div>
@@ -1044,6 +1042,5 @@ export default function EventDetailsPage() {
           </div>
         )}
       </div>
-    </Layout>
   );
 }

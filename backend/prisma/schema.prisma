@@ -77,6 +77,9 @@ model User {
   // Resources Relations
   resourcesUploaded Resource[]
 
+  // Notifications
+  notifications     Notification[]
+
   // Credits & Badges Relations
   acquiredBadges    UserBadge[]
   chatbotNotes      ChatbotNote[]
@@ -540,5 +543,25 @@ model ChatbotNote {
   createdAt       DateTime @default(now())
 
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// NOTIFICATIONS — real-time bell items (friend requests, DMs, mentions)
+// ============================================================
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId // recipient
+  type      String   // friend_request | friend_accept | dm | mention
+  title     String
+  body      String?
+  actorId   String?  @db.ObjectId // who triggered the notification
+  data      Json?    // { groupId?, messageId?, friendshipId?, link? }
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
 }
 

@@ -22,6 +22,9 @@ export const userApi = {
   getTags: () =>
     client.get('/users/me/tags'),
 
+  getPersonalEmailStatus: () =>
+    client.get('/users/me/personal-email/status'),
+
   searchUsers: (query) =>
     client.get(`/users/search?q=${encodeURIComponent(query)}`),
 

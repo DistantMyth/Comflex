@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { friendApi } from '../api/friendApi';
 import { groupApi } from '../api/groupApi';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function CreateGroupModal({ onClose, onCreated }) {
   const [name, setName] = useState('');
@@ -167,7 +168,7 @@ export default function CreateGroupModal({ onClose, onCreated }) {
                     }`}
                   >
                     {f.avatarUrl ? (
-                      <img src={f.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
+                      <img src={resolveAsset(f.avatarUrl)} alt="" className="w-8 h-8 rounded-full object-cover" />
                     ) : (
                       <div className="w-8 h-8 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white text-xs font-bold">
                         {f.displayName?.charAt(0)?.toUpperCase()}

@@ -1,5 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
-const { success } = require('../utils/apiResponse');
+const { success, error } = require('../utils/apiResponse');
 const prisma = new PrismaClient();
 
 exports.listEvents = async (req, res, next) => {
@@ -345,7 +345,8 @@ exports.inviteToTeam = async (req, res, next) => {
     }
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+
     const hasStarted = event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate));
     if (hasStarted) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Cannot invite. The event has already started.' } });
 
@@ -400,6 +401,8 @@ exports.acceptTeamInvite = async (req, res, next) => {
     }
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+
     const hasStarted = event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate));
     if (hasStarted) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Cannot join. The event has already started.' } });
 
@@ -641,7 +644,11 @@ exports.listTasks = async (req, res, next) => {
   try {
     const { id: eventId } = req.params;
     const event = await prisma.event.findUnique({ where: { id: eventId }, include: { organizers: true } });
-    
+
+    if (!event) {
+      return error(res, 'NOT_FOUND', 'Event not found.', 404);
+    }
+
     const isOrganizer = event.creatorId === req.user.id || event.organizers.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
 
     let tasks = await prisma.eventTask.findMany({

@@ -6,6 +6,23 @@
  */
 
 const prisma = require('../prisma');
+const notificationService = require('./notificationService');
+
+// Serialize the "check-then-create" burst-dedupe per (receiver, sender) pair so
+// concurrent DMs can't both pass the unread-check and create duplicate bells.
+const dmNotifLocks = new Map();
+function withDmNotifLock(receiverId, senderId, fn) {
+  const key = `${receiverId}:${senderId}`;
+  const prev = dmNotifLocks.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  // Store a never-rejecting wrapper so failures don't poison the chain
+  const wrapped = next.catch(() => {});
+  dmNotifLocks.set(key, wrapped);
+  wrapped.finally(() => {
+    if (dmNotifLocks.get(key) === wrapped) dmNotifLocks.delete(key);
+  });
+  return next; // caller still sees the original outcome
+}
 
 /**
  * Check that two users are friends (accepted friendship exists).
@@ -59,6 +76,34 @@ async function sendDM(senderId, receiverId, data) {
       fileSize: data.fileSize || null,
     },
   });
+
+  // Notify the receiver — one bell item per unread burst (skip if an
+  // unread DM notification from this sender already exists). Serialized
+  // per pair to avoid duplicate creations under concurrent sends.
+  try {
+    await withDmNotifLock(receiverId, senderId, async () => {
+      const existingUnread = await prisma.notification.findFirst({
+        where: { userId: receiverId, type: 'dm', isRead: false, actorId: senderId },
+        select: { id: true },
+      });
+      if (existingUnread) return;
+
+      const sender = await prisma.user.findUnique({
+        where: { id: senderId },
+        select: { id: true, displayName: true, avatarUrl: true },
+      });
+      const preview = (message.content || '').slice(0, 120);
+      await notificationService.createNotification(receiverId, {
+        type: 'dm',
+        title: `New message from ${sender.displayName}`,
+        body: preview || (message.fileUrl ? 'Sent an attachment' : 'Sent a message'),
+        actorId: senderId,
+        data: { messageId: message.id, actorAvatarUrl: sender.avatarUrl, link: `/messages/${senderId}` },
+      });
+    });
+  } catch (err) {
+    console.error('[DM] Notification failed:', err.message);
+  }
 
   return message;
 }

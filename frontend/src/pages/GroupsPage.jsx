@@ -9,11 +9,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { groupApi } from '../api/groupApi';
 import { adminApi } from '../api/adminApi';
 import { useAuth } from '../hooks/useAuth';
-import Layout from '../components/Layout';
+import { Mail, MessagesSquare, Users } from 'lucide-react';
 import CreateGroupModal from '../components/CreateGroupModal';
 import CreateCohortGroupModal from '../components/CreateCohortGroupModal';
+import resolveAsset from '../utils/resolveAsset';
 
-const TYPE_LABELS = { primary: '🎓 Cohort', 'cross-year': '🔗 Cross-Year', custom: '✨ Custom' };
+const TYPE_LABELS = { primary: 'Cohort', 'cross-year': 'Cross-Year', custom: 'Custom' };
+const TYPE_ICONS = { primary: '🎓', 'cross-year': '🔗', custom: '✨' };
 
 export default function GroupsPage() {
   const [groups, setGroups] = useState([]);
@@ -63,8 +65,8 @@ export default function GroupsPage() {
   };
 
   return (
-    <Layout>
-      <div className="max-w-3xl mx-auto fade-in">
+    <>
+    <div className="max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">Groups</h1>
           <div className="flex items-center gap-3">
@@ -97,14 +99,14 @@ export default function GroupsPage() {
         {invites.length > 0 && (
           <div className="mb-6">
             <h2 className="text-sm font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">
-              📩 Pending Invites ({invites.length})
+              <span className="inline-flex items-center gap-1.5"><Mail size={14} /> Pending Invites ({invites.length})</span>
             </h2>
             <div className="space-y-2">
               {invites.map(inv => (
                 <div key={inv.id} className="glass-card p-4 flex items-center gap-4 border border-[var(--color-warning)] border-opacity-30">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--color-warning)] to-[var(--color-accent)] flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
                     {inv.group?.avatarUrl ? (
-                      <img src={inv.group.avatarUrl} alt="" className="w-full h-full rounded-xl object-cover" />
+                      <img src={resolveAsset(inv.group.avatarUrl)} alt="" className="w-full h-full rounded-xl object-cover" />
                     ) : (
                       inv.group?.displayName?.charAt(0) || '#'
                     )}
@@ -141,8 +143,10 @@ export default function GroupsPage() {
           </div>
         ) : groups.length === 0 ? (
           <div className="glass-card p-8 text-center">
-            <div className="text-5xl mb-4">📭</div>
-            <h2 className="text-lg font-semibold mb-2">No Groups Yet</h2>
+            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center justify-center">
+              <MessagesSquare size={30} className="text-[var(--color-accent)]" />
+            </div>
+            <h2 className="text-lg font-semibold mb-2 font-display">No Groups Yet</h2>
             <p className="text-[var(--color-text-secondary)] text-sm mb-4">
               Create a group to start chatting with your friends!
             </p>
@@ -160,7 +164,7 @@ export default function GroupsPage() {
               >
                 {/* Group avatar */}
                 {group.avatarUrl ? (
-                  <img src={group.avatarUrl} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
+                  <img src={resolveAsset(group.avatarUrl)} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
                 ) : (
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-light)] flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
                     {group.displayName?.charAt(0) || group.name?.charAt(0)?.toUpperCase() || '#'}
@@ -172,10 +176,10 @@ export default function GroupsPage() {
                   <h3 className="font-semibold truncate">{group.displayName || group.name}</h3>
                   <div className="flex items-center gap-3 mt-1">
                     <span className="text-xs text-[var(--color-text-muted)]">
-                      {TYPE_LABELS[group.type] || group.type}
+                      {TYPE_ICONS[group.type] || '✨'} {TYPE_LABELS[group.type] || group.type}
                     </span>
                     <span className="text-xs text-[var(--color-text-muted)]">
-                      👥 {group.memberCount || group._count?.members || 0} members
+                      <Users size={11} className="inline mr-0.5" /> {group.memberCount || group._count?.members || 0} members
                     </span>
                     {group.description && (
                       <span className="text-xs text-[var(--color-text-muted)] truncate hidden md:inline">
@@ -227,6 +231,6 @@ export default function GroupsPage() {
           }}
         />
       )}
-    </Layout>
+    </>
   );
 }

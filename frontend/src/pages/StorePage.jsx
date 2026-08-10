@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import Layout from '../components/Layout';
 import { storeApi } from '../api/storeApi';
 import { ethers } from 'ethers';
+import { Store, Coins } from 'lucide-react';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function StorePage() {
   const { user, refreshProfile } = useAuth();
@@ -186,7 +187,7 @@ export default function StorePage() {
   };
 
   return (
-    <Layout>
+      <>
       {/* Custom Popup Modal */}
       {popup.show && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in" style={{ animationDuration: '0.2s' }}>
@@ -205,12 +206,12 @@ export default function StorePage() {
         </div>
       )}
 
-      <div className="max-w-5xl mx-auto fade-in">
+      <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-center sm:justify-between mb-8 flex-wrap gap-4">
-          <h1 className="text-3xl font-bold">🛒 Web3 Store & Ledger</h1>
+          <h1 className="text-3xl font-bold font-display flex items-center gap-2"><Store size={26} className="text-[var(--color-accent)]" /> Web3 Store & Ledger</h1>
           <div className="flex items-center gap-4">
             <span className="font-semibold text-[var(--color-primary)]">
-              🪙 Credits: {user?.globalRing === 0 ? '∞' : (user?.creditBalance ?? 0)}
+              <Coins size={16} className="inline text-[var(--color-warning)]" /> Credits: {user?.globalRing === 0 ? '∞' : (user?.creditBalance ?? 0)}
             </span>
           </div>
         </div>
@@ -235,7 +236,7 @@ export default function StorePage() {
                 {listings.length === 0 ? <p className="text-[var(--color-text-muted)] col-span-3">No active listings.</p> : null}
                 {listings.map(l => (
                   <div key={l.id} className="glass-card p-4 flex flex-col items-center hover:scale-105 transition-transform duration-300">
-                    <img src={l.badge.imageUrl} alt={l.badge.name} className="w-24 h-24 mb-4 object-cover drop-shadow-lg" />
+                    <img src={resolveAsset(l.badge.imageUrl)} alt={l.badge.name} className="w-24 h-24 mb-4 object-cover drop-shadow-lg" />
                     <h3 className="font-bold text-lg mb-1">{l.badge.name}</h3>
                     <p className="text-xs text-[var(--color-text-muted)] text-center mb-4">{l.badge.description}</p>
                     <div className="mt-auto flex w-full items-center justify-between">
@@ -306,7 +307,7 @@ export default function StorePage() {
                      <div className="absolute top-4 right-[-30px] bg-purple-500 text-white font-bold text-xs py-1 px-10 rotate-45">BEST</div>
                      <h3 className="text-2xl font-bold mb-2 text-purple-600">Ultra Plan</h3>
                      <p className="text-[var(--color-text-muted)] flex-1 text-sm mb-6 pb-4 border-b">The ultimate study companion. Upload local files directly.</p>
-                     <ul className="mb-6 space-y-2 text-sm font-semibold text-gray-800">
+                     <ul className="mb-6 space-y-2 text-sm font-semibold text-[var(--color-text-secondary)]">
                        <li>✅ 10 Uploads daily</li>
                        <li>✅ Upload from Local Device</li>
                        <li>✅ Unlimited Chats</li>
@@ -328,7 +329,7 @@ export default function StorePage() {
                  {inventory.length === 0 ? <p className="text-[var(--color-text-muted)] col-span-3">You don't own any badges yet.</p> : null}
                  {inventory.map(inv => (
                    <div key={inv.id} className="glass-card p-4 flex flex-col items-center">
-                     <img src={inv.badge.imageUrl} alt={inv.badge.name} className="w-16 h-16 mb-2 object-cover drop-shadow-md" />
+                     <img src={resolveAsset(inv.badge.imageUrl)} alt={inv.badge.name} className="w-16 h-16 mb-2 object-cover drop-shadow-md" />
                      <h4 className="font-bold text-sm text-center">{inv.badge.name}</h4>
                      <span className="text-[10px] text-[var(--color-text-muted)] mt-2 italic bg-[var(--color-bg-secondary)] px-2 py-0.5 rounded">Source: {inv.source}</span>
                    </div>
@@ -458,7 +459,7 @@ export default function StorePage() {
                       {allBadges.map(b => (
                         <div key={b.id} className="flex flex-col gap-2 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-3 rounded-lg overflow-hidden">
                           <div className="flex items-center gap-3">
-                            <img src={b.imageUrl} className="w-12 h-12 rounded object-cover" />
+                            <img src={resolveAsset(b.imageUrl)} className="w-12 h-12 rounded object-cover" />
                             <div className="flex-1 min-w-0">
                               <h4 className="font-bold text-sm truncate">{b.name}</h4>
                               <p className="text-[10px] text-[var(--color-text-muted)] font-mono truncate" title="ID to copy">{b.id}</p>
@@ -484,6 +485,6 @@ export default function StorePage() {
           </>
         )}
       </div>
-    </Layout>
+    </>
   );
 }

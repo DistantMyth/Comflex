@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Layout from '../components/Layout';
 import { useAuth } from '../hooks/useAuth';
 import { resourceApi } from '../api/resourceApi';
+import resolveAsset from '../utils/resolveAsset';
 
 const getDynamicFolderTree = (user, myYear) => {
   const tree = {
@@ -230,7 +230,7 @@ export default function ResourcesPage() {
             <div key={res.id} className="glass-card p-4 flex items-center gap-4">
               <div className="text-3xl text-[var(--color-primary)]">📄</div>
               <div className="flex-1 min-w-0">
-                <a href={import.meta.env.VITE_BACKEND_URL + res.fileUrl} target="_blank" rel="noreferrer" 
+                <a href={resolveAsset(res.fileUrl)} target="_blank" rel="noreferrer" 
                    className="font-medium hover:text-[var(--color-accent)] hover:underline block truncate">
                   {res.title}
                 </a>
@@ -239,7 +239,7 @@ export default function ResourcesPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <a href={import.meta.env.VITE_BACKEND_URL + res.fileUrl} download={res.fileName} className="btn btn-secondary text-xs px-3 py-1">
+                <a href={resolveAsset(res.fileUrl)} download={res.fileName} className="btn btn-secondary text-xs px-3 py-1">
                   Download
                 </a>
                 {canDelete && (
@@ -256,8 +256,8 @@ export default function ResourcesPage() {
   };
 
   return (
-    <Layout>
-      <div className="max-w-5xl mx-auto py-6">
+    <>
+    <div className="max-w-5xl mx-auto py-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <div className="flex-1">
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-primary)]">
@@ -318,7 +318,7 @@ export default function ResourcesPage() {
           onSuccess={fetchResources}
         />
       )}
-    </Layout>
+    </>
   );
 }
 

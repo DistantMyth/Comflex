@@ -1,18 +1,21 @@
 /**
  * ProfilePage — User's own profile with avatar, bio, tags, and badges.
- * 
- * States: Loading skeleton → Profile view → Edit mode → Save → Confirm.
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import { Camera, Pencil, Save, X, CreditCard, Calendar, BookOpen, Code2, Loader2, Mail, MailCheck, ShieldCheck, Send, RotateCcw, Trash2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
 import { parseIIITLEmail } from '../utils/parseEmail';
-import Layout from '../components/Layout';
 import Avatar from '../components/Avatar';
+import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated Member', 'Member'];
+
+// Format a countdown seconds value for the button label
+const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}s`);
 
 export default function ProfilePage() {
   const { user, refreshProfile } = useAuth();
@@ -23,23 +26,143 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [message, setMessage] = useState('');
-  
+
   const [badgeMap, setBadgeMap] = useState({});
   const [inventory, setInventory] = useState([]);
   const [selectedBadges, setSelectedBadges] = useState([]);
 
+  // Personal email verification
+  const [peEditing, setPeEditing] = useState(false);
+  const [peEmail, setPeEmail] = useState('');
+  const [peBusy, setPeBusy] = useState(false);
+  const [peAction, setPeAction] = useState(''); // 'resend' | 'remove' | ''
+  const [peMessage, setPeMessage] = useState('');
+  const [peError, setPeError] = useState('');
+  const [peCooldown, setPeCooldown] = useState(0); // seconds until resend allowed
+  const cooldownRef = useRef(null);
+  const [peLimit, setPeLimit] = useState(null); // { remaining, retryAfterMs, maxSends } from backend
+
+  const personalEmailVerified = Boolean(user?.personalEmailVerified);
+  const hasPersonalEmail = Boolean(user?.personalEmail);
+
+  // Start a cooldown countdown. Defaults to the client-side 60s guard; the
+  // backend's accurate retryAfter overrides it when the per-user limit is hit.
+  const startCooldown = useCallback((seconds = 60) => {
+    setPeCooldown(seconds);
+    clearInterval(cooldownRef.current);
+    cooldownRef.current = setInterval(() => {
+      setPeCooldown((c) => Math.max(0, c - 1));
+    }, 1000);
+  }, []);
+
+  // Fetch the backend's rate-limit state for this user and seed the countdown
+  // with the accurate server-side wait when sends are exhausted.
+  const fetchVerifyStatus = useCallback(async () => {
+    try {
+      const res = await userApi.getPersonalEmailStatus();
+      const status = res.data?.data;
+      if (!status) return;
+      setPeLimit(status);
+      if (status.retryAfterMs > 0) {
+        startCooldown(Math.max(1, Math.ceil(status.retryAfterMs / 1000)));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [startCooldown]);
+
   useEffect(() => {
-    storeApi.getAllBadges().then(res => {
+    fetchVerifyStatus();
+  }, [fetchVerifyStatus]);
+
+  // Stop the countdown timer when it reaches zero
+  useEffect(() => {
+    if (peCooldown === 0 && cooldownRef.current) {
+      clearInterval(cooldownRef.current);
+      cooldownRef.current = null;
+    }
+  }, [peCooldown]);
+
+  // Clear the cooldown timer on unmount
+  useEffect(() => () => clearInterval(cooldownRef.current), []);
+
+  const startPeEdit = () => {
+    setPeEmail(user?.personalEmail || '');
+    setPeEditing(true);
+    setPeMessage('');
+    setPeError('');
+  };
+
+  const sendVerification = async () => {
+    const email = peEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setPeError('Please enter a valid email address.');
+      return;
+    }
+    setPeBusy(true);
+    setPeError('');
+    setPeMessage('');
+    try {
+      await userApi.updateProfile({ personalEmail: email });
+      await refreshProfile();
+      setPeEditing(false);
+      setPeMessage(`Verification email sent to ${email}. Check your inbox.`);
+      startCooldown();
+      fetchVerifyStatus(); // sync with the backend limit (may extend the wait)
+    } catch (err) {
+      setPeError(err.response?.data?.error?.message || 'Failed to send verification email.');
+      fetchVerifyStatus(); // pick up the server-side wait if we got rate-limited
+    } finally {
+      setPeBusy(false);
+    }
+  };
+
+  // One-click resend — re-sends the verification link to the existing email
+  const resendVerification = async () => {
+    if (!user?.personalEmail) return;
+    setPeAction('resend');
+    setPeError('');
+    setPeMessage('');
+    try {
+      await userApi.updateProfile({ personalEmail: user.personalEmail });
+      setPeMessage(`Verification email sent to ${user.personalEmail}. Check your inbox.`);
+      startCooldown();
+      fetchVerifyStatus(); // sync with the backend limit (may extend the wait)
+    } catch (err) {
+      setPeError(err.response?.data?.error?.message || 'Failed to resend verification email.');
+      fetchVerifyStatus(); // pick up the server-side wait if we got rate-limited
+    } finally {
+      setPeAction('');
+    }
+  };
+
+  // Remove the personal email entirely
+  const removePersonalEmail = async () => {
+    if (!window.confirm('Remove your personal email? You can add it again later.')) return;
+    setPeAction('remove');
+    setPeError('');
+    setPeMessage('');
+    try {
+      await userApi.updateProfile({ personalEmail: null });
+      await refreshProfile();
+      setPeMessage('Personal email removed.');
+    } catch (err) {
+      setPeError(err.response?.data?.error?.message || 'Failed to remove personal email.');
+    } finally {
+      setPeAction('');
+    }
+  };
+
+  useEffect(() => {
+    storeApi.getAllBadges().then((res) => {
       const map = {};
-      res.data.data.forEach(b => map[b.id] = b);
+      res.data.data.forEach((b) => (map[b.id] = b));
       setBadgeMap(map);
     }).catch(() => {});
   }, []);
 
-  // Parse academic info from email
   const academicInfo = useMemo(() => parseIIITLEmail(user?.email), [user?.email]);
 
-  // Initialize form when entering edit mode
   const startEdit = async () => {
     setForm({
       displayName: user?.displayName || '',
@@ -61,9 +184,7 @@ export default function ProfilePage() {
     try {
       await userApi.updateProfile(form);
       const isSame = JSON.stringify(selectedBadges) === JSON.stringify(user?.displayBadges || []);
-      if (!isSame) {
-        await storeApi.setDisplayBadges(selectedBadges);
-      }
+      if (!isSame) await storeApi.setDisplayBadges(selectedBadges);
       await refreshProfile();
       setEditing(false);
       setMessage('Profile updated successfully!');
@@ -77,17 +198,9 @@ export default function ProfilePage() {
   const handleAvatarUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    // Client-side validation
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!allowed.includes(file.type)) {
-      setMessage('Only JPEG, PNG, and WebP images are allowed.');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setMessage('File must be under 5MB.');
-      return;
-    }
+    if (!allowed.includes(file.type)) return setMessage('Only JPEG, PNG, and WebP images are allowed.');
+    if (file.size > 5 * 1024 * 1024) return setMessage('File must be under 5MB.');
 
     setUploadingAvatar(true);
     setMessage('');
@@ -104,99 +217,114 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <Layout>
-        <div className="space-y-4">
-          <div className="skeleton h-32 w-32 rounded-full mx-auto" />
-          <div className="skeleton h-6 w-48 mx-auto" />
-          <div className="skeleton h-4 w-64 mx-auto" />
-        </div>
-      </Layout>
+      <div className="space-y-4">
+        <div className="skeleton h-28 w-28 rounded-full mx-auto" />
+        <div className="skeleton h-6 w-48 mx-auto" />
+        <div className="skeleton h-4 w-64 mx-auto" />
+      </div>
     );
   }
 
+  const successMsg = message.includes('success') || message.includes('updated');
+
   return (
-    <Layout>
-      <div className="max-w-2xl mx-auto fade-in">
-        <h1 className="text-2xl font-bold mb-8">My Profile</h1>
+    <div className="max-w-3xl mx-auto">
+        <div className="flex items-center justify-between mb-7">
+          <h1 className="text-2xl font-bold font-display">My Profile</h1>
+          <span className={`px-3 py-1.5 rounded-full text-xs font-bold text-white ring-badge-${Math.min(user.globalRing, 3)}`}>
+            Ring {user.globalRing} · {RING_LABELS[user.globalRing] || 'Restricted'}
+          </span>
+        </div>
 
         {message && (
-          <div className={`alert mb-6 ${
-            message.includes('success') || message.includes('updated')
-              ? 'alert-success'
-              : 'alert-danger'
-          }`}>
+          <div className={`alert mb-6 ${successMsg ? 'alert-success' : 'alert-danger'}`}>
             {message}
           </div>
         )}
 
-        {/* Avatar Section */}
-        <div className="glass-card p-6 mb-6">
-          <div className="flex items-center gap-6">
+        {/* Avatar + identity */}
+        <div className="glass-card p-6 mb-6 hover-lift">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
             <div className="relative group">
-              <Avatar 
-                src={user.avatarUrl} 
-                name={user.displayName} 
-                className="w-24 h-24 rounded-full object-cover border-2 border-[var(--color-border)] avatar-glow" 
+              <Avatar
+                src={user.avatarUrl}
+                name={user.displayName}
+                className="w-28 h-28 rounded-full object-cover border-2 border-[var(--color-border)] avatar-glow text-3xl"
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploadingAvatar}
-                className="absolute inset-0 rounded-full bg-black bg-opacity-50 flex items-center justify-center text-white text-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                className="absolute inset-0 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                title="Change avatar"
               >
-                {uploadingAvatar ? <span className="spinner" /> : '📷 Change'}
+                {uploadingAvatar ? <Loader2 size={18} className="animate-spin" /> : <Camera size={20} />}
               </button>
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp"
-                onChange={handleAvatarUpload} className="hidden" />
+              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleAvatarUpload} className="hidden" />
             </div>
 
-            <div>
-              <h2 className="text-xl font-bold">{user.displayName}</h2>
-              <p className="text-[var(--color-text-secondary)] text-sm">{user.email}</p>
-              <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs text-white ring-badge-${Math.min(user.globalRing, 3)}`}>
-                Ring {user.globalRing} · {RING_LABELS[user.globalRing] || 'Restricted'}
-              </span>
-              
-              <div className="flex gap-2 mt-3">
-                {user.displayBadges?.map(badgeId => {
-                  const badge = badgeMap[badgeId];
-                  if (!badge) return null;
-                  return (
-                    <img key={badgeId} src={badge.imageUrl} alt={badge.name} title={badge.name} className="w-8 h-8 object-cover drop-shadow" />
-                  );
-                })}
+            <div className="text-center sm:text-left flex-1 min-w-0">
+              <h2 className="text-xl font-bold font-display truncate">{user.displayName}</h2>
+              <p className="text-[var(--color-text-secondary)] text-sm break-all">{user.email}</p>
+              {user.username && <p className="text-xs text-[var(--color-text-muted)] mt-0.5">@{user.username}</p>}
+
+              {user.displayBadges?.length > 0 && (
+                <div className="flex flex-wrap justify-center sm:justify-start gap-2 mt-3">
+                  {user.displayBadges.map((badgeId) => {
+                    const badge = badgeMap[badgeId];
+                    if (!badge) return null;
+                    return (
+                      <img
+                        key={badgeId}
+                        src={resolveAsset(badge.imageUrl)}
+                        alt={badge.name}
+                        title={badge.name}
+                        className="w-9 h-9 object-cover rounded-lg drop-shadow-lg"
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 sm:flex-col shrink-0">
+              <div className="glass-card px-4 py-3 rounded-2xl !shadow-none text-center sm:min-w-[110px]">
+                <p className="text-lg font-bold font-display gradient-text">
+                  {user.globalRing === 0 ? '∞' : (user.creditBalance ?? 0)}
+                </p>
+                <p className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">Credits</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Academic Info — only shown for IIITL emails */}
+        {/* Academic Info */}
         {academicInfo && (
           <div className="glass-card p-6 mb-6">
-            <h3 className="text-lg font-semibold mb-4">Academic Info</h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Branch</span>
-                <p className="text-[var(--color-text-secondary)] font-medium">{academicInfo.branch}</p>
-              </div>
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Year of Admission</span>
-                <p className="text-[var(--color-text-secondary)] font-medium">{academicInfo.yearOfAdmission}</p>
-              </div>
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Roll Number</span>
-                <p className="text-[var(--color-text-secondary)] font-medium">{academicInfo.rollNumber}</p>
-              </div>
+            <h3 className="text-lg font-semibold font-display mb-4 flex items-center gap-2">
+              <BookOpen size={17} className="text-[var(--color-accent)]" /> Academic Info
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[
+                ['Branch', academicInfo.branch],
+                ['Year of Admission', academicInfo.yearOfAdmission],
+                ['Roll Number', academicInfo.rollNumber],
+              ].map(([label, value]) => (
+                <div key={label} className="p-3 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)]">
+                  <span className="text-xs text-[var(--color-text-muted)]">{label}</span>
+                  <p className="font-semibold mt-0.5">{value}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* Profile Details */}
+        {/* Details */}
         <div className="glass-card p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Details</h3>
+            <h3 className="text-lg font-semibold font-display">Details</h3>
             {!editing && (
-              <button onClick={startEdit} className="btn btn-secondary text-xs">
-                ✏️ Edit
+              <button onClick={startEdit} className="btn btn-secondary text-xs px-3 py-2">
+                <Pencil size={13} /> Edit
               </button>
             )}
           </div>
@@ -205,90 +333,197 @@ export default function ProfilePage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Display Name</label>
-                <input type="text" value={form.displayName}
-                  onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                  maxLength={50} />
+                <input type="text" value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} maxLength={50} />
               </div>
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Bio</label>
-                <textarea value={form.bio}
-                  onChange={(e) => setForm({ ...form, bio: e.target.value })}
-                  maxLength={500} rows={3}
-                  className="bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl text-[var(--color-text-primary)] p-3 w-full resize-none focus:outline-none focus:border-[var(--color-accent)]" />
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">{form.bio.length}/500</p>
+                <textarea value={form.bio} onChange={(e) => setForm({ ...form, bio: e.target.value })} maxLength={500} rows={3} className="w-full resize-none" />
+                <p className="text-xs text-[var(--color-text-muted)] mt-1 text-right">{form.bio.length}/500</p>
               </div>
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Codeforces Handle</label>
-                <input type="text" value={form.cfHandle}
-                  onChange={(e) => setForm({ ...form, cfHandle: e.target.value })}
-                  placeholder="your_cf_handle" />
+                <input type="text" value={form.cfHandle} onChange={(e) => setForm({ ...form, cfHandle: e.target.value })} placeholder="your_cf_handle" />
               </div>
-              
+
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-2">Display Badges (Max 5)</label>
+                {inventory.length === 0 && <p className="text-xs text-[var(--color-text-muted)]">No badges in inventory.</p>}
                 <div className="flex flex-wrap gap-3">
-                  {inventory.length === 0 && <p className="text-xs text-[var(--color-text-muted)]">No badges in inventory.</p>}
-                  {Array.from(new Set(inventory.map(i => i.badgeId))).map(badgeId => {
+                  {Array.from(new Set(inventory.map((i) => i.badgeId))).map((badgeId) => {
                     const badgeInfo = badgeMap[badgeId];
                     if (!badgeInfo) return null;
                     const isSelected = selectedBadges.includes(badgeId);
                     return (
-                      <div 
+                      <button
                         key={badgeId}
+                        type="button"
                         onClick={() => {
-                          if (isSelected) {
-                            setSelectedBadges(selectedBadges.filter(id => id !== badgeId));
-                          } else if (selectedBadges.length < 5) {
-                            setSelectedBadges([...selectedBadges, badgeId]);
-                          }
+                          if (isSelected) setSelectedBadges(selectedBadges.filter((id) => id !== badgeId));
+                          else if (selectedBadges.length < 5) setSelectedBadges([...selectedBadges, badgeId]);
                         }}
-                        className={`cursor-pointer p-2 rounded-xl border transition-all ${isSelected ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 scale-105' : 'border-transparent bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-card)]'}`}
+                        className={`p-2 rounded-xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 scale-105'
+                            : 'border-transparent bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-card)]'
+                        }`}
+                        title={badgeInfo.name}
                       >
-                        <img src={badgeInfo.imageUrl} title={badgeInfo.name} alt="" className="w-10 h-10 object-cover" />
-                      </div>
+                        <img src={resolveAsset(badgeInfo.imageUrl)} alt="" className="w-10 h-10 object-cover rounded-lg" />
+                      </button>
                     );
                   })}
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 pt-1">
                 <button onClick={handleSave} disabled={saving} className="btn btn-primary">
-                  {saving ? <span className="spinner" /> : 'Save Changes'}
+                  {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                  Save Changes
                 </button>
-                <button onClick={() => setEditing(false)} className="btn btn-secondary">Cancel</button>
+                <button onClick={() => setEditing(false)} className="btn btn-secondary">
+                  <X size={15} /> Cancel
+                </button>
               </div>
             </div>
           ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+              {[
+                { icon: BookOpen, label: 'Bio', value: user.bio || 'No bio set.' },
+                { icon: Code2, label: 'Codeforces', value: user.cfHandle || 'Not linked' },
+                { icon: CreditCard, label: 'Credits', value: user.globalRing === 0 ? '∞' : (user.creditBalance ?? 0) },
+                { icon: Calendar, label: 'Joined', value: new Date(user.createdAt).toLocaleDateString() },
+              ].map((row) => (
+                <div key={row.label} className="flex gap-3 items-start">
+                  <span className="w-8 h-8 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-accent)] shrink-0">
+                    <row.icon size={15} />
+                  </span>
+                  <div className="min-w-0">
+                    <span className="text-xs text-[var(--color-text-muted)] block">{row.label}</span>
+                    <p className="text-sm text-[var(--color-text-secondary)] break-words">{row.value}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Personal Email */}
+        <div className="glass-card p-6 mb-6">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <h3 className="text-lg font-semibold font-display flex items-center gap-2">
+              <Mail size={17} className="text-[var(--color-accent)]" /> Personal Email
+            </h3>
+            {hasPersonalEmail && !peEditing && (
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${
+                  personalEmailVerified
+                    ? 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
+                    : 'bg-[var(--color-warning)]/10 text-[var(--color-warning)]'
+                }`}
+              >
+                {personalEmailVerified ? <ShieldCheck size={13} /> : <MailCheck size={13} />}
+                {personalEmailVerified ? 'Verified' : 'Pending verification'}
+              </span>
+            )}
+          </div>
+
+          {peMessage && <div className="alert alert-success mb-4">{peMessage}</div>}
+          {peError && <div className="alert alert-danger mb-4">{peError}</div>}
+
+          {peEditing ? (
             <div className="space-y-3">
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Bio</span>
-                <p className="text-[var(--color-text-secondary)]">{user.bio || 'No bio set.'}</p>
+              <p className="text-sm text-[var(--color-text-secondary)]">
+                We'll send a one-time verification link to this address. It stays private and is only used for account recovery.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="email"
+                  value={peEmail}
+                  onChange={(e) => setPeEmail(e.target.value)}
+                  placeholder="you@personal.com"
+                  className="flex-1"
+                />
+                <button onClick={sendVerification} disabled={peBusy || peCooldown > 0} className="btn btn-primary">
+                  {peBusy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                  {peBusy ? 'Sending…' : peCooldown > 0 ? `Try again in ${formatCooldown(peCooldown)}` : hasPersonalEmail ? 'Resend & update' : 'Send verification'}
+                </button>
+                <button onClick={() => setPeEditing(false)} className="btn btn-secondary">
+                  <X size={15} /> Cancel
+                </button>
               </div>
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Codeforces</span>
-                <p className="text-[var(--color-text-secondary)]">{user.cfHandle || 'Not linked'}</p>
+            </div>
+          ) : hasPersonalEmail ? (
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-accent)] shrink-0">
+                  <Mail size={16} />
+                </span>
+                <div>
+                  <p className="font-semibold break-all">{user.personalEmail}</p>
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {personalEmailVerified
+                      ? 'This address is confirmed.'
+                      : 'Check your inbox for the verification link.'}
+                  </p>
+                  {peLimit && peLimit.remaining < peLimit.maxSends && (
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-1 opacity-80">
+                      {peLimit.remaining} of {peLimit.maxSends} verification emails left in this window
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Credits</span>
-                <p className="text-[var(--color-text-secondary)]">{user.globalRing === 0 ? '∞' : (user.creditBalance ?? 0)}</p>
+              <div className="flex gap-2 flex-wrap">
+                {!personalEmailVerified && (
+                  <button
+                    onClick={resendVerification}
+                    disabled={peAction === 'resend' || peCooldown > 0}
+                    className="btn btn-secondary text-xs px-3 py-2"
+                    title={peCooldown > 0 ? `Try again in ${formatCooldown(peCooldown)}` : 'Send a new verification link'}
+                  >
+                    {peAction === 'resend' ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                    {peCooldown > 0 ? `Try again in ${formatCooldown(peCooldown)}` : 'Resend'}
+                  </button>
+                )}
+                <button onClick={startPeEdit} className="btn btn-secondary text-xs px-3 py-2">
+                  <Pencil size={13} /> Change
+                </button>
+                <button
+                  onClick={removePersonalEmail}
+                  disabled={peAction === 'remove'}
+                  className="btn btn-secondary text-xs px-3 py-2 text-[var(--color-danger)]"
+                  title="Remove personal email"
+                >
+                  {peAction === 'remove' ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Remove
+                </button>
               </div>
-              <div>
-                <span className="text-sm text-[var(--color-text-muted)]">Joined</span>
-                <p className="text-[var(--color-text-secondary)]">{new Date(user.createdAt).toLocaleDateString()}</p>
-              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Add a personal email for account recovery outside your institution.
+              </p>
+              <button onClick={startPeEdit} className="btn btn-secondary text-xs px-3 py-2">
+                <Mail size={13} /> Add email
+              </button>
             </div>
           )}
         </div>
 
         {/* Cohort Tags */}
         <div className="glass-card p-6">
-          <h3 className="text-lg font-semibold mb-4">Cohort Groups</h3>
+          <h3 className="text-lg font-semibold font-display mb-4">Cohort Groups</h3>
           {user.cohortTags?.length > 0 ? (
             <div className="flex flex-wrap gap-2">
-              {user.cohortTags.map((tag) => (
-                <span key={tag} className="px-3 py-1.5 chip-accent rounded-full text-sm">
+              {user.cohortTags.map((tag, i) => (
+                <motion.span
+                  key={tag}
+                  initial={{ opacity: 0, scale: 0.85 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.05 }}
+                  className="px-3.5 py-1.5 chip-accent rounded-full text-sm font-medium"
+                >
                   {tag}
-                </span>
+                </motion.span>
               ))}
             </div>
           ) : (
@@ -296,6 +531,5 @@ export default function ProfilePage() {
           )}
         </div>
       </div>
-    </Layout>
   );
 }

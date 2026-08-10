@@ -48,8 +48,14 @@ const env = {
   // Email API key (for future providers like Resend/SendGrid)
   EMAIL_API_KEY: process.env.EMAIL_API_KEY || '',
 
-  // File Storage Path
+  // File Storage Path (local dev only — Render wipes /tmp)
   STORAGE_PATH: process.env.STORAGE_PATH || require('path').join(__dirname, '../../uploads'),
+
+  // Cloudinary (optional but REQUIRED for Render/Vercel production)
+  // Files uploaded here survive restarts, unlike Render's ephemeral /tmp.
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
 };
 
 module.exports = env;

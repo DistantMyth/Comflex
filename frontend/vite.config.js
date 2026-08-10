@@ -6,10 +6,13 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const port = env.PORT || 5173
-  const backendUrl = env.VITE_BACKEND_URL || 'http://localhost:5000'
+  const backendUrl = env.VITE_BACKEND_URL || 'http://localhost:5001'
 
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      chunkSizeWarningLimit: 1100,
+    },
     server: {
       port: Number(port),
       host: true,

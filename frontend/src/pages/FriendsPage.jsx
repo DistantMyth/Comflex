@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { friendApi } from '../api/friendApi';
 import { userApi } from '../api/userApi';
-import Layout from '../components/Layout';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function FriendsPage() {
   const [tab, setTab] = useState('friends'); // 'friends' | 'requests' | 'sent' | 'search'
@@ -104,7 +104,7 @@ export default function FriendsPage() {
     <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)]">
       <div className="flex items-center gap-3">
         {user.avatarUrl ? (
-          <img src={user.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
+          <img src={resolveAsset(user.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover" />
         ) : (
           <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-sm">
             {user.displayName?.charAt(0)?.toUpperCase() || '?'}
@@ -123,8 +123,7 @@ export default function FriendsPage() {
   );
 
   return (
-    <Layout>
-      <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto">
         <h1 className="text-2xl font-bold mb-6">Friends</h1>
 
         {message && (
@@ -285,7 +284,6 @@ export default function FriendsPage() {
           </div>
         )}
       </div>
-    </Layout>
   );
 }
 

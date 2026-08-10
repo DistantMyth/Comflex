@@ -14,6 +14,7 @@ const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../ut
 const { assignCohortTags } = require('./cohortService');
 const { verifyGoogleToken } = require('./googleAuthService');
 const { sendPasswordReset, sendEmailVerification } = require('./emailService');
+const { createEmailSendLimiter, normalizeEmailKey } = require('../utils/emailRateLimit');
 const env = require('../config/env');
 
 /**
@@ -329,7 +330,12 @@ async function logout(userId) {
  * @param {string} email - The user's email address
  */
 async function forgotPassword(email) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const normalized = normalizeEmailKey(email);
+  // Rate-limit per account (normalized address) BEFORE anything else —
+  // prevents reset-email bombing and caps lookups for unknown addresses.
+  await resetEmailLimiter.check(normalized);
+
+  const user = await prisma.user.findUnique({ where: { email: normalized } });
   if (!user) {
     // Don't reveal whether the email exists — always return success
     return { message: 'If that email exists, a reset link has been sent.' };
@@ -353,6 +359,9 @@ async function forgotPassword(email) {
   try {
     await sendPasswordReset(email, resetUrl);
   } catch (err) {
+    // Surface per-recipient backstop 429s — they are rate limits, not
+    // delivery failures; other send errors are logged and ignored.
+    if (err.code === 'RATE_LIMITED') throw err;
     console.error('[AUTH] Failed to send password reset email:', err.message);
   }
 
@@ -399,10 +408,35 @@ async function resetPassword(token, newPassword) {
   return { message: 'Password has been reset successfully. Please log in.' };
 }
 
+// ── Email-send rate limiting (verification + password reset) ────────────
+// Shared per-key limiter factory (see utils/emailRateLimit.js): max 3 email
+// ATTEMPTS per 10 minutes per key. The frontend also enforces a 60s
+// client-side cooldown, and the emailService adds a per-recipient backstop
+// for every send regardless of which flow triggered it.
+const verifyEmailLimiter = createEmailSendLimiter({ message: 'Too many verification emails sent.' });
+const resetEmailLimiter = createEmailSendLimiter({ message: 'Too many password reset emails sent.' });
+
+/**
+ * Report the current user's verification rate-limit state so the UI can
+ * show an accurate countdown instead of a guess.
+ */
+function getVerifyRateLimitStatus(userId) {
+  return verifyEmailLimiter.status(userId);
+}
+
+/**
+ * Report the password-reset rate-limit state for an email address.
+ */
+function getResetRateLimitStatus(email) {
+  return resetEmailLimiter.status(normalizeEmailKey(email));
+}
+
 /**
  * Send a verification email for the user's personal email.
  */
 async function sendPersonalEmailVerification(userId, personalEmail) {
+  await verifyEmailLimiter.check(userId);
+
   const rawToken = crypto.randomBytes(32).toString('hex');
   const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
@@ -420,10 +454,27 @@ async function sendPersonalEmailVerification(userId, personalEmail) {
   try {
     await sendEmailVerification(personalEmail, verifyUrl);
   } catch (err) {
+    // Surface per-recipient backstop 429s (see forgotPassword note).
+    if (err.code === 'RATE_LIMITED') throw err;
     console.error('[AUTH] Failed to send email verification:', err.message);
   }
 
   return { message: 'Verification email sent.' };
+}
+
+/**
+ * Remove the user's personal email and clear verification state.
+ */
+async function removePersonalEmail(userId) {
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      personalEmail: null,
+      personalEmailVerified: false,
+      emailVerifyToken: null,
+      emailVerifyExpiry: null,
+    },
+  });
 }
 
 /**
@@ -478,6 +529,9 @@ module.exports = {
   forgotPassword,
   resetPassword,
   sendPersonalEmailVerification,
+  getVerifyRateLimitStatus,
+  getResetRateLimitStatus,
+  removePersonalEmail,
   verifyPersonalEmail,
   sanitizeUser,
 };

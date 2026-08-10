@@ -9,9 +9,18 @@ const express = require('express');
 const { body, param, validationResult } = require('express-validator');
 const authService = require('../services/authService');
 const authMiddleware = require('../middleware/auth');
+const { rateLimiter } = require('../middleware/rateLimit');
 const { success, error } = require('../utils/apiResponse');
 
 const router = express.Router();
+
+// General per-IP throttle for all auth endpoints (login/register/refresh/etc.)
+router.use(rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  message: 'Too many authentication requests from this IP.',
+  keyPrefix: 'auth-ip',
+}));
 
 /**
  * POST /api/v1/auth/register
@@ -216,11 +225,16 @@ router.post('/logout', authMiddleware, async (req, res, next) => {
 
 /**
  * POST /api/v1/auth/forgot-password
- * Send a password reset email.
+ * Rate-limited tighter per IP — this endpoint sends an email.
  */
-router.post(
-  '/forgot-password',
-  [body('email').isEmail().withMessage('A valid email is required.')],
+router.post('/forgot-password', rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  message: 'Too many password reset requests from this IP.',
+  keyPrefix: 'auth-forgot-ip',
+}), [
+    body('email').isEmail().withMessage('A valid email is required.'),
+  ],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -230,13 +244,27 @@ router.post(
         );
       }
 
-      const result = await authService.forgotPassword(req.body.email);
-      return success(res, result);
+      await authService.forgotPassword(req.body.email);
+      return success(res, { message: 'If an account exists for that email, a reset link has been sent.' });
     } catch (err) {
+      if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
       next(err);
     }
   }
 );
+
+/**
+ * GET /api/v1/auth/reset-email-status?email=
+ * Report password-reset rate-limit state (public — limiter state only, no PII).
+ */
+router.get('/reset-email-status', async (req, res, next) => {
+  try {
+    const status = authService.getResetRateLimitStatus(req.query.email);
+    return success(res, status);
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * POST /api/v1/auth/reset-password

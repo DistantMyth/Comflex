@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { Loader2, CheckCircle2, AlertTriangle, ArrowRight, Users } from 'lucide-react';
 import client from '../api/client';
 
 export default function JoinGroupPage() {
   const { token } = useParams();
   const navigate = useNavigate();
-  const [status, setStatus] = useState('joining'); // joining, success, error
+  const [status, setStatus] = useState('joining');
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -13,9 +15,7 @@ export default function JoinGroupPage() {
       try {
         const { data } = await client.post(`/groups/join/${token}`);
         setStatus('success');
-        setTimeout(() => {
-          navigate(`/groups/${data.data.group.id}`);
-        }, 1500);
+        setTimeout(() => navigate(`/groups/${data.data.group.id}`), 1600);
       } catch (err) {
         setStatus('error');
         setErrorMsg(err.response?.data?.error?.message || 'Failed to join group. Link may be invalid or expired.');
@@ -25,42 +25,55 @@ export default function JoinGroupPage() {
   }, [token, navigate]);
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50 text-gray-800">
-      <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100 max-w-md w-full text-center tracking-tight">
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden px-4">
+      <div className="bg-orb w-[420px] h-[420px] -top-24 -right-24 bg-[var(--color-accent)]/20 animate-float-slow" />
+      <div className="bg-orb w-[360px] h-[360px] bottom-[-10%] left-[-8%] bg-[#2563eb]/15 animate-float" />
+
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+        className="glass-card p-9 max-w-md w-full text-center relative z-10"
+      >
         {status === 'joining' && (
-          <div className="animate-pulse flex flex-col items-center">
-            <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-            <h2 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">Joining Group...</h2>
-            <p className="text-gray-500 mt-2 text-sm">Please wait while we process your invite.</p>
-          </div>
-        )}
-        
-        {status === 'success' && (
-          <div className="flex flex-col items-center">
-            <div className="w-16 h-16 bg-green-100 text-green-500 rounded-full flex items-center justify-center mb-4 text-3xl shadow-sm border border-green-200">
-              ✓
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center">
+            <div className="w-16 h-16 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center justify-center mb-5">
+              <Loader2 size={30} className="text-[var(--color-accent)] animate-spin" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900">Successfully Joined!</h2>
-            <p className="text-gray-500 mt-2 text-sm">Redirecting to the group chat...</p>
-          </div>
+            <h2 className="text-xl font-bold font-display gradient-text">Joining group...</h2>
+            <p className="text-[var(--color-text-secondary)] mt-2 text-sm">Please wait while we process your invite.</p>
+          </motion.div>
+        )}
+
+        {status === 'success' && (
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center">
+            <div className="w-16 h-16 rounded-2xl bg-[var(--color-success)]/10 border border-[var(--color-success)]/25 flex items-center justify-center mb-5">
+              <CheckCircle2 size={30} className="text-[var(--color-success)]" />
+            </div>
+            <h2 className="text-2xl font-bold font-display">Successfully joined!</h2>
+            <p className="text-[var(--color-text-secondary)] mt-2 text-sm">Redirecting to the group chat...</p>
+            <div className="mt-5 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+              <Users size={14} /> Welcome to your new community
+            </div>
+          </motion.div>
         )}
 
         {status === 'error' && (
-          <div className="flex flex-col items-center">
-            <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-4 text-3xl shadow-sm border border-red-200">
-              !
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center">
+            <div className="w-16 h-16 rounded-2xl bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/25 flex items-center justify-center mb-5">
+              <AlertTriangle size={30} className="text-[var(--color-danger)]" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Oops, something went wrong</h2>
-            <p className="text-red-500 mt-3 text-sm font-medium bg-red-50 p-2 rounded w-full border border-red-100">{errorMsg}</p>
-            <button 
+            <h2 className="text-xl font-bold font-display">Oops, something went wrong</h2>
+            <p className="text-[var(--color-danger)] mt-3 text-sm font-medium bg-[var(--color-danger)]/10 p-2.5 rounded-xl w-full border border-[var(--color-danger)]/20">{errorMsg}</p>
+            <button
               onClick={() => navigate('/groups')}
-              className="mt-6 px-6 py-2.5 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors shadow-md hover:shadow-lg font-medium text-sm w-full"
+              className="mt-6 px-6 py-2.5 btn btn-primary w-full"
             >
-              Go to My Groups
+              Go to My Groups <ArrowRight size={16} />
             </button>
-          </div>
+          </motion.div>
         )}
-      </div>
+      </motion.div>
     </div>
   );
 }

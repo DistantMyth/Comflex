@@ -11,8 +11,8 @@ import { storeApi } from '../api/storeApi';
 import { userApi } from '../api/userApi';
 import { AuthContext } from '../context/AuthContext';
 import { useSocket } from '../hooks/useSocket';
-import Layout from '../components/Layout';
 import MessageBubble from '../components/MessageBubble';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function MessagesPage() {
   const { userId: activeUserId } = useParams();
@@ -203,8 +203,8 @@ export default function MessagesPage() {
   };
 
   return (
-    <Layout>
-      <div className="flex h-[calc(100vh-4rem)] -m-8 relative">
+    <>
+    <div className="flex h-[calc(100vh-4rem)] -m-8 relative">
         {/* Conversations sidebar */}
         <div className="w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-secondary)]">
           <div className="p-4 border-b border-[var(--color-border)]">
@@ -235,7 +235,7 @@ export default function MessagesPage() {
                 }`}
               >
                 {conv.partner?.avatarUrl ? (
-                  <img src={conv.partner.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
+                  <img src={resolveAsset(conv.partner.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover" />
                 ) : (
                   <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
                     {conv.partner?.displayName?.charAt(0)?.toUpperCase() || '?'}
@@ -273,7 +273,7 @@ export default function MessagesPage() {
               {/* Chat header */}
               <div className="p-4 border-b border-[var(--color-border)] flex items-center gap-3 bg-[var(--color-bg-secondary)]">
                 {activePartner?.avatarUrl ? (
-                  <img src={activePartner.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />
+                  <img src={resolveAsset(activePartner.avatarUrl)} alt="" className="w-8 h-8 rounded-full object-cover" />
                 ) : (
                   <div className="w-8 h-8 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-xs">
                     {activePartner?.displayName?.charAt(0)?.toUpperCase() || '?'}
@@ -338,9 +338,9 @@ export default function MessagesPage() {
                                 {msg.fileUrl && (
                                   <div className="mb-2">
                                     {msg.fileUrl.match(/\.(jpeg|jpg|gif|png|webp)$/i) ? (
-                                      <img src={msg.fileUrl} alt="Attached" className="max-w-full rounded-lg max-h-60 object-contain cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
+                                      <img src={resolveAsset(msg.fileUrl)} alt="Attached" className="max-w-full rounded-lg max-h-60 object-contain cursor-pointer hover:opacity-90" onClick={() => window.open(resolveAsset(msg.fileUrl), '_blank')} />
                                     ) : (
-                                      <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 bg-black/20 rounded-lg hover:bg-black/30 w-full font-medium">
+                                      <a href={resolveAsset(msg.fileUrl)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 bg-[var(--color-bg-secondary)] rounded-lg hover:bg-[var(--color-bg-card)] w-full font-medium">
                                         📄 {msg.fileName || 'Attachment'}
                                       </a>
                                     )}
@@ -436,7 +436,7 @@ export default function MessagesPage() {
               )}
 
               {/* Input */}
-              <form onSubmit={handleSend} className="p-4 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)] relative">
+              <form onSubmit={handleSend} className="p-4 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)] relative pb-24 lg:pb-4">
                 <div className="flex gap-2 items-center">
                   <label className={`cursor-pointer p-2 rounded-full hover:bg-[var(--color-bg-primary)] transition-colors ${sending ? 'opacity-50 pointer-events-none' : ''}`} title="Attach file (Up to 5MB)">
                     <input 
@@ -528,7 +528,7 @@ export default function MessagesPage() {
                 <div key={c.partner?.id} className="flex items-center justify-between p-2 rounded hover:bg-[var(--color-bg-secondary)] border border-transparent hover:border-[var(--color-border)] transition-colors">
                   <div className="flex items-center gap-2">
                     {c.partner?.avatarUrl ? (
-                      <img src={c.partner.avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
+                      <img src={resolveAsset(c.partner.avatarUrl)} alt="" className="w-6 h-6 rounded-full object-cover" />
                     ) : (
                       <div className="w-6 h-6 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white text-[10px] font-bold">
                         {c.partner?.displayName?.charAt(0)?.toUpperCase()}
@@ -543,6 +543,6 @@ export default function MessagesPage() {
           </div>
         </div>
       )}
-    </Layout>
+    </>
   );
 }

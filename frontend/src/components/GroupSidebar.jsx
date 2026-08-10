@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { groupApi } from '../api/groupApi';
+import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member', 'Restricted'];
 const RING_COLORS = ['var(--color-danger)', 'var(--color-warning)', 'var(--color-accent)', 'var(--color-text-secondary)', 'var(--color-text-muted)'];
@@ -91,7 +92,7 @@ export default function GroupSidebar({ groupId, userPermissions = {}, currentUse
             <div key={m.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-[var(--color-bg-secondary)] transition-colors group">
               {/* Avatar */}
               {m.avatarUrl ? (
-                <img src={m.avatarUrl} alt="" onClick={(e) => { e.stopPropagation(); onUserClick?.(m.id); }} className="w-8 h-8 rounded-full object-cover cursor-pointer hover:opacity-80" />
+                <img src={resolveAsset(m.avatarUrl)} alt="" onClick={(e) => { e.stopPropagation(); onUserClick?.(m.id); }} className="w-8 h-8 rounded-full object-cover cursor-pointer hover:opacity-80" />
               ) : (
                 <div
                   onClick={(e) => { e.stopPropagation(); onUserClick?.(m.id); }}

@@ -178,7 +178,7 @@ npm run dev
 5. Set Application type: **Web application**
 6. Add Authorized origins:
    - `http://localhost:5173` (frontend dev)
-   - `http://localhost:5000` (backend dev)
+   - `http://localhost:5001` (backend dev)
 7. Copy the **Client ID** to:
    - `backend/.env` → `GOOGLE_CLIENT_ID`
    - `frontend/.env` → `VITE_GOOGLE_CLIENT_ID`

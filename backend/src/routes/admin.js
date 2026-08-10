@@ -779,22 +779,45 @@ router.delete('/database/clear', async (req, res, next) => {
   try {
     const adminId = req.user.id;
 
-    // Delete in reverse order of dependency where possible, but prisma handles MongoDB references mostly manually anyway.
+    // IMPORTANT — ordering invariant: MongoDB emulates referential integrity in the
+    // Prisma client, so any model referencing User WITHOUT `onDelete: Cascade`
+    // (e.g. Transaction, UserBadge) MUST be deleted BEFORE `user.deleteMany` below,
+    // otherwise the delete fails with a "required relation" violation. Add new
+    // user-referencing models to this list ahead of the final user deletion.
     await prisma.$transaction([
+      // Event & team data (event cascades to organizers, teams, tasks,
+      // submissions, point adjustments, invites)
+      prisma.teamPointAdjustment.deleteMany(),
+      prisma.eventSubmission.deleteMany(),
       prisma.eventTeamInvite.deleteMany(),
       prisma.eventTeamMember.deleteMany(),
       prisma.eventTeam.deleteMany(),
       prisma.eventOrganizer.deleteMany(),
+      prisma.eventTask.deleteMany(),
       prisma.event.deleteMany(),
+      // Messaging & friendships
       prisma.directMessage.deleteMany(),
       prisma.friendship.deleteMany(),
       prisma.muteRecord.deleteMany(),
       prisma.messageReadReceipt.deleteMany(),
       prisma.message.deleteMany(),
+      // Groups
       prisma.groupInvite.deleteMany(),
       prisma.groupMember.deleteMany(),
       prisma.cohortGroup.deleteMany(),
-      // Delete all users EXCEPT the caller and anyone else with globalRing 0 just to be safe, but let's just protect the caller specifically
+      // Badges & store (standalone models not tied to user directly)
+      prisma.storeListing.deleteMany(),
+      prisma.badge.deleteMany(),
+      // Resources & chatbots
+      prisma.resource.deleteMany(),
+      prisma.resourceSubject.deleteMany(),
+      prisma.chatbotNote.deleteMany(),
+      // Notifications (cascade on user, but safe to clear explicitly)
+      prisma.notification.deleteMany(),
+      // Ledger & badges (reference user via required relations WITHOUT cascade)
+      prisma.transaction.deleteMany(),
+      prisma.userBadge.deleteMany(),
+      // Delete all non-admin users (cascade takes care of remaining FK)
       prisma.user.deleteMany({ where: { id: { not: adminId } } }),
     ]);
 
