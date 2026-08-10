@@ -114,6 +114,7 @@ When it's live you'll get `https://comflex-backend.onrender.com`. Check
 
 | Symptom | Fix |
 |---------|-----|
+| Vercel deploys but site shows `404: NOT_FOUND` | A root `vercel.json` with a `services` block (e.g. `"services": { "frontend": ... }`) makes every service **internal-only** — nothing is routed publicly until you add top-level `rewrites` with `destination: { "service": ... }`. Simplest fix: delete the root `vercel.json` and set Project Settings → Root Directory = `frontend`, Framework = Vite, Build = `npm run build`, Output = `dist` (the `frontend/vercel.json` SPA rewrite stays). |
 | Images broken on Vercel | Cloudinary not set on Render — uploads fell back to `/tmp`; add the 3 `CLOUDINARY_*` vars and redeploy. |
 | Backend slow first click | Render sleeping → UptimeRobot should prevent this; otherwise it wakes in ~30 s. |
 | Socket not connecting | `VITE_BACKEND_URL` must be set on Vercel (the socket uses it too now). |
