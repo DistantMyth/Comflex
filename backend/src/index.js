@@ -115,23 +115,37 @@ app.use(errorHandler);
 // ============================================================
 
 async function startServer() {
-  try {
-    // Seed the admin user on first boot (idempotent)
-    await seedAdmin();
+  // Bounded backoff: a transient DB/DNS outage at boot (e.g. Atlas resume,
+  // DNS propagation) must not put the service into an instant crash loop —
+  // Render restarts would keep failing until external action is taken.
+  // Boot only fails hard after ~3 minutes of continuous failure.
+  const MAX_BOOT_ATTEMPTS = 8;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      // Seed the admin user on first boot (idempotent)
+      await seedAdmin();
 
-    // Initialize Socket.IO for real-time chat + DMs
-    initSocket(httpServer, env.FRONTEND_URL);
+      // Initialize Socket.IO for real-time chat + DMs
+      initSocket(httpServer, env.FRONTEND_URL);
 
-    httpServer.listen(env.PORT, '0.0.0.0', () => {
-      console.log(`\n🚀 Comflex Backend running on http://0.0.0.0:${env.PORT}`);
-      console.log(`   Environment: ${env.NODE_ENV}`);
-      console.log(`   Frontend URL: ${env.FRONTEND_URL}`);
-      console.log(`   WebSocket: enabled`);
-      console.log(`   Email: ${env.EMAIL_PROVIDER} mode\n`);
-    });
-  } catch (err) {
-    console.error('❌ Failed to start server:', err);
-    process.exit(1);
+      httpServer.listen(env.PORT, '0.0.0.0', () => {
+        console.log(`\n🚀 Comflex Backend running on http://0.0.0.0:${env.PORT}`);
+        console.log(`   Environment: ${env.NODE_ENV}`);
+        console.log(`   Frontend URL: ${env.FRONTEND_URL}`);
+        console.log(`   WebSocket: enabled`);
+        console.log(`   Email: ${env.EMAIL_PROVIDER} mode\n`);
+      });
+      return;
+    } catch (err) {
+      if (attempt > MAX_BOOT_ATTEMPTS) {
+        console.error(`❌ Failed to start server after ${MAX_BOOT_ATTEMPTS} attempts:`, err);
+        process.exit(1);
+      }
+      const waitMs = Math.min(30_000, 1_500 * 2 ** attempt);
+      console.error(`[BOOT] Database unreachable (attempt ${attempt}/${MAX_BOOT_ATTEMPTS}): ${err.message}`);
+      console.error(`[BOOT] Retrying in ${Math.round(waitMs / 1000)}s...`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
   }
 }
 
