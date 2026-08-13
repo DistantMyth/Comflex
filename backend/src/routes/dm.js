@@ -13,8 +13,10 @@ const fs = require('fs');
 const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const dmService = require('../services/dmService');
+const { rateLimiter } = require('../middleware/rateLimit');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
+const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
@@ -58,14 +60,28 @@ const upload = multer({
 // All DM routes require authentication
 router.use(authMiddleware);
 
+// Per-user throttle on DM attachments — blocks storage/Cloudinary exhaustion
+// via unbounded uploads from a single account.
+const dmUploadLimit = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  message: 'Too many file uploads. Please slow down.',
+  keyPrefix: 'dm-upload-user',
+  keyFn: (req) => req.user?.id || null,
+});
+
 /**
  * POST /api/v1/dm/upload — Upload a file attachment for a DM.
  * Returns the file data including its URL.
  */
-router.post('/upload', upload.single('attachment'), async (req, res, next) => {
+router.post('/upload', dmUploadLimit, upload.single('attachment'), async (req, res, next) => {
   try {
     if (!req.file) {
       return error(res, 'UPLOAD_REQUIRED', 'No file uploaded.', 400);
+    }
+    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file header does not match its type.', 400);
     }
     const fileUrl = await storeFile(req.file, { folder: 'comflex/dm' });
     return success(res, {

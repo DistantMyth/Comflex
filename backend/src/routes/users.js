@@ -16,6 +16,7 @@ const userService = require('../services/userService');
 const { rateLimiter } = require('../middleware/rateLimit');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
+const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
@@ -158,6 +159,12 @@ router.post('/me/avatar', authMiddleware, upload.single('avatar'), async (req, r
     }
 
     // Cloudinary when configured (production-safe), local path in dev
+    // Magic-byte check: the extension allowlist alone can be bypassed by
+    // renaming a malicious file.
+    if (req.file.mimetype.startsWith('image/') && !validateStoredFile(req.file.path, req.file.mimetype)) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file is not a valid image.', 400);
+    }
     const avatarUrl = await storeFile(req.file, { folder: 'comflex/avatars' });
     const user = await userService.updateAvatar(req.user.id, avatarUrl);
     return success(res, user);
@@ -207,7 +214,6 @@ router.get('/search', authMiddleware, async (req, res, next) => {
         displayName: true,
         username: true,
         avatarUrl: true,
-        email: true,
         bio: true,
         globalRing: true,
         cohortTags: true,
@@ -263,7 +269,6 @@ router.get('/:id/profile', authMiddleware, async (req, res, next) => {
         cfHandle: true,
         cfRating: true,
         displayBadges: true,
-        creditBalance: true,
         createdAt: true,
       },
     });

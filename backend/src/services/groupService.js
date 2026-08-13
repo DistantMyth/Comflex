@@ -181,7 +181,7 @@ async function listMembers(groupId) {
     include: {
       user: {
         select: {
-          id: true, email: true, displayName: true, username: true, avatarUrl: true,
+          id: true, displayName: true, username: true, avatarUrl: true,
           globalRing: true, cohortTags: true, displayBadges: true, cfHandle: true, cfRating: true,
         },
       },
@@ -287,9 +287,11 @@ async function getMemberRing(groupId, userId) {
 
 /**
  * Set a member's ring in a group. Enforces ring hierarchy.
- * Cannot demote the group creator.
+ * Cannot demote the group creator. Actors can only assign rings
+ * STRICTLY below their own — moderators can never promote anyone
+ * (including themselves via a puppet) to their level or above.
  */
-async function setMemberRing(groupId, actorRing, targetUserId, newRing) {
+async function setMemberRing(groupId, actorRing, actorUserId, actorGlobalRing, targetUserId, newRing) {
   const target = await getMembership(groupId, targetUserId);
 
   // Protect group creator from demotion
@@ -298,8 +300,22 @@ async function setMemberRing(groupId, actorRing, targetUserId, newRing) {
     throw Object.assign(new Error('Cannot demote the group creator.'), { statusCode: 403, code: 'CANNOT_DEMOTE_CREATOR' });
   }
 
+  // Actors cannot modify users at their own level or above
   if (!canActOnUser(actorRing, target.ring)) {
     throw Object.assign(new Error('Cannot modify ring of a user at your level or above.'), { statusCode: 403, code: 'RING_VIOLATION' });
+  }
+
+  // HARDENING: never let an actor set anyone's ring to a level equal to or
+  // above their own — otherwise any moderator could promote a puppet to
+  // ring 0 (full group admin). Only the group creator or a global admin
+  // (ring 0) may assign ring 0.
+  const actorIsCreator = group?.creatorId === actorUserId;
+  const actorIsGlobalAdmin = actorGlobalRing === 0;
+  if (newRing <= actorRing && !actorIsCreator && !actorIsGlobalAdmin) {
+    throw Object.assign(
+      new Error('You cannot assign a ring at or above your own level.'),
+      { statusCode: 403, code: 'RING_ESCALATION_BLOCKED' }
+    );
   }
 
   // Update permissions to match new ring level
@@ -477,29 +493,47 @@ async function listUserInvites(userId) {
 
 /**
  * Get or create the unique invite link token for a group.
+ * Tokens rotate: a link older than INVITE_LINK_TTL_MS is silently replaced
+ * with a fresh token on the next fetch, so shared links stop working.
  */
+const INVITE_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const crypto = require('crypto');
+
 async function getInviteLink(groupId) {
   const group = await prisma.cohortGroup.findUnique({ where: { id: groupId } });
   if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404 });
-  
-  if (group.inviteToken) {
-    return { token: group.inviteToken };
+
+  // Existing link still valid
+  if (group.inviteToken && group.inviteTokenExpiry && group.inviteTokenExpiry.getTime() > Date.now()) {
+    return { token: group.inviteToken, expiresAt: group.inviteTokenExpiry };
   }
 
-  // Generate a random token
-  const crypto = require('crypto');
-  const token = crypto.randomBytes(16).toString('hex');
-  await prisma.cohortGroup.update({ where: { id: groupId }, data: { inviteToken: token } });
-  
-  return { token };
+  // No token, or the old one expired → rotate with a fresh secret & TTL.
+  // Note: we do NOT delete old tokens; a stale token simply stops resolving
+  // because joinViaLink checks expiry. This keeps previously copied links
+  // from being silently hijacked after rotation.
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + INVITE_LINK_TTL_MS);
+  await prisma.cohortGroup.update({
+    where: { id: groupId },
+    data: { inviteToken: token, inviteTokenExpiry: expiresAt },
+  });
+
+  return { token, expiresAt };
 }
 
 /**
  * Join a group using an invite token.
  */
 async function joinViaLink(token, userId) {
-  const group = await prisma.cohortGroup.findUnique({ where: { inviteToken: token } });
+  const group = await prisma.cohortGroup.findFirst({ where: { inviteToken: token } });
   if (!group) throw Object.assign(new Error('Invalid or expired invite link.'), { statusCode: 404, code: 'INVALID_LINK' });
+
+  if (!group.inviteTokenExpiry || group.inviteTokenExpiry.getTime() < Date.now()) {
+    // Rotate the stale token out immediately.
+    await prisma.cohortGroup.update({ where: { id: group.id }, data: { inviteToken: null, inviteTokenExpiry: null } });
+    throw Object.assign(new Error('This invite link has expired. Ask for a fresh link.'), { statusCode: 410, code: 'LINK_EXPIRED' });
+  }
 
   // Add the user bypassing friend check
   // get default joining ring

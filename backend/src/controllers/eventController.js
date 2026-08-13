@@ -329,6 +329,11 @@ exports.createTeam = async (req, res, next) => {
 exports.listTeams = async (req, res, next) => {
   try {
     const { id: eventId } = req.params;
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+
+    const isOrganizer = event.creatorId === req.user.id || event.organizers?.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
+
     const teams = await prisma.eventTeam.findMany({
       where: { eventId },
       include: {
@@ -338,11 +343,23 @@ exports.listTeams = async (req, res, next) => {
             user: { select: { id: true, displayName: true, avatarUrl: true } }
           }
         },
-        invites: {
-          include: {
-            invitedUser: { select: { id: true, displayName: true, avatarUrl: true } }
+        // Pending invites are private to organizers — regular members must
+        // not learn who other teams are trying to recruit. The exception is
+        // the caller's own invites, which they must see to accept/reject.
+        ...(isOrganizer ? {
+          invites: {
+            include: {
+              invitedUser: { select: { id: true, displayName: true, avatarUrl: true } }
+            }
           }
-        }
+        } : {
+          invites: {
+            where: { invitedUserId: req.user.id },
+            include: {
+              invitedUser: { select: { id: true, displayName: true, avatarUrl: true } }
+            }
+          }
+        }),
       }
     });
 
@@ -671,10 +688,34 @@ exports.listTasks = async (req, res, next) => {
 
     const isOrganizer = event.creatorId === req.user.id || event.organizers.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
 
+    // Non-organizers must be event participants (in a team) to see any tasks.
+    if (!isOrganizer) {
+      const participant = await prisma.eventTeamMember.findFirst({
+        where: { userId: req.user.id, team: { eventId } },
+        select: { teamId: true },
+      });
+      if (!participant) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not a participant of this event.' } });
+      }
+    }
+
     let tasks = await prisma.eventTask.findMany({
       where: { eventId },
       orderBy: { order: 'asc' }
     });
+
+    if (!isOrganizer) {
+      // HARDENING: never ship answer keys (correctOptions / exactText) to
+      // participants — they could trivially cheat auto-graded tasks.
+      tasks = tasks.map(t => {
+        const config = t.submissionConfig ? { ...t.submissionConfig } : null;
+        if (config) {
+          delete config.correctOptions;
+          delete config.exactText;
+        }
+        return { ...t, submissionConfig: config };
+      });
+    }
 
     if (!isOrganizer && event.taskViewMode === 'dynamic') {
       // Find max completed task order for the user's team
@@ -968,6 +1009,17 @@ exports.awardTeamRewards = async (req, res, next) => {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found in this event.' } });
     }
 
+    // Idempotency guard: an organizer may award an ad-hoc reward to a team
+    // only ONCE per event — otherwise credits/badges can be minted infinitely.
+    const rewardRef = `event_reward_${eventId}_${teamId}`;
+    const existingReward = await prisma.transaction.findFirst({
+      where: { type: 'event_reward', referenceId: rewardRef },
+      select: { id: true },
+    });
+    if (existingReward) {
+      return res.status(409).json({ error: { code: 'ALREADY_REWARDED', message: 'This team has already received rewards for this event.' } });
+    }
+
     const results = [];
 
     for (const member of team.members) {
@@ -981,7 +1033,7 @@ exports.awardTeamRewards = async (req, res, next) => {
             receiverId: member.userId,
             amount: credits,
             type: 'event_reward',
-            referenceId: eventId
+            referenceId: rewardRef
           }
         });
       }
@@ -1016,6 +1068,16 @@ exports.distributeRewards = async (req, res, next) => {
       return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'No reward tiers configured for this event.' } });
     }
 
+    // Idempotency guard: rewards can be distributed only ONCE per event.
+    const distributionRef = `event_distribute_${eventId}`;
+    const existing = await prisma.transaction.findFirst({
+      where: { type: 'event_reward', referenceId: distributionRef },
+      select: { id: true },
+    });
+    if (existing) {
+      return res.status(409).json({ error: { code: 'ALREADY_DISTRIBUTED', message: 'Rewards for this event have already been distributed.' } });
+    }
+
     // Build leaderboard to determine ranks
     const teams = await prisma.eventTeam.findMany({
       where: { eventId },
@@ -1048,7 +1110,7 @@ exports.distributeRewards = async (req, res, next) => {
             data: { creditBalance: { increment: tier.credits } }
           });
           await prisma.transaction.create({
-            data: { receiverId: member.userId, amount: tier.credits, type: 'event_reward', referenceId: eventId }
+            data: { receiverId: member.userId, amount: tier.credits, type: 'event_reward', referenceId: distributionRef }
           });
         }
         if (tier.badgeId) {

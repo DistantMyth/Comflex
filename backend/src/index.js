@@ -36,6 +36,21 @@ const httpServer = http.createServer(app);
 // MIDDLEWARE
 // ============================================================
 
+// Security headers for every API response (equivalent of helmet's basics,
+// without the extra dependency). Add HSTS in production so browsers enforce
+// HTTPS for the API origin.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '0'); // legacy header; modern XSS defense is CSP
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
 // Trust one reverse-proxy hop in production so req.ip resolves to the real
 // client IP (used by the IP rate limiter) instead of the proxy's address.
 if (env.NODE_ENV === 'production') {

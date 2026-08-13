@@ -8,6 +8,7 @@ const authMiddleware = require('../middleware/auth');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
+const { validateStoredFile } = require('../utils/fileMagic');
 const { ethers } = require('ethers');
 
 const router = express.Router();
@@ -102,6 +103,10 @@ router.post('/admin/badges', upload.single('image'), [
     let imageUrl = req.body.imageUrl;
     
     if (req.file) {
+      if (req.file.mimetype.startsWith('image/') && !validateStoredFile(req.file.path, req.file.mimetype)) {
+        try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+        return error(res, 'INVALID_FILE_TYPE', 'The uploaded file is not a valid image.', 400);
+      }
       imageUrl = await storeFile(req.file, { folder: 'comflex/badges' });
     }
     

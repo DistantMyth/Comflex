@@ -51,6 +51,15 @@ async function verifyGoogleToken(idToken) {
     );
   }
 
+  // Only accept verified Google identities — an unverified email is not
+  // proof the user controls the mailbox (spoofed-domain signups).
+  if (payload.email_verified !== true) {
+    throw Object.assign(
+      new Error('Your Google email is not verified. Verify it with Google and try again.'),
+      { statusCode: 403, code: 'EMAIL_NOT_VERIFIED' }
+    );
+  }
+
   // Validate that the email belongs to the configured institution domain
   const config = await prisma.institutionConfig.findFirst();
   if (config && config.domain) {

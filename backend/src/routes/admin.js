@@ -721,6 +721,10 @@ router.delete('/users/:id', async (req, res, next) => {
     // Delete all associated data
     await prisma.$transaction([
       prisma.groupMember.deleteMany({ where: { userId } }),
+      // Group invites have raw userId/invitedBy fields (no FK) — clear both
+      // directions so no orphaned reference to a deleted account remains.
+      prisma.groupInvite.deleteMany({ where: { OR: [{ userId }, { invitedBy: userId }] } }),
+      prisma.eventTeamInvite.deleteMany({ where: { OR: [{ invitedUserId: userId }, { invitedBy: userId }] } }),
       prisma.message.deleteMany({ where: { authorId: userId } }),
       prisma.directMessage.deleteMany({ where: { OR: [{ senderId: userId }, { receiverId: userId }] } }),
       prisma.friendship.deleteMany({ where: { OR: [{ requesterId: userId }, { addresseeId: userId }] } }),
@@ -744,10 +748,21 @@ router.delete('/users/:id', async (req, res, next) => {
  */
 router.get('/database/backup', async (req, res, next) => {
   try {
+    const users = await prisma.user.findMany();
+    // Strip credential material from the dump — the backup should never be
+    // a password-hash / token exfiltration tool, even in admin hands.
+    const sanitizedUsers = users.map((u) => {
+      const {
+        password, refreshToken, resetToken, resetTokenExpiry,
+        emailVerifyToken, emailVerifyExpiry, ...safe
+      } = u;
+      return safe;
+    });
+
     const backup = {
       timestamp: new Date().toISOString(),
       institutionConfig: await prisma.institutionConfig.findMany(),
-      users: await prisma.user.findMany(),
+      users: sanitizedUsers,
       cohortGroups: await prisma.cohortGroup.findMany(),
       groupMembers: await prisma.groupMember.findMany(),
       groupInvites: await prisma.groupInvite.findMany(),

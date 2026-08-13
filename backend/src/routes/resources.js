@@ -12,23 +12,10 @@ const authMiddleware = require('../middleware/auth');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile, deleteStoredFile } = require('../utils/fileStorage');
-const { extractCohortYear } = require('../services/cohortService');
+const { enforceBatchAccess } = require('../utils/batchAccess');
+const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
-
-function enforceBatchAccess(req, targetSubCategory) {
-  if (req.user.globalRing === 0) return true; // Admins skip
-  if (!targetSubCategory || !targetSubCategory.startsWith('Batch ')) return true; // Technical or other
-  
-  const myYear = extractCohortYear(req.user.cohortTags);
-  if (!myYear) return true; // Falback if user has no assigned cohort
-  
-  const targetYear = parseInt(targetSubCategory.replace('Batch ', ''), 10);
-  if (!isNaN(targetYear)) {
-    return targetYear === myYear || targetYear === myYear + 1;
-  }
-  return true;
-}
 
 // Ensure upload dir exists
 const uploadDir = path.join(env.STORAGE_PATH, 'resources');
@@ -166,6 +153,15 @@ router.get('/', async (req, res, next) => {
     const { subjectId } = req.query;
     if (!subjectId) return error(res, 'VALIDATION', 'subjectId is required', 400);
 
+    const subject = await prisma.resourceSubject.findUnique({ where: { id: subjectId } });
+    if (!subject) return error(res, 'NOT_FOUND', 'Subject not found', 404);
+
+    // Batch access applies to listing too — juniors must not enumerate
+    // seniors' notes.
+    if (!enforceBatchAccess(req, subject.subCategory)) {
+      return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
+    }
+
     const resources = await prisma.resource.findMany({
       where: { subjectId },
       include: {
@@ -194,6 +190,13 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
 
     if (!enforceBatchAccess(req, subject.subCategory)) {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
+    }
+
+    // Magic-byte check for image/PDF claims (documents are type-checked by
+    // extension; images must actually be images).
+    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file header does not match its type.', 400);
     }
 
     const fileUrl = await storeFile(req.file, { folder: 'comflex/resources', localUrlPrefix: '/uploads/resources' });
@@ -256,6 +259,12 @@ router.get('/download/:id', async (req, res, next) => {
   try {
     const resource = await prisma.resource.findUnique({ where: { id: req.params.id } });
     if (!resource) return res.status(404).json({ error: 'File not found' });
+
+    // Batch access applies to downloads as well.
+    const subject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
+    if (subject && !enforceBatchAccess(req, subject.subCategory)) {
+      return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
+    }
 
     // Check configuration for download reward
     const config = await prisma.institutionConfig.findFirst();

@@ -16,7 +16,9 @@ const API_BASE = `${BACKEND_URL}/api/v1`;
 
 // One-time migration: pick up a previously stored access token so existing
 // sessions survive the deploy without forcing a re-login. It is kept in
-// memory from here on, never written back to localStorage.
+// memory from here on and NEVER written back to localStorage — reducing the
+// XSS blast radius: a stored script can no longer read a bearer token from
+// storage.
 let accessToken = (() => {
   try {
     return localStorage.getItem('accessToken') || null;
@@ -31,10 +33,8 @@ export function getAccessToken() {
 
 export function setAccessToken(token) {
   accessToken = token || null;
-  try {
-    if (token) localStorage.setItem('accessToken', token);
-    else localStorage.removeItem('accessToken');
-  } catch { /* storage unavailable — memory copy still works */ }
+  // Memory only. The long-lived session rides on the httpOnly refresh
+  // cookie — no JS-accessible storage ever holds a credential.
 }
 
 export function clearAccessToken() {

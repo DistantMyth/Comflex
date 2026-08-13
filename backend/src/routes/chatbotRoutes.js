@@ -9,6 +9,8 @@ const { rateLimiter } = require('../middleware/rateLimit');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
 const { uploadFileToGemini, deleteGeminiFile, chatWithContext } = require('../services/chatbotService');
+const { enforceBatchAccess } = require('../utils/batchAccess');
+const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
@@ -123,6 +125,12 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
       return error(res, 'UNSUPPORTED_FORMAT', 'Unsupported file format. Please upload PDF, TXT, CSV, or Markdown files.', 400);
     }
 
+    // Header check — a file can't claim to be a PDF and be something else.
+    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return error(res, 'UNSUPPORTED_FORMAT', 'The uploaded file header does not match its type.', 400);
+    }
+
     const existingNote = await prisma.chatbotNote.findFirst({ where: { userId: user.id, title: finalTitle } });
     if (existingNote) return error(res, 'ALREADY_EXISTS', 'A note with this name already exists.', 409);
 
@@ -172,6 +180,14 @@ router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').not
 
     const resource = await prisma.resource.findUnique({ where: { id: req.body.resourceId } });
     if (!resource) return error(res, 'NOT_FOUND', 'Resource not found', 404);
+
+    // A chatbot resource upload forwards the file to Gemini — enforce the
+    // same batch access rules as the resources module so juniors can't
+    // exfiltrate seniors' notes to a third party.
+    const resSubject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
+    if (!resSubject || !enforceBatchAccess(req, resSubject.subCategory)) {
+      return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
+    }
 
     if (user.chatbotStorageUsed + resource.fileSize > limit.storage) {
       return error(res, 'LIMIT_EXCEEDED', 'Storage limit exceeded. Delete or upgrade.', 429);

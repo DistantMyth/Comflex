@@ -23,6 +23,7 @@ const { extractCohortYear, extractBranch } = require('../services/cohortService'
 const { emitToGroup } = require('../services/chatSocketService');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
+const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
@@ -89,6 +90,26 @@ const messageUpload = multer({
 // All group routes require authentication
 router.use(authMiddleware);
 
+// Per-user throttle on group creation — batch auto-adds blast DMs to
+// hundreds of seniors, so the per-user cap matters more than per-IP.
+const groupCreateUserLimit = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: 'Too many groups created. Please slow down.',
+  keyPrefix: 'group-create-user',
+  keyFn: (req) => req.user?.id || null,
+});
+
+// Per-user throttle on adding members — an addMember call can trigger a DM
+// invite, so unlimited adds = unlimited DM spam.
+const groupAddMemberUserLimit = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  message: 'Too many membership changes. Please slow down.',
+  keyPrefix: 'group-addmember-user',
+  keyFn: (req) => req.user?.id || null,
+});
+
 // ============================================================
 // GROUP CRUD
 // ============================================================
@@ -149,6 +170,7 @@ router.get('/:id', requireGroupMember, async (req, res, next) => {
  */
 router.post(
   '/',
+  groupCreateUserLimit,
   rateLimiter({
     windowMs: 10 * 60 * 1000,
     max: 20,
@@ -242,6 +264,8 @@ router.post(
       }
 
       // Process each member
+      let dmInvitesSent = 0;
+      const MAX_DM_INVITES_PER_CREATE = 25; // cap DM blast per group creation
       for (const memberId of memberIds) {
         try {
           // Fetch target strictly for logic checks
@@ -260,14 +284,19 @@ router.post(
                  if (isFriend) {
                    bypassFriendCheck = true; // Add directly
                  } else {
-                   // Senior & NOT friend -> Send DM link instead of directly adding
-                   try {
-                     const linkObj = await groupService.getInviteLink(group.id);
-                     await groupService.createInvite(group.id, memberId, req.user.id);
-                      await dmService.sendDM(req.user.id, memberId, { 
-                        content: `Hi there! I've created a group "${group.displayName || group.name}". As you are a senior, I'm inviting you via link. Join using this link: ${env.FRONTEND_URL}/join/${linkObj.token}` 
-                      }, true);
-                     results.push({ userId: memberId, status: 'dm_invite_sent' });
+// Senior & NOT friend -> Send DM link instead of directly adding
+                 if (dmInvitesSent >= MAX_DM_INVITES_PER_CREATE) {
+                   results.push({ userId: memberId, status: 'dm_invite_skipped' });
+                   continue;
+                 }
+                 try {
+                   const linkObj = await groupService.getInviteLink(group.id);
+                   await groupService.createInvite(group.id, memberId, req.user.id);
+                    await dmService.sendDM(req.user.id, memberId, { 
+                     content: `Hi there! I've created a group "${group.displayName || group.name}". As you are a senior, I'm inviting you via link. Join using this link: ${env.FRONTEND_URL}/join/${linkObj.token}` 
+                   }, true);
+                   dmInvitesSent++;
+                   results.push({ userId: memberId, status: 'dm_invite_sent' });
                    } catch (dmErr) {
                      results.push({ userId: memberId, error: 'Failed to send DM invite.' });
                    }
@@ -314,6 +343,10 @@ router.post('/:id/avatar', requireGroupMember, requireGroupPermission('can_edit_
   try {
     if (!req.file) {
       return error(res, 'NO_FILE', 'No avatar file uploaded.', 400);
+    }
+    if (req.file.mimetype.startsWith('image/') && !validateStoredFile(req.file.path, req.file.mimetype)) {
+      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file is not a valid image.', 400);
     }
     const avatarUrl = await storeFile(req.file, { folder: 'comflex/groups', localUrlPrefix: '/uploads/groups' });
     const group = await groupService.updateGroup(req.params.id, { avatarUrl });
@@ -381,6 +414,7 @@ router.post(
   '/:id/members',
   requireGroupMember,
   requireGroupPermission('can_add_members'),
+  groupAddMemberUserLimit,
   [body('userId').notEmpty().withMessage('userId is required.')],
   async (req, res, next) => {
     try {
@@ -461,7 +495,7 @@ router.get('/:id/search-users', requireGroupMember, async (req, res, next) => {
         ],
       },
       select: {
-        id: true, displayName: true, username: true, avatarUrl: true, email: true,
+        id: true, displayName: true, username: true, avatarUrl: true,
       },
       take: 15,
       orderBy: { displayName: 'asc' },
@@ -670,7 +704,7 @@ router.patch(
       }
 
       const actorRing = req.groupMembership?.ring ?? req.user.globalRing;
-      const result = await groupService.setMemberRing(req.params.id, actorRing, req.params.userId, req.body.ring);
+      const result = await groupService.setMemberRing(req.params.id, actorRing, req.user.id, req.user.globalRing, req.params.userId, req.body.ring);
       return success(res, result);
     } catch (err) {
       if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -804,6 +838,10 @@ router.post(
       };
 
       if (req.file) {
+        if (!validateStoredFile(req.file.path, req.file.mimetype)) {
+          try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
+          return error(res, 'INVALID_FILE_TYPE', 'The uploaded file header does not match its type.', 400);
+        }
         params.fileUrl = await storeFile(req.file, { folder: 'comflex/messages', localUrlPrefix: '/uploads/messages' });
         params.fileName = req.file.originalname;
         params.fileSize = req.file.size;

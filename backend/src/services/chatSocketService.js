@@ -55,6 +55,31 @@ function initSocket(httpServer, frontendUrl) {
   io.on('connection', async (socket) => {
     console.log(`[WS] ✅ Connected: ${socket.user.email} (${socket.id})`);
 
+    // Re-read the user from the DB (like the REST auth middleware) so
+    // demotions, bans, and deletions take effect immediately instead of
+    // trusting stale JWT claims for the session's lifetime.
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { id: socket.user.id },
+        select: { id: true, email: true, globalRing: true, displayName: true, avatarUrl: true },
+      });
+      if (!dbUser) {
+        socket.emit('auth:error', { error: 'Account no longer exists.' });
+        socket.disconnect(true);
+        return;
+      }
+      socket.user = {
+        id: dbUser.id,
+        email: dbUser.email,
+        globalRing: dbUser.globalRing,
+        displayName: dbUser.displayName || dbUser.email,
+      };
+    } catch (err) {
+      console.error(`[WS] Failed to load user for ${socket.user.id}:`, err.message);
+      socket.disconnect(true);
+      return;
+    }
+
     // Join personal room for DM delivery
     socket.join(`user:${socket.user.id}`);
 

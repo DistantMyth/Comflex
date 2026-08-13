@@ -122,6 +122,7 @@ model CohortGroup {
   creatorId   String?  @db.ObjectId // User who created the group (null for system-created)
   ringConfig  Json?            // { ringCount: 5, ringLabels: { 0: "Admin", 1: "Manager", ... } }
   inviteToken String?          // unique token for invite links
+  inviteTokenExpiry DateTime?  // rotating invite links expire (7 days)
   createdAt   DateTime @default(now())
 
   // Relations
