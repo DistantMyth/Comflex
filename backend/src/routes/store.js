@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const multer = require('multer');
 const path = require('path');
@@ -13,6 +14,74 @@ const { ethers } = require('ethers');
 
 const router = express.Router();
 router.use(authMiddleware);
+
+// Sepolia is the only network buy-credits accepts — a payment on any other
+// chain for the same treasury address must not mint credits.
+const ACCEPTED_CHAIN_ID = 11155111;
+const WALLET_NONCE_TTL_MS = 10 * 60 * 1000; // 10 minutes to sign a challenge
+
+// ==========================================
+// WALLET BINDING (required before buy-credits)
+// ==========================================
+// Credits are only credited to the account whose stored wallet address
+// matches the transaction's `from` — otherwise anyone could claim someone
+// else's payment by watching the mempool. Binding requires a signed
+// message (EIP-191) proving control of the address.
+
+// Step 1: get a short-lived nonce to sign.
+router.post('/wallet/challenge', async (req, res, next) => {
+  try {
+    const nonce = crypto.randomBytes(32).toString('hex');
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { walletNonce: nonce, walletNonceExpiry: new Date(Date.now() + WALLET_NONCE_TTL_MS) },
+    });
+    return success(res, { nonce }, 201);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Step 2: prove ownership of `address` by signing the nonce.
+router.post('/wallet', [
+  body('address').isString().withMessage('Address must be a string.'),
+  body('signature').isString().withMessage('Signature must be a string.'),
+], async (req, res, next) => {
+  try {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
+
+    const { address, signature } = req.body;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      return error(res, 'VALIDATION', 'Invalid Ethereum address.', 400);
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user.walletNonce || !user.walletNonceExpiry || user.walletNonceExpiry.getTime() < Date.now()) {
+      return error(res, 'VALIDATION', 'Challenge expired. Request a new nonce and sign it.', 400);
+    }
+
+    let recovered;
+    try {
+      recovered = ethers.verifyMessage(`Comflex wallet binding\n\nNonce: ${user.walletNonce}\nAccount: ${req.user.id}`, signature);
+    } catch {
+      return error(res, 'VALIDATION', 'Signature could not be verified.', 400);
+    }
+
+    if (recovered.toLowerCase() !== address.toLowerCase()) {
+      return error(res, 'VALIDATION', 'Signature does not match the address.', 400);
+    }
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { walletAddress: address, walletNonce: null, walletNonceExpiry: null },
+    });
+
+    return success(res, { message: 'Wallet bound to your account.', walletAddress: address });
+  } catch (err) {
+    next(err);
+  }
+});
 
 const uploadDir = env.STORAGE_PATH;
 if (!fs.existsSync(uploadDir)) {
@@ -123,9 +192,9 @@ router.post('/admin/badges', upload.single('image'), [
 
 // Admin: Create store listing
 router.post('/admin/listings', [
-  body('badgeId').notEmpty(),
-  body('price').isInt({ min: 0 }),
-  body('quantity').isInt() // -1 for infinite
+  body('badgeId').isMongoId().withMessage('Invalid badge ID.'),
+  body('price').isInt({ min: 0, max: 1000000 }),
+  body('quantity').isInt({ min: -1, max: 1000000 }) // -1 for infinite
 ], async (req, res, next) => {
   try {
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -182,7 +251,7 @@ router.post('/admin/mint-credits', [
 
 // Purchase a badge
 router.post('/purchase', [
-  body('listingId').notEmpty()
+  body('listingId').isMongoId().withMessage('Invalid listing ID.')
 ], async (req, res, next) => {
   try {
     const { listingId } = req.body;
@@ -216,14 +285,15 @@ router.post('/purchase', [
       await tx.userBadge.create({
         data: { userId: user.id, badgeId: listing.badgeId, source: 'store' }
       });
-      // 4. Create Ledger Record
+      // 4. Create Ledger Record — referenceId must be unique per purchase,
+      //    so the (type, referenceId) index can dedupe retries.
       await tx.transaction.create({
         data: {
           senderId: user.id,
-          receiverId: user.id, // self transaction or system (could be null sender, but receiver is system? Let's use receiverId=user with system transfer type)
+          receiverId: user.id,
           amount: listing.price,
           type: 'purchase',
-          referenceId: listing.id
+          referenceId: `${listing.id}_${user.id}`
         }
       });
     });
@@ -249,7 +319,10 @@ router.get('/inventory', async (req, res, next) => {
 
 // Set display badges
 router.post('/display-badges', [
-  body('badgeIds').isArray({ max: 5 })
+  body('badgeIds').isArray({ max: 5 }).custom((v) => {
+    if (!Array.isArray(v)) return false;
+    return v.every(id => typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id));
+  }).withMessage('Each badge ID must be a valid ObjectId.')
 ], async (req, res, next) => {
   try {
     const { badgeIds } = req.body;
@@ -399,7 +472,7 @@ router.post('/buy-membership', [
           receiverId: req.user.id,
           amount: cost,
           type: 'purchase',
-          referenceId: `membership_${tier}_${duration}`,
+          referenceId: `membership_${req.user.id}_${tier}_${duration}`,
           tier,
           duration
         }
@@ -414,8 +487,8 @@ router.post('/buy-membership', [
 
 // Buy Credits (Crypto)
 router.post('/buy-credits', [
-  body('txHash').notEmpty(),
-  body('amount').isInt({ min: 1 })
+  body('txHash').isString().notEmpty(),
+  body('amount').isInt({ min: 1, max: 100000 })
 ], async (req, res, next) => {
   try {
     const errs = validationResult(req);
@@ -425,9 +498,13 @@ router.post('/buy-credits', [
     const treasury = process.env.TREASURY_ADDRESS;
     if (!treasury) return error(res, 'SERVER_ERROR', 'Treasury address not configured', 500);
 
-    // Verify it hasn't been used
-    const existingTx = await prisma.transaction.findFirst({ where: { referenceId: txHash, type: 'crypto_purchase' } });
-    if (existingTx) return error(res, 'DUPLICATE', 'Transaction hash already claimed', 400);
+    // The payer must have bound their wallet to this account first — the
+    // transaction's `from` MUST match it. Without this check, anyone could
+    // claim a payment they saw land in the treasury mempool.
+    const claimer = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!claimer.walletAddress) {
+      return error(res, 'VALIDATION', 'Bind your wallet to this account before purchasing credits.', 400);
+    }
 
     // Verify against dynamic pricing config
     const config = await prisma.institutionConfig.findFirst();
@@ -436,8 +513,8 @@ router.post('/buy-credits', [
     };
 
     // The amount MUST be a listed tier — otherwise the expected value check
-    // below would be skipped entirely, letting anyone mint free credits with
-    // a zero-value transaction.
+    // would be skipped entirely, letting anyone mint free credits with a
+    // zero-value transaction.
     const expectedEth = creditEthPrice[amount];
     if (expectedEth === undefined) {
       return error(res, 'VALIDATION', `Amount ${amount} is not a valid credit package.`, 400);
@@ -448,15 +525,26 @@ router.post('/buy-credits', [
     const tx = await provider.getTransaction(txHash);
 
     if (!tx) return error(res, 'NOT_FOUND', 'Transaction not found on network', 404);
+
+    // Chain + sender + recipient must all line up with what was agreed.
+    if (Number(tx.chainId) !== ACCEPTED_CHAIN_ID) {
+      return error(res, 'VALIDATION', 'Transaction must be on Sepolia.', 400);
+    }
+    if (!tx.from || tx.from.toLowerCase() !== claimer.walletAddress.toLowerCase()) {
+      return error(res, 'VALIDATION', 'Transaction was not sent from your bound wallet address.', 400);
+    }
     if (tx.to?.toLowerCase() !== treasury.toLowerCase()) {
       return error(res, 'VALIDATION', 'Transaction was not sent to the Treasury Address', 400);
     }
 
-    // Require the transaction to actually be confirmed on-chain — a dropped
-    // or un-mined transaction must not mint credits.
+    // Require the transaction to actually be confirmed and successful on-chain
+    // — a dropped, un-mined, or reverted transaction must not mint credits.
     const receipt = await provider.getTransactionReceipt(txHash).catch(() => null);
     if (!receipt) {
       return error(res, 'VALIDATION', 'Transaction is not confirmed on the network yet.', 400);
+    }
+    if (receipt.status !== 1) {
+      return error(res, 'VALIDATION', 'Transaction failed on-chain; no credits issued.', 400);
     }
 
     const actualEth = Number(ethers.formatEther(tx.value));
@@ -464,23 +552,39 @@ router.post('/buy-credits', [
       return error(res, 'VALIDATION', `Transaction value (${actualEth} ETH) is lower than required (${expectedEth} ETH) for ${amount} Credits.`, 400);
     }
 
-    await prisma.$transaction(async (ptx) => {
-      await ptx.user.update({
-        where: { id: req.user.id },
-        data: { creditBalance: { increment: amount } }
-      });
-
-      await ptx.transaction.create({
-        data: {
-          senderId: req.user.id,
-          receiverId: req.user.id,
-          amount: amount,
-          cryptoAmount: ethers.formatEther(tx.value),
-          type: 'crypto_purchase',
-          referenceId: txHash
+    // Dedupe: txHash is unique per claim — the (type, referenceId) unique
+    // index turns a concurrent double-claim into a P2002 instead of a race.
+    try {
+      await prisma.$transaction(async (ptx) => {
+        const existingTx = await ptx.transaction.findFirst({
+          where: { referenceId: txHash, type: 'crypto_purchase' }
+        });
+        if (existingTx) {
+          throw new Error('DUPLICATE_CLAIM');
         }
+
+        await ptx.user.update({
+          where: { id: req.user.id },
+          data: { creditBalance: { increment: amount } }
+        });
+
+        await ptx.transaction.create({
+          data: {
+            senderId: req.user.id,
+            receiverId: req.user.id,
+            amount: amount,
+            cryptoAmount: ethers.formatEther(tx.value),
+            type: 'crypto_purchase',
+            referenceId: txHash
+          }
+        });
       });
-    });
+    } catch (err) {
+      if (err.message === 'DUPLICATE_CLAIM' || err.code === 'P2002') {
+        return error(res, 'DUPLICATE', 'Transaction hash already claimed', 400);
+      }
+      throw err;
+    }
 
     return success(res, { message: `${amount} Credits purchased successfully!` });
   } catch (err) {
@@ -490,8 +594,8 @@ router.post('/buy-credits', [
 
 // Transfer credits
 router.post('/transfer', [
-  body('receiverId').notEmpty(),
-  body('amount').isInt({ min: 1 })
+  body('receiverId').isMongoId().withMessage('Invalid receiver ID.'),
+  body('amount').isInt({ min: 1, max: 100000 })
 ], async (req, res, next) => {
   try {
     const { receiverId, amount } = req.body;
@@ -500,15 +604,20 @@ router.post('/transfer', [
     if (senderId === receiverId) return error(res, 'VALIDATION', 'Cannot transfer to yourself', 400);
 
     const sender = await prisma.user.findUnique({ where: { id: senderId } });
-    if (sender.globalRing !== 0 && sender.creditBalance < amount) return error(res, 'VALIDATION', 'Insufficient credits', 400);
-
     const receiver = await prisma.user.findUnique({ where: { id: receiverId } });
     if (!receiver) return error(res, 'NOT_FOUND', 'Receiver not found', 404);
 
     await prisma.$transaction(async (tx) => {
-      // 1. Deduct sender
+      // 1. Deduct sender — conditionally, so a concurrent spend can't push
+      //    the balance negative (decrement + pre-check alone is TOCTOU).
       if (sender.globalRing !== 0) {
-        await tx.user.update({ where: { id: senderId }, data: { creditBalance: { decrement: amount } } });
+        const debited = await tx.user.updateMany({
+          where: { id: senderId, creditBalance: { gte: amount } },
+          data: { creditBalance: { decrement: amount } }
+        });
+        if (debited.count === 0) {
+          throw new Error('INSUFFICIENT_CREDITS');
+        }
       }
       // 2. Add receiver
       await tx.user.update({ where: { id: receiverId }, data: { creditBalance: { increment: amount } } });
@@ -520,6 +629,9 @@ router.post('/transfer', [
 
     return success(res, { message: 'Transfer successful' });
   } catch (err) {
+    if (err.message === 'INSUFFICIENT_CREDITS') {
+      return error(res, 'VALIDATION', 'Insufficient credits', 400);
+    }
     next(err);
   }
 });

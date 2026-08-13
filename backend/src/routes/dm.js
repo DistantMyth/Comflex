@@ -20,6 +20,8 @@ const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+
 const uploadDir = env.STORAGE_PATH;
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -114,8 +116,11 @@ router.get('/', async (req, res, next) => {
  */
 router.get('/:userId', async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    if (!ID_RE.test(req.params.userId)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid userId.', 400);
+    }
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 100);
     const result = await dmService.getConversation(req.user.id, req.params.userId, { page, limit });
     return success(res, result);
   } catch (err) {
@@ -139,6 +144,9 @@ router.post(
           errors.array().map(e => ({ field: e.path, issue: e.msg }))
         );
       }
+      if (!ID_RE.test(req.params.userId)) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid userId.', 400);
+      }
 
       const message = await dmService.sendDM(req.user.id, req.params.userId, req.body);
       return success(res, message, 201);
@@ -154,6 +162,9 @@ router.post(
  */
 router.put('/messages/:msgId', [body('content').trim().notEmpty().withMessage('Message content is required.')], async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.msgId)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid message id.', 400);
+    }
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400, errors.array().map(e => ({ field: e.path, issue: e.msg })));
@@ -171,6 +182,9 @@ router.put('/messages/:msgId', [body('content').trim().notEmpty().withMessage('M
  */
 router.patch('/:userId/read', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.userId)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid userId.', 400);
+    }
     const result = await dmService.markAsRead(req.user.id, req.params.userId);
     return success(res, result);
   } catch (err) {
@@ -183,6 +197,9 @@ router.patch('/:userId/read', async (req, res, next) => {
  */
 router.delete('/messages/:msgId', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.msgId)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid message id.', 400);
+    }
     const result = await dmService.deleteDM(req.params.msgId, req.user.id);
     return success(res, result);
   } catch (err) {

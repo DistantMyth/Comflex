@@ -22,6 +22,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [googleBlocked, setGoogleBlocked] = useState(false);
 
   if (!authLoading && isAuthenticated) {
     return <Navigate to="/profile" replace />;
@@ -75,11 +76,20 @@ export default function LoginPage() {
 
       {GOOGLE_CLIENT_ID && (
         <div className="mb-6">
-          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+          <GoogleOAuthProvider
+            clientId={GOOGLE_CLIENT_ID}
+            onScriptLoadError={() => setGoogleBlocked(true)}
+          >
             <div className="flex justify-center">
               <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={(msg) => setError(msg)} />
             </div>
           </GoogleOAuthProvider>
+          {googleBlocked && (
+            <div className="alert alert-warning text-center text-xs mt-3">
+              The Google Sign-In script was blocked (ad-blocker, VPN, or extension). Allow{' '}
+              <code>accounts.google.com</code> and reload.
+            </div>
+          )}
           <div className="flex items-center gap-3 my-6">
             <div className="flex-1 h-px bg-[var(--color-border)]" />
             <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">or sign in with email</span>

@@ -14,6 +14,8 @@ const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+
 const uploadDir = path.join(env.STORAGE_PATH, 'chatbot');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -169,7 +171,7 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
 router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').notEmpty(), async (req, res, next) => {
   try {
     const errs = validationResult(req);
-    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Missing resourceId', 400);
+    if (!errs.isEmpty() || !ID_RE.test(req.body.resourceId)) return error(res, 'VALIDATION', 'Invalid resourceId', 400);
 
     const user = req.dbUser;
     const limit = TIER_LIMITS[user.subscriptionPlan] || TIER_LIMITS.free;
@@ -234,6 +236,9 @@ router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').not
 // DELETE
 router.delete('/:id', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid note id.', 400);
+    }
     const note = await prisma.chatbotNote.findFirst({
       where: { id: req.params.id, userId: req.user.id }
     });
@@ -264,7 +269,7 @@ router.post('/chat', rateLimiter({
 ], async (req, res, next) => {
   try {
     const errs = validationResult(req);
-    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
+    if (!errs.isEmpty() || !ID_RE.test(req.body.noteId)) return error(res, 'VALIDATION', 'Invalid data', 400);
 
     const user = req.dbUser;
     if (user.subscriptionPlan === 'free' && user.dailyChatTokens <= 0) {

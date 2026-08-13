@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: Number(port),
-      host: true,
+      host: '127.0.0.1', // dev-only; never bind to 0.0.0.0 (LAN exposure)
       proxy: {
         '/api': {
           target: backendUrl,

@@ -49,9 +49,18 @@ async function sendRequest(requesterId, addresseeId) {
     throw Object.assign(new Error('User not found.'), { statusCode: 404, code: 'USER_NOT_FOUND' });
   }
 
-  const friendship = await prisma.friendship.create({
-    data: { requesterId, addresseeId, status: 'pending' },
-  });
+  let friendship;
+  try {
+    friendship = await prisma.friendship.create({
+      data: { requesterId, addresseeId, status: 'pending' },
+    });
+  } catch (err) {
+    // Unique (requesterId, addresseeId) index — concurrent duplicate request
+    if (err && err.code === 'P2002') {
+      throw Object.assign(new Error('Friend request already sent.'), { statusCode: 409, code: 'REQUEST_EXISTS' });
+    }
+    throw err;
+  }
 
   // Notify the recipient of the incoming request
   try {

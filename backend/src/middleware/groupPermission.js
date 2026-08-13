@@ -21,11 +21,38 @@ const { error } = require('../utils/apiResponse');
 const groupService = require('../services/groupService');
 
 /**
+ * Validate that every "id-like" route param is a MongoDB ObjectId.
+ * Prevents malformed ids from reaching Prisma (P2023 → 500) and stops
+ * cross-resource probing via non-canonical ids.
+ */
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+const ID_PARAMS = ['id', 'groupId', 'userId', 'inviteId', 'msgId', 'identityId'];
+
+function requireMongoParams(req, res, next) {
+  for (const name of ID_PARAMS) {
+    const value = req.params[name];
+    if (value !== undefined && !OBJECT_ID_RE.test(value)) {
+      return error(res, 'VALIDATION_ERROR', `Invalid ${name}.`, 400);
+    }
+  }
+  next();
+}
+
+/**
  * Check that the current user is a member of the group and attach membership to req.
  * For anonymous groups, verifies the identity secret instead and attaches req.anonIdentity.
  */
 async function requireGroupMember(req, res, next) {
   try {
+    // Reject malformed ids cleanly (also covers :userId/:inviteId/:msgId etc.
+    // on routes that compose requireGroupMember).
+    for (const name of ID_PARAMS) {
+      const value = req.params[name];
+      if (value !== undefined && !OBJECT_ID_RE.test(value)) {
+        return error(res, 'VALIDATION_ERROR', `Invalid ${name}.`, 400);
+      }
+    }
+
     const groupId = req.params.id || req.params.groupId;
     if (!groupId) return error(res, 'MISSING_GROUP', 'Group ID is required.', 400);
 
@@ -100,7 +127,7 @@ function requireGroupPermission(permissionKey) {
 
     // Evaluate permissions: merge member specific + ring specific
     const memberPerms = membership.permissions || {};
-    const ringPerms = membership.group?.ringConfig?.ringPermissions?.[membership.groupRing] || {};
+    const ringPerms = membership.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
     // A permission is true if AT LEAST one of the memberPerms or ringPerms is true
     const hasPermission = memberPerms[permissionKey] === true || ringPerms[permissionKey] === true;
 
@@ -112,4 +139,4 @@ function requireGroupPermission(permissionKey) {
   };
 }
 
-module.exports = { requireGroupMember, requireGroupPermission };
+module.exports = { requireGroupMember, requireGroupPermission, requireMongoParams };

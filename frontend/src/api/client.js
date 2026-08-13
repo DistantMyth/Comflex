@@ -62,6 +62,30 @@ client.interceptors.request.use((config) => {
 
 let refreshPromise = null;
 
+/**
+ * Single-flight access-token refresh using the httpOnly refresh cookie.
+ * Reused by the axios 401 interceptor and by the socket layer when a
+ * reconnect is rejected with an expired-token error.
+ */
+export function refreshAccessToken() {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true })
+      .then(({ data }) => {
+        setAccessToken(data.data.accessToken);
+        return data.data.accessToken;
+      })
+      .catch((err) => {
+        clearAccessToken();
+        throw err;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
 // Response interceptor: handle 401 (token expired) with a single-flight refresh
 client.interceptors.response.use(
   (response) => response,
@@ -75,26 +99,8 @@ client.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry && !isRefreshCall) {
       originalRequest._retry = true;
 
-      // Refresh uses the httpOnly cookie; a single-flight promise avoids a
-      // thundering herd of concurrent refreshes.
-      if (!refreshPromise) {
-        refreshPromise = axios
-          .post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true })
-          .then(({ data }) => {
-            setAccessToken(data.data.accessToken);
-            return data.data.accessToken;
-          })
-          .catch((err) => {
-            clearAccessToken();
-            throw err;
-          })
-          .finally(() => {
-            refreshPromise = null;
-          });
-      }
-
       try {
-        const freshToken = await refreshPromise;
+        const freshToken = await refreshAccessToken();
         originalRequest.headers.Authorization = `Bearer ${freshToken}`;
         return client(originalRequest);
       } catch {
@@ -143,8 +149,19 @@ function readCookieSessions() {
 function writeCookieSessions(all) {
   try {
     const value = encodeURIComponent(JSON.stringify(all));
-    document.cookie = `${ANON_COOKIE_NAME}=${value}; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}`;
+    // Secure when served over HTTPS so plaintext copies of anon keys never
+    // travel on the wire or sit in non-TLS cookies.
+    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `${ANON_COOKIE_NAME}=${value}; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}${secure}`;
   } catch { /* ignore */ }
+}
+
+// Group ids come from the server, but a malicious/buggy caller could still
+// pass "__proto__"/"constructor"/"prototype" and turn the sessions map into a
+// prototype pollution primitive. Reject those keys outright.
+const FORBIDDEN_SESSION_KEYS = ['__proto__', 'constructor', 'prototype'];
+function safeGroupKey(groupId) {
+  return typeof groupId === 'string' && !FORBIDDEN_SESSION_KEYS.includes(groupId) && groupId.length > 0 ? groupId : null;
 }
 
 export function getAnonSessions() {
@@ -154,20 +171,33 @@ export function getAnonSessions() {
     const raw = localStorage.getItem(ANON_STORAGE_KEY);
     if (raw) {
       const local = JSON.parse(raw);
-      // Cookie wins (it is the user's stated persistence of choice), but
-      // merge in local-only sessions so nothing already joined is lost.
-      merged = { ...local, ...merged };
+      if (!local || typeof local !== 'object' || Array.isArray(local)) throw new Error('bad');
+      for (const key of Object.keys(local)) {
+        if (!safeGroupKey(key)) continue;
+        if (!local[key] || typeof local[key] !== 'object') continue;
+        const session = {
+          identityId: typeof local[key].identityId === 'string' ? local[key].identityId : '',
+          secret: typeof local[key].secret === 'string' ? local[key].secret : '',
+          alias: typeof local[key].alias === 'string' ? local[key].alias : null,
+          aliasTag: typeof local[key].aliasTag === 'string' ? local[key].aliasTag : null,
+          avatarUrl: typeof local[key].avatarUrl === 'string' ? local[key].avatarUrl : null,
+        };
+        // Cookie wins (it is the user's stated persistence of choice), but
+        // merge in local-only sessions so nothing already joined is lost.
+        if (session.identityId && session.secret) merged[key] = session;
+      }
     }
   } catch { /* ignore */ }
   return merged;
 }
 
 export function setAnonSession(groupId, session) {
-  if (!groupId || !session?.identityId || !session?.secret) return;
+  const key = safeGroupKey(groupId);
+  if (!key || !session?.identityId || !session?.secret) return;
   const all = getAnonSessions();
-  all[groupId] = {
-    identityId: session.identityId,
-    secret: session.secret,
+  all[key] = {
+    identityId: String(session.identityId),
+    secret: String(session.secret),
     alias: session.alias || null,
     aliasTag: session.aliasTag || null,
     avatarUrl: session.avatarUrl || null,
@@ -179,9 +209,10 @@ export function setAnonSession(groupId, session) {
 }
 
 export function updateAnonSession(groupId, patch) {
+  const key = safeGroupKey(groupId);
   const all = getAnonSessions();
-  if (!all[groupId]) return;
-  Object.assign(all[groupId], patch);
+  if (!key || !all[key]) return;
+  Object.assign(all[key], patch);
   writeCookieSessions(all);
   try {
     localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(all));
@@ -189,8 +220,10 @@ export function updateAnonSession(groupId, patch) {
 }
 
 export function removeAnonSession(groupId) {
+  const key = safeGroupKey(groupId);
   const all = getAnonSessions();
-  delete all[groupId];
+  if (!key || !all[key]) return;
+  delete all[key];
   writeCookieSessions(all);
   try {
     localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(all));

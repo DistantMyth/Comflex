@@ -34,6 +34,11 @@ async function seedAdmin() {
       console.error('[SEED] Cannot create Seed Admin. Exiting.');
       process.exit(1);
     }
+    if (typeof env.SEED_ADMIN_PASSWORD !== 'string' || env.SEED_ADMIN_PASSWORD.length < 12) {
+      console.error('[SEED] ❌ SEED_ADMIN_PASSWORD must be at least 12 characters.');
+      console.error('[SEED] Refusing to create a Ring 0 admin with a weak password. Exiting.');
+      process.exit(1);
+    }
 
     // Create the Seed Admin user (Ring 0)
     const hashedPassword = await hashPassword(env.SEED_ADMIN_PASSWORD);

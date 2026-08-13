@@ -20,6 +20,22 @@ const router = express.Router();
 // All admin routes require authentication + Ring 0
 router.use(authMiddleware, requireRing(0));
 
+// Reject malformed ObjectIds cleanly instead of leaking P2023 → 500
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+router.param('id', (req, res, next, id) => {
+  if (!ID_RE.test(id)) {
+    return error(res, 'VALIDATION_ERROR', 'Invalid id.', 400);
+  }
+  next();
+});
+
+// Strict boolean coercion — plain Boolean('false') === true is a footgun.
+const toBool = (v) => {
+  if (v === true || v === 1 || v === '1' || v === 'true') return true;
+  if (v === false || v === 0 || v === '0' || v === 'false') return false;
+  return undefined; // invalid
+};
+
 // ============================================================
 // INSTITUTION CONFIG
 // ============================================================
@@ -341,8 +357,8 @@ router.put(
         if (!rule.matchValue) {
           return error(res, 'VALIDATION_ERROR', 'matchValue is required for each rule.', 400);
         }
-        if (!rule.groupId) {
-          return error(res, 'VALIDATION_ERROR', 'groupId is required for each rule.', 400);
+        if (!rule.groupId || !ID_RE.test(rule.groupId)) {
+          return error(res, 'VALIDATION_ERROR', 'A valid groupId is required for each rule.', 400);
         }
         // Verify the group exists
         const group = await prisma.cohortGroup.findUnique({ where: { id: rule.groupId } });
@@ -663,17 +679,15 @@ router.patch(
       }
 
       const updateData = {};
-      if (req.body.canCreateGroups !== undefined) {
-        updateData.canCreateGroups = Boolean(req.body.canCreateGroups);
-      }
-      if (req.body.canCreateEvents !== undefined) {
-        updateData.canCreateEvents = Boolean(req.body.canCreateEvents);
-      }
-      if (req.body.canManageResources !== undefined) {
-        updateData.canManageResources = Boolean(req.body.canManageResources);
-      }
-      if (req.body.canManageStore !== undefined) {
-        updateData.canManageStore = Boolean(req.body.canManageStore);
+      const boolFields = ['canCreateGroups', 'canCreateEvents', 'canManageResources', 'canManageStore'];
+      for (const field of boolFields) {
+        if (req.body[field] !== undefined) {
+          const val = toBool(req.body[field]);
+          if (val === undefined) {
+            return error(res, 'VALIDATION_ERROR', `${field} must be true or false.`, 400);
+          }
+          updateData[field] = val;
+        }
       }
 
       const updated = await prisma.user.update({

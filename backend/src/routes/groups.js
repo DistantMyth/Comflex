@@ -14,7 +14,7 @@ const fs = require('fs');
 const authMiddleware = require('../middleware/auth');
 const { rateLimiter } = require('../middleware/rateLimit');
 const { requireRing, canActOnUser } = require('../middleware/ringCheck');
-const { requireGroupMember, requireGroupPermission } = require('../middleware/groupPermission');
+const { requireGroupMember, requireGroupPermission, requireMongoParams } = require('../middleware/groupPermission');
 const groupService = require('../services/groupService');
 const messageService = require('../services/messageService');
 const dmService = require('../services/dmService');
@@ -370,7 +370,9 @@ router.post('/:id/avatar', requireGroupMember, requireGroupPermission('can_edit_
     if (!req.file) {
       return error(res, 'NO_FILE', 'No avatar file uploaded.', 400);
     }
-    if (req.file.mimetype.startsWith('image/') && !validateStoredFile(req.file.path, req.file.mimetype)) {
+    // Magic-byte check regardless of the client-declared mimetype — a
+    // spoofed Content-Type must not skip the header inspection.
+    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
       try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
       return error(res, 'INVALID_FILE_TYPE', 'The uploaded file is not a valid image.', 400);
     }
@@ -517,7 +519,6 @@ router.get('/:id/search-users', requireGroupMember, async (req, res, next) => {
         OR: [
           { username: { startsWith: q, mode: 'insensitive' } },
           { displayName: { contains: q, mode: 'insensitive' } },
-          { email: { startsWith: q, mode: 'insensitive' } },
         ],
       },
       select: {
@@ -678,8 +679,8 @@ router.post(
         return error(res, 'RING_VIOLATION', 'Cannot mute a user at your level or above.', 403);
       }
 
-      const duration = parseInt(req.body.durationMinutes, 10) || 60;
-      const mute = await groupService.muteMember(req.params.id, req.params.userId, req.user.id, duration);
+      const durationMinutes = Math.min(Math.max(parseInt(req.body.durationMinutes, 10) || 60, 1), 525600); // max 1 year
+      const mute = await groupService.muteMember(req.params.id, req.params.userId, req.user.id, durationMinutes);
       return success(res, mute);
     } catch (err) {
       if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -808,7 +809,7 @@ router.patch(
  * after creating an anonymous group. The resulting secret is given to the
  * client once and never stored.
  */
-router.post('/:id/anons/claim', authMiddleware, [
+router.post('/:id/anons/claim', authMiddleware, requireMongoParams, [
   body('alias').trim().notEmpty().withMessage('Alias is required.'),
   body('avatarUrl').optional().trim(),
 ], async (req, res, next) => {
@@ -856,7 +857,7 @@ router.get('/:id/anons/me', requireGroupMember, async (req, res, next) => {
  * anonymous group with no session (e.g. cookies cleared): joined:true means
  * "prompt for your saved key", false means "you need an invite".
  */
-router.get('/:id/anons/enter', authMiddleware, async (req, res, next) => {
+router.get('/:id/anons/enter', authMiddleware, requireMongoParams, async (req, res, next) => {
   try {
     const group = await prisma.cohortGroup.findUnique({
       where: { id: req.params.id },
@@ -886,7 +887,7 @@ router.get('/:id/anons/enter', authMiddleware, async (req, res, next) => {
  * AnonGroupJoin flag (or the creator). On success the client stores the SAME
  * key back into cookies — the key never changes, no server copy exists.
  */
-router.post('/:id/anons/restore', authMiddleware, [
+router.post('/:id/anons/restore', authMiddleware, requireMongoParams, [
   body('key').trim().notEmpty().withMessage('Your saved key is required.'),
 ], async (req, res, next) => {
   try {
@@ -1121,8 +1122,8 @@ router.post('/:id/anons/leave', requireGroupMember, async (req, res, next) => {
  */
 router.get('/:id/messages', requireGroupMember, async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 100);
     const result = await messageService.getMessages(req.params.id, { page, limit }, req.user.id, !!req.anonIdentity);
     return success(res, result);
   } catch (err) {

@@ -101,6 +101,7 @@ function initSocket(httpServer, frontendUrl) {
           socket.anonSessions.push({
             groupId: session.groupId,
             identityId: identity.id,
+            secret: session.secret,
             alias: identity.alias,
             aliasTag: identity.aliasTag,
             avatarUrl: identity.avatarUrl,
@@ -129,10 +130,12 @@ function initSocket(httpServer, frontendUrl) {
     // ── message:send (group messages) ─────────────────────
     socket.on('message:send', async (data, callback) => {
       try {
-        const { groupId, content, mentions = [], attachments = [], replyToId, forwarded, msgType } = data;
-        if (!groupId || (!content?.trim() && !attachments.length)) {
+        const { groupId, content, mentions = [], attachments: rawAttachments = [], replyToId, forwarded, msgType } = data;
+        if (!groupId || (!content?.trim() && !rawAttachments.length)) {
           return callback?.({ error: 'groupId and content are required.' });
         }
+        // Cap media attachments per message.
+        const attachments = Array.isArray(rawAttachments) ? rawAttachments.slice(0, 5) : [];
 
         const group = await prisma.cohortGroup.findUnique({
           where: { id: groupId },
@@ -145,17 +148,29 @@ function initSocket(httpServer, frontendUrl) {
           const anon = socket.anonSessions?.find(s => s.groupId === groupId && s.identityId === (data.anonIdentityId || ''));
           if (!anon) return callback?.({ error: 'Not a member of this group.' });
 
+          // Re-verify against the DB on EVERY send — a ban issued after the
+          // socket connected must take effect immediately (the in-memory
+          // session alone would let a freshly-banned identity keep posting).
+          const freshIdentity = await groupService.resolveAnonIdentity(anon.identityId, anon.secret);
+          if (!freshIdentity || freshIdentity.groupId !== groupId) {
+            return callback?.({ error: 'Not a member of this group.' });
+          }
+          if (freshIdentity.bannedAt) {
+            socket.emit('anon:banned', { groupId: freshIdentity.groupId, identityId: freshIdentity.id });
+            return callback?.({ error: 'This identity is banned from the group.' });
+          }
+
           const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
           if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
 
           const msg = await messageService.sendMessage(groupId, socket.user.id, {
-            content: content?.trim() || '',
+            content: content?.trim()?.slice(0, 8000) || '',
             mentions: [],
             attachments,
             replyToId,
             forwarded,
             msgType,
-          }, anon);
+          }, { identityId: freshIdentity.id, alias: freshIdentity.alias, aliasTag: freshIdentity.aliasTag, avatarUrl: freshIdentity.avatarUrl });
 
           io.to(groupId).emit('message:new', msg);
           return callback?.({ success: true, message: msg });
@@ -165,14 +180,22 @@ function initSocket(httpServer, frontendUrl) {
         // Check membership
         const membership = await prisma.groupMember.findUnique({
           where: { userId_groupId: { userId: socket.user.id, groupId } },
+          include: { group: { select: { ringConfig: true, creatorId: true } } },
         });
         if (!membership && socket.user.globalRing !== 0) {
           return callback?.({ error: 'Not a member of this group.' });
         }
 
-        // Check permissions
-        const perms = membership?.permissions || {};
-        if (!perms.can_send_messages && socket.user.globalRing !== 0) {
+        // Check permissions — member overrides merged with ring config
+        // permissions (mirrors groupPermission middleware).
+        const memberPerms = membership?.permissions || {};
+        const ringPerms = membership?.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
+        const canSend =
+          socket.user.globalRing === 0 ||
+          membership?.group?.creatorId === socket.user.id ||
+          memberPerms.can_send_messages === true ||
+          ringPerms.can_send_messages === true;
+        if (!canSend) {
           return callback?.({ error: 'You do not have permission to send messages.' });
         }
 
@@ -185,9 +208,23 @@ function initSocket(httpServer, frontendUrl) {
         const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
         if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
 
+        // Mentions: cap the count and only allow mentions of actual group
+        // members — otherwise anyone could spam-@ mention every user in the
+        // platform and flood their notification bell.
+        let cleanMentions = Array.isArray(mentions) ? [...new Set(mentions)] : [];
+        cleanMentions = cleanMentions.slice(0, 25);
+        if (cleanMentions.length > 0) {
+          const memberRows = await prisma.groupMember.findMany({
+            where: { groupId, userId: { in: cleanMentions } },
+            select: { userId: true },
+          });
+          const validIds = new Set(memberRows.map(r => r.userId));
+          cleanMentions = cleanMentions.filter(id => validIds.has(id));
+        }
+
         const msg = await messageService.sendMessage(groupId, socket.user.id, {
-          content: content?.trim() || '',
-          mentions,
+          content: content?.trim()?.slice(0, 8000) || '',
+          mentions: cleanMentions,
           attachments,
           replyToId,
           forwarded,
@@ -225,11 +262,20 @@ function initSocket(httpServer, frontendUrl) {
     });
 
     // ── typing:start (groups) ────────────────────────────
+    let lastTypingAt = 0;
     socket.on('typing:start', ({ groupId }) => {
       if (groupId) {
+        // Throttle: typing events are ephemeral UI state — flooding them
+        // costs the room broadcaster bandwidth for no gain.
+        const now = Date.now();
+        if (now - lastTypingAt < 2000) return;
+        lastTypingAt = now;
         // Typing indicators are suppressed in anonymous groups — the payload
         // would carry the real user's id/displayName.
         if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
+        // The user must actually be a verified room member (socket rooms are
+        // joined only after a membership check on the handshake).
+        if (!socket.rooms?.has(groupId)) return;
         socket.to(groupId).emit('typing:start', {
           userId: socket.user.id,
           displayName: socket.user.displayName,
@@ -242,6 +288,7 @@ function initSocket(httpServer, frontendUrl) {
     socket.on('typing:stop', ({ groupId }) => {
       if (groupId) {
         if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
+        if (!socket.rooms?.has(groupId)) return;
         socket.to(groupId).emit('typing:stop', {
           userId: socket.user.id,
           groupId,
@@ -255,6 +302,9 @@ function initSocket(httpServer, frontendUrl) {
         const { receiverId, content } = data;
         if (!receiverId || !content?.trim()) {
           return callback?.({ error: 'receiverId and content are required.' });
+        }
+        if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) {
+          return callback?.({ error: 'Invalid receiverId.' });
         }
 
         const message = await dmService.sendDM(socket.user.id, receiverId, { content: content.trim() });
@@ -282,6 +332,13 @@ function initSocket(httpServer, frontendUrl) {
         if (!otherUserId) {
           return callback?.({ error: 'userId is required.' });
         }
+        if (!/^[0-9a-fA-F]{24}$/.test(otherUserId)) {
+          return callback?.({ error: 'Invalid userId.' });
+        }
+
+        // Friendship required — read receipts must not leak presence to
+        // non-friends (or reveal whether an id exists).
+        await dmService.requireFriendship(socket.user.id, otherUserId);
 
         await dmService.markAsRead(socket.user.id, otherUserId);
 
@@ -299,22 +356,37 @@ function initSocket(httpServer, frontendUrl) {
     });
 
     // ── dm:typing:start ──────────────────────────────────
-    socket.on('dm:typing:start', ({ receiverId }) => {
+    socket.on('dm:typing:start', async ({ receiverId }, callback) => {
       if (receiverId) {
+        // Grandstanding check: only friends may show typing presence.
+        try {
+          if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) return callback?.({ error: 'Invalid receiverId.' });
+          await dmService.requireFriendship(socket.user.id, receiverId);
+        } catch {
+          return callback?.({ error: 'Not friends with this user.' });
+        }
         io.to(`user:${receiverId}`).emit('dm:typing:start', {
           userId: socket.user.id,
           displayName: socket.user.displayName,
         });
       }
+      callback?.({ success: true });
     });
 
     // ── dm:typing:stop ───────────────────────────────────
-    socket.on('dm:typing:stop', ({ receiverId }) => {
+    socket.on('dm:typing:stop', async ({ receiverId }, callback) => {
       if (receiverId) {
+        try {
+          if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) return callback?.({ error: 'Invalid receiverId.' });
+          await dmService.requireFriendship(socket.user.id, receiverId);
+        } catch {
+          return callback?.({ error: 'Not friends with this user.' });
+        }
         io.to(`user:${receiverId}`).emit('dm:typing:stop', {
           userId: socket.user.id,
         });
       }
+      callback?.({ success: true });
     });
 
     // ── anon:join — join an anonymous group room (used after connect, e.g.

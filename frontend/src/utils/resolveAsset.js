@@ -11,13 +11,21 @@
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
+// Only schemes we can safely render: http(s), backend-relative /uploads &
+// /api paths, and inline base64 data: images (avatars/badges only). Anything
+// else — javascript:, file:, data: non-image, protocol-relative, etc. — is
+// rejected so a stored avatarUrl can never become an <img src=...> gadget.
+const IMAGE_DATA_RE = /^data:image\/(png|jpe?g|gif|webp|avif);base64,/i;
+
 export function resolveAsset(url) {
   if (!url) return url;
+  if (typeof url !== 'string') return null;
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   if (url.startsWith('/uploads') || url.startsWith('/api')) {
     return `${BACKEND_URL}${url}`;
   }
-  return url;
+  if (IMAGE_DATA_RE.test(url)) return url;
+  return null;
 }
 
 /** Resolve the websocket/socket.io origin (backend URL, else same-origin in dev). */

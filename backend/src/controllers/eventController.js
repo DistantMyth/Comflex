@@ -20,6 +20,72 @@ function sanitizeEvent(event, { isOrganizer = false } = {}) {
   return safe;
 }
 
+// Hard caps for auto-reward budgets. Credits here are MINTED (not debited
+// from anyone), so unbounded budgets would let an admin-equivalent role
+// print arbitrary currency. Even global admins are capped at sane values.
+const REWARD_BUDGET_LIMITS = { creditsPerCorrect: 500, maxCredits: 20000, badgesPerCorrect: 3, maxBadges: 50 };
+
+/**
+ * Validate and clamp a rewardBudget payload.
+ * Returns null when absent; a sanitized { creditsPerCorrect, maxCredits,
+ * badgeId, badgesPerCorrect, maxBadges } object otherwise. Every numeric
+ * field is coerced to a finite capped non-negative integer.
+ */
+function sanitizeRewardBudget(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+
+  const int = (v, def, max) => {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return def;
+    return Math.max(0, Math.min(n, max));
+  };
+
+  const out = {
+    creditsPerCorrect: int(value.creditsPerCorrect, 0, REWARD_BUDGET_LIMITS.creditsPerCorrect),
+    maxCredits: int(value.maxCredits, 0, REWARD_BUDGET_LIMITS.maxCredits),
+    badgesPerCorrect: int(value.badgesPerCorrect, 0, REWARD_BUDGET_LIMITS.badgesPerCorrect),
+    maxBadges: int(value.maxBadges, 0, REWARD_BUDGET_LIMITS.maxBadges),
+    badgeId: (typeof value.badgeId === 'string' && /^[0-9a-fA-F]{24}$/.test(value.badgeId))
+      ? value.badgeId
+      : null,
+  };
+
+  // A budget that pays credits must have a per-answer amount, and vice versa.
+  if (out.maxCredits > 0 && out.creditsPerCorrect === 0) out.creditsPerCorrect = 1;
+  if (out.maxBadges > 0 && out.badgesPerCorrect === 0) out.badgesPerCorrect = 1;
+
+  return out;
+}
+
+// Caps for end-of-event reward tiers (also minted credits — see above).
+const REWARD_TIER_LIMITS = { maxRank: 10, maxCredits: 10000, maxTiers: 25 };
+
+/**
+ * Validate and clamp a rewardTiers array: [{ rank, credits?, badgeId? }].
+ * Ranks must be distinct positive integers; credits capped; badgeId must
+ * be a valid ObjectId.
+ */
+function sanitizeRewardTiers(value) {
+  if (!Array.isArray(value)) return null;
+  const tiers = [];
+  const seenRanks = new Set();
+  for (const raw of value.slice(0, REWARD_TIER_LIMITS.maxTiers)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const rank = Math.floor(Number(raw.rank));
+    if (!Number.isFinite(rank) || rank < 1 || rank > REWARD_TIER_LIMITS.maxRank || seenRanks.has(rank)) continue;
+    seenRanks.add(rank);
+    const credits = Math.floor(Number(raw.credits));
+    const badgeId = (typeof raw.badgeId === 'string' && /^[0-9a-fA-F]{24}$/.test(raw.badgeId)) ? raw.badgeId : null;
+    tiers.push({
+      rank,
+      credits: Number.isFinite(credits) ? Math.max(0, Math.min(credits, REWARD_TIER_LIMITS.maxCredits)) : 0,
+      ...(badgeId ? { badgeId } : {}),
+    });
+  }
+  return tiers.length > 0 ? tiers : null;
+}
+
 exports.listEvents = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -109,7 +175,7 @@ exports.createEvent = async (req, res, next) => {
       title, description, startDate, endDate, durationHours, durationMinutes, category, targetTags,
       parentId, keepTeamsSame, isTeamEvent, minTeamSize, maxTeamSize, status,
       taskViewMode, scoreMode, wrongSubmissionPenalty, autoStart,
-      inviteMode, allowedCohorts, blockedCohorts, allowedUserIds, blockedUserIds, rewardBudget
+      inviteMode, allowedCohorts, blockedCohorts, allowedUserIds, blockedUserIds
     } = req.body;
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -157,7 +223,9 @@ exports.createEvent = async (req, res, next) => {
         blockedCohorts: blockedCohorts || [],
         allowedUserIds: allowedUserIds || [],
         blockedUserIds: blockedUserIds || [],
-        rewardBudget: rewardBudget || null
+        // rewardBudget is NEVER accepted from a create request — it mints
+        // platform credits and can only be set by a global admin via update.
+        rewardBudget: null
       }
     });
 
@@ -263,7 +331,21 @@ exports.updateEvent = async (req, res, next) => {
       'inviteMode', 'allowedCohorts', 'blockedCohorts', 'allowedUserIds', 'blockedUserIds', 'rewardBudget'];
     const updateData = {};
     for (const f of ALLOWED_FIELDS) {
-      if (body[f] !== undefined) updateData[f] = body[f];
+      if (body[f] === undefined) continue;
+      // rewardBudget mints platform credits out of thin air (applied per
+      // correct auto-graded answer) — only global admins may configure it,
+      // and its shape is strictly validated and capped below.
+      if (f === 'rewardBudget') {
+        if (user.globalRing !== 0) continue;
+        updateData[f] = sanitizeRewardBudget(body[f]);
+        continue;
+      }
+      if (f === 'rewardTiers') {
+        if (user.globalRing !== 0) continue;
+        updateData[f] = sanitizeRewardTiers(body[f]);
+        continue;
+      }
+      updateData[f] = body[f];
     }
 
     const updatedEvent = await prisma.event.update({
@@ -288,9 +370,11 @@ exports.deleteEvent = async (req, res, next) => {
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
     
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    const isOrganizer = event.creatorId === user.id || event.organizers.some(o => o.userId === user.id);
+    // Deleting an event nukes every team/submission for its participants —
+    // only the creator or a global admin may do it, not any co-organizer.
+    const isCreatorOrGlobalAdmin = event.creatorId === user.id || user.globalRing === 0;
 
-    if (!isOrganizer && user.globalRing !== 0) {
+    if (!isCreatorOrGlobalAdmin) {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized.' } });
     }
 
@@ -416,6 +500,12 @@ exports.inviteToTeam = async (req, res, next) => {
     const team = await prisma.eventTeam.findUnique({ where: { id: teamId } });
     if (!team) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found.' } });
 
+    // Cross-check the team actually belongs to this event — otherwise a team
+    // from any other event could be invited/joined via this route.
+    if (team.eventId !== eventId) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found in this event.' } });
+    }
+
     if (team.leaderId !== req.user.id) {
        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only team leader can invite.' } });
     }
@@ -477,8 +567,19 @@ exports.acceptTeamInvite = async (req, res, next) => {
     const invite = await prisma.eventTeamInvite.findUnique({ where: { id: inviteId } });
     if (!invite) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite not found.' } });
 
+    // The invite must belong to the same event the route was called for.
+    if (invite.eventId !== eventId) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite not found in this event.' } });
+    }
+
     if (invite.invitedUserId !== req.user.id) {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized.' } });
+    }
+
+    // A rejected invite is final — do not let users resurrect it to bypass
+    // the leader's decision.
+    if (invite.status === 'rejected') {
+      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'This invite has been rejected.' } });
     }
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
@@ -534,10 +635,15 @@ exports.acceptTeamInvite = async (req, res, next) => {
 
 exports.rejectTeamInvite = async (req, res, next) => {
   try {
-    const { inviteId } = req.params;
+    const { id: eventId, inviteId } = req.params;
 
     const invite = await prisma.eventTeamInvite.findUnique({ where: { id: inviteId } });
     if (!invite) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite not found.' } });
+
+    // The invite must belong to the same event the route was called for.
+    if (invite.eventId !== eventId) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite not found in this event.' } });
+    }
 
     if (invite.invitedUserId !== req.user.id) {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized.' } });
@@ -810,13 +916,6 @@ exports.submitTask = async (req, res, next) => {
     const event = await prisma.event.findUnique({ where: { id: eventId } });
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
 
-    // Ensure they haven't already solved it
-    const existingCorrect = await prisma.eventSubmission.findFirst({
-      where: { teamId: member.teamId, taskId, status: 'correct' }
-    });
-
-    if (existingCorrect) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Already solved.' } });
-
     let status = 'pending';
     let scoreAwarded = 0;
 
@@ -837,16 +936,38 @@ exports.submitTask = async (req, res, next) => {
        // or we deduct here. Let's award basePoints here and compute penalty dynamically.
     }
 
-    const sub = await prisma.eventSubmission.create({
-      data: {
-        eventId,
-        teamId: member.teamId,
-        taskId,
-        content,
-        status,
-        scoreAwarded
+    let sub;
+    try {
+      sub = await prisma.$transaction(async (tx) => {
+        // Re-check inside the transaction: two concurrent "correct" submits
+        // must not both slip past the guard and double-pay the auto reward.
+        const alreadyCorrect = await tx.eventSubmission.findFirst({
+          where: { teamId: member.teamId, taskId, status: 'correct' }
+        });
+        if (alreadyCorrect) {
+          return { alreadySolved: true };
+        }
+        return tx.eventSubmission.create({
+          data: {
+            eventId,
+            teamId: member.teamId,
+            taskId,
+            content,
+            status,
+            scoreAwarded
+          }
+        });
+      });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Already solved.' } });
       }
-    });
+      throw err;
+    }
+
+    if (sub.alreadySolved) {
+      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Already solved.' } });
+    }
 
     // AUTO-REWARD: when a preconfigured answer is graded correct, distribute
     // credits/badges from the organizer's budget; when the budget runs out,
@@ -865,12 +986,14 @@ exports.submitTask = async (req, res, next) => {
  * the event is marked completed — it's over when the organizer runs out.
  */
 async function applyRewardBudget(event, team, sub, scoreAwarded) {
-  const budget = event.rewardBudget || {};
-  const creditsPerCorrect = Number(budget.creditsPerCorrect) || 0;
-  const badgesPerCorrect = Number(budget.badgesPerCorrect) || 0;
-  const badgeId = budget.badgeId || null;
-  const maxCredits = Number(budget.maxCredits) || 0;
-  const maxBadges = Number(budget.maxBadges) || 0;
+  // Defense in depth: clamp whatever is stored (admins set it, but stale or
+  // hand-edited data must never mint unbounded credits).
+  const budget = sanitizeRewardBudget(event.rewardBudget) || {};
+  const creditsPerCorrect = budget.creditsPerCorrect;
+  const badgesPerCorrect = budget.badgesPerCorrect;
+  const badgeId = budget.badgeId;
+  const maxCredits = budget.maxCredits;
+  const maxBadges = budget.maxBadges;
 
   const members = await prisma.eventTeamMember.findMany({
     where: { teamId: team.id },
@@ -880,63 +1003,84 @@ async function applyRewardBudget(event, team, sub, scoreAwarded) {
 
   const creditsCost = creditsPerCorrect * memberCount;
   const badgesCost = (badgeId ? badgesPerCorrect : 0) * memberCount;
+  const hasCreditsBudget = maxCredits > 0;
+  const hasBadgesBudget = maxBadges > 0;
 
-  const creditsLeft = maxCredits - (event.rewardCreditsSpent || 0);
-  const badgesLeft = maxBadges - (event.rewardBadgesSpent || 0);
+  if (creditsCost === 0 && badgesCost === 0) return;
 
-  // Budget can't cover this answer → no payout, event is over.
-  if (creditsCost > creditsLeft || badgesCost > badgesLeft) {
-    await prisma.event.update({
-      where: { id: event.id },
-      data: { status: 'completed' }
-    });
-    return;
-  }
+  await prisma.$transaction(async (tx) => {
+    // Atomically reserve budget. The conditional updateMany re-reads the
+    // current spent counters at write time, so two concurrent payouts
+    // cannot both pass (the loser's predicate fails and count === 0).
+    const creditsClaimed = hasCreditsBudget
+      ? await tx.event.updateMany({
+          where: {
+            id: event.id,
+            rewardCreditsSpent: { lte: maxCredits - creditsCost },
+          },
+          data: { rewardCreditsSpent: { increment: creditsCost } },
+        })
+      : { count: 1 };
+    const badgesClaimed = hasBadgesBudget
+      ? await tx.event.updateMany({
+          where: {
+            id: event.id,
+            rewardBadgesSpent: { lte: maxBadges - badgesCost },
+          },
+          data: { rewardBadgesSpent: { increment: badgesCost } },
+        })
+      : { count: 1 };
 
-  const rewardRef = `event_auto_${event.id}_${sub.id}`;
-
-  for (const m of members) {
-    if (creditsCost > 0) {
-      await prisma.user.update({
-        where: { id: m.userId },
-        data: { creditBalance: { increment: creditsPerCorrect } }
+    if (creditsClaimed.count === 0 || badgesClaimed.count === 0) {
+      // Budget ran out between the pre-check and this write — no payout,
+      // the event is over.
+      await tx.event.update({
+        where: { id: event.id },
+        data: { status: 'completed' },
       });
-      await prisma.transaction.create({
-        data: {
-          receiverId: m.userId,
-          amount: creditsPerCorrect,
-          type: 'event_reward',
-          referenceId: rewardRef
-        }
-      });
+      return;
     }
-    if (badgeId && badgesPerCorrect > 0) {
-      await prisma.userBadge.upsert({
-        where: { userId_badgeId: { userId: m.userId, badgeId } },
-        update: {},
-        create: { userId: m.userId, badgeId, source: 'event' }
-      });
-    }
-  }
 
-  await prisma.event.update({
-    where: { id: event.id },
-    data: {
-      rewardCreditsSpent: event.rewardCreditsSpent + creditsCost,
-      rewardBadgesSpent: event.rewardBadgesSpent + badgesCost
+    // Fresh counters (the update above already incremented them in the DB,
+    // but the in-memory event object is stale — recompute from the budget).
+    const spentCreditsNow = (event.rewardCreditsSpent || 0) + (hasCreditsBudget ? creditsCost : 0);
+    const spentBadgesNow = (event.rewardBadgesSpent || 0) + (hasBadgesBudget ? badgesCost : 0);
+
+    const rewardRef = `event_auto_${event.id}_${sub.id}`;
+
+    for (const m of members) {
+      if (creditsCost > 0) {
+        await tx.user.update({
+          where: { id: m.userId },
+          data: { creditBalance: { increment: creditsPerCorrect } }
+        });
+        await tx.transaction.create({
+          data: {
+            receiverId: m.userId,
+            amount: creditsPerCorrect,
+            type: 'event_reward',
+            referenceId: rewardRef
+          }
+        });
+      }
+      if (badgeId && badgesPerCorrect > 0) {
+        await tx.userBadge.upsert({
+          where: { userId_badgeId: { userId: m.userId, badgeId } },
+          update: {},
+          create: { userId: m.userId, badgeId, source: 'event' }
+        });
+      }
+    }
+
+    const creditsNowLeft = (maxCredits - spentCreditsNow) <= 0;
+    const badgesNowLeft = (maxBadges - spentBadgesNow) <= 0;
+    if ((hasCreditsBudget && creditsNowLeft) || (hasBadgesBudget && badgesNowLeft)) {
+      await tx.event.update({
+        where: { id: event.id },
+        data: { status: 'completed' }
+      });
     }
   });
-
-  const creditsNowLeft = (maxCredits - (event.rewardCreditsSpent + creditsCost)) <= 0;
-  const badgesNowLeft = (maxBadges - (event.rewardBadgesSpent + badgesCost)) <= 0;
-  const hasCreditBudget = maxCredits > 0;
-  const hasBadgeBudget = maxBadges > 0;
-  if ((hasCreditBudget && creditsNowLeft) || (hasBadgeBudget && badgesNowLeft)) {
-    await prisma.event.update({
-      where: { id: event.id },
-      data: { status: 'completed' }
-    });
-  }
 }
 
 /**
@@ -1297,45 +1441,63 @@ exports.awardTeamRewards = async (req, res, next) => {
 
     // Idempotency guard: an organizer may award an ad-hoc reward to a team
     // only ONCE per event — otherwise credits/badges can be minted infinitely.
+    // The check lives INSIDE the transaction; combined with the unique
+    // (type, referenceId) index on Transaction, concurrent double-awards
+    // fail on P2002 instead of racing past the guard.
     const rewardRef = `event_reward_${eventId}_${teamId}`;
-    const existingReward = await prisma.transaction.findFirst({
-      where: { type: 'event_reward', referenceId: rewardRef },
-      select: { id: true },
-    });
-    if (existingReward) {
+
+    let results;
+    try {
+      results = await prisma.$transaction(async (tx) => {
+        const existingReward = await tx.transaction.findFirst({
+          where: { type: 'event_reward', referenceId: rewardRef },
+          select: { id: true },
+        });
+        if (existingReward) {
+          return { alreadyRewarded: true };
+        }
+
+        const out = [];
+        for (const member of team.members) {
+          if (credits && credits > 0) {
+            await tx.user.update({
+              where: { id: member.userId },
+              data: { creditBalance: { increment: credits } }
+            });
+            await tx.transaction.create({
+              data: {
+                receiverId: member.userId,
+                amount: credits,
+                type: 'event_reward',
+                referenceId: rewardRef
+              }
+            });
+          }
+
+          if (badgeId) {
+            await tx.userBadge.upsert({
+              where: { userId_badgeId: { userId: member.userId, badgeId } },
+              update: {},
+              create: { userId: member.userId, badgeId, source: 'event' }
+            });
+          }
+
+          out.push({ userId: member.userId, credits: credits || 0, badgeId: badgeId || null });
+        }
+        return { rewards: out };
+      });
+    } catch (err) {
+      if (err.code === 'P2002') {
+        return res.status(409).json({ error: { code: 'ALREADY_REWARDED', message: 'This team has already received rewards for this event.' } });
+      }
+      throw err;
+    }
+
+    if (results.alreadyRewarded) {
       return res.status(409).json({ error: { code: 'ALREADY_REWARDED', message: 'This team has already received rewards for this event.' } });
     }
 
-    const results = [];
-
-    for (const member of team.members) {
-      if (credits && credits > 0) {
-        await prisma.user.update({
-          where: { id: member.userId },
-          data: { creditBalance: { increment: credits } }
-        });
-        await prisma.transaction.create({
-          data: {
-            receiverId: member.userId,
-            amount: credits,
-            type: 'event_reward',
-            referenceId: rewardRef
-          }
-        });
-      }
-
-      if (badgeId) {
-        await prisma.userBadge.upsert({
-          where: { userId_badgeId: { userId: member.userId, badgeId } },
-          update: {},
-          create: { userId: member.userId, badgeId, source: 'event' }
-        });
-      }
-
-      results.push({ userId: member.userId, credits: credits || 0, badgeId: badgeId || null });
-    }
-
-    return success(res, { teamId, rewards: results }, 201);
+    return success(res, { teamId, rewards: results.rewards }, 201);
   } catch (err) { next(err); }
 };
 
@@ -1349,68 +1511,85 @@ exports.distributeRewards = async (req, res, next) => {
     const isOrganizer = event.creatorId === req.user.id || event.organizers.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
     if (!isOrganizer) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can distribute rewards.' } });
 
-    const rewardTiers = event.rewardTiers;
+    const rewardTiers = sanitizeRewardTiers(event.rewardTiers);
     if (!rewardTiers || !Array.isArray(rewardTiers) || rewardTiers.length === 0) {
       return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'No reward tiers configured for this event.' } });
     }
 
     // Idempotency guard: rewards can be distributed only ONCE per event.
+    // Guard + payouts run in a single transaction; the unique
+    // (type, referenceId) index backs the guard against concurrent calls.
     const distributionRef = `event_distribute_${eventId}`;
-    const existing = await prisma.transaction.findFirst({
-      where: { type: 'event_reward', referenceId: distributionRef },
-      select: { id: true },
-    });
-    if (existing) {
-      return res.status(409).json({ error: { code: 'ALREADY_DISTRIBUTED', message: 'Rewards for this event have already been distributed.' } });
-    }
-
-    // Build leaderboard to determine ranks
-    const teams = await prisma.eventTeam.findMany({
-      where: { eventId },
-      include: { submissions: { include: { task: true } }, pointAdjustments: true, members: true }
-    });
-
-    const leaderboard = teams.map(team => {
-      let totalScore = team.points;
-      team.submissions.forEach(sub => {
-        if (sub.status === 'correct') totalScore += sub.scoreAwarded;
-        else if (sub.status === 'wrong') totalScore -= (sub.task.wrongSubmissionPenalty + event.wrongSubmissionPenalty);
-      });
-      team.pointAdjustments?.forEach(adj => { totalScore += adj.pointsAdded; });
-      return { id: team.id, name: team.name, score: Math.round(totalScore), members: team.members };
-    });
-
-    leaderboard.sort((a, b) => b.score - a.score);
 
     const distributed = [];
 
-    for (const tier of rewardTiers) {
-      const rankIndex = tier.rank - 1;
-      const team = leaderboard[rankIndex];
-      if (!team) continue;
+    try {
+      await prisma.$transaction(async (tx) => {
+        const existing = await tx.transaction.findFirst({
+          where: { type: 'event_reward', referenceId: distributionRef },
+          select: { id: true },
+        });
+        if (existing) {
+          throw new AlreadyDistributedError();
+        }
 
-      for (const member of team.members) {
-        if (tier.credits && tier.credits > 0) {
-          await prisma.user.update({
-            where: { id: member.userId },
-            data: { creditBalance: { increment: tier.credits } }
+        const teams = await tx.eventTeam.findMany({
+          where: { eventId },
+          include: { submissions: { include: { task: true } }, pointAdjustments: true, members: true }
+        });
+
+        const leaderboard = teams.map(team => {
+          let totalScore = team.points;
+          team.submissions.forEach(sub => {
+            if (sub.status === 'correct') totalScore += sub.scoreAwarded;
+            else if (sub.status === 'wrong') totalScore -= (sub.task.wrongSubmissionPenalty + event.wrongSubmissionPenalty);
           });
-          await prisma.transaction.create({
-            data: { receiverId: member.userId, amount: tier.credits, type: 'event_reward', referenceId: distributionRef }
-          });
+          team.pointAdjustments?.forEach(adj => { totalScore += adj.pointsAdded; });
+          return { id: team.id, name: team.name, score: Math.round(totalScore), members: team.members };
+        });
+
+        leaderboard.sort((a, b) => b.score - a.score);
+
+        for (const tier of rewardTiers) {
+          const rankIndex = tier.rank - 1;
+          const team = leaderboard[rankIndex];
+          if (!team) continue;
+
+          for (const member of team.members) {
+            if (tier.credits && tier.credits > 0) {
+              await tx.user.update({
+                where: { id: member.userId },
+                data: { creditBalance: { increment: tier.credits } }
+              });
+              await tx.transaction.create({
+                data: { receiverId: member.userId, amount: tier.credits, type: 'event_reward', referenceId: distributionRef }
+              });
+            }
+            if (tier.badgeId) {
+              await tx.userBadge.upsert({
+                where: { userId_badgeId: { userId: member.userId, badgeId: tier.badgeId } },
+                update: {},
+                create: { userId: member.userId, badgeId: tier.badgeId, source: 'event' }
+              });
+            }
+          }
+
+          distributed.push({ rank: tier.rank, teamId: team.id, teamName: team.name, credits: tier.credits || 0, badgeId: tier.badgeId || null });
         }
-        if (tier.badgeId) {
-          await prisma.userBadge.upsert({
-            where: { userId_badgeId: { userId: member.userId, badgeId: tier.badgeId } },
-            update: {},
-            create: { userId: member.userId, badgeId: tier.badgeId, source: 'event' }
-          });
-        }
+      });
+    } catch (err) {
+      if (err instanceof AlreadyDistributedError) {
+        return res.status(409).json({ error: { code: 'ALREADY_DISTRIBUTED', message: 'Rewards for this event have already been distributed.' } });
       }
-
-      distributed.push({ rank: tier.rank, teamId: team.id, teamName: team.name, credits: tier.credits || 0, badgeId: tier.badgeId || null });
+      if (err.code === 'P2002') {
+        return res.status(409).json({ error: { code: 'ALREADY_DISTRIBUTED', message: 'Rewards for this event have already been distributed.' } });
+      }
+      throw err;
     }
 
     return success(res, { distributed });
   } catch (err) { next(err); }
 };
+
+// Internal sentinel for the once-per-event distribute guard.
+class AlreadyDistributedError extends Error {}

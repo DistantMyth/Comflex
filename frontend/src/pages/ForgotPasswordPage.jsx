@@ -27,6 +27,7 @@ export default function ForgotPasswordPage() {
   const [cooldown, setCooldown] = useState(0); // seconds until resend allowed
   const [cooldownEmail, setCooldownEmail] = useState(''); // email the countdown applies to
   const [limit, setLimit] = useState(null); // { remaining, maxSends } from backend
+  const [googleBlocked, setGoogleBlocked] = useState(false);
   const cooldownRef = useRef(null);
 
   const startCooldown = useCallback((seconds = 60) => {
@@ -131,7 +132,10 @@ export default function ForgotPasswordPage() {
 
           {GOOGLE_CLIENT_ID && (
             <div className="mb-6">
-              <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+              <GoogleOAuthProvider
+                clientId={GOOGLE_CLIENT_ID}
+                onScriptLoadError={() => setGoogleBlocked(true)}
+              >
                 <div className="flex justify-center">
                   <GoogleSignInButton
                     label="Continue with Google"
@@ -140,6 +144,12 @@ export default function ForgotPasswordPage() {
                   />
                 </div>
               </GoogleOAuthProvider>
+              {googleBlocked && (
+                <div className="alert alert-warning text-center text-xs mt-3">
+                  The Google Sign-In script was blocked (ad-blocker, VPN, or extension). Allow{' '}
+                  <code>accounts.google.com</code> and reload.
+                </div>
+              )}
               <div className="flex items-center gap-3 my-6">
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
                 <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">or reset with email</span>

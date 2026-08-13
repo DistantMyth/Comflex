@@ -8,8 +8,41 @@
 const prisma = require('../prisma');
 const { canActOnUser } = require('../middleware/ringCheck');
 const { issueSecret, hashSecret, verifySecret, issueAliasTag } = require('../utils/anonIdentity');
+const { sanitizeUrl } = require('../utils/urlSafety');
 
 const ALIAS_MAX_LEN = 24;
+
+// All permission keys that may ever be granted — anything outside this set
+// is dropped, so a client-supplied permissions blob can't smuggle arbitrary
+// JSON into the membership document or future keys we don't know about yet.
+const ALL_PERMISSION_KEYS = new Set([
+  'can_send_messages', 'can_delete_own_messages', 'can_delete_others_messages',
+  'can_mute_members', 'can_kick_members', 'can_add_members', 'can_tag_members',
+  'can_manage_economy', 'can_create_events', 'can_pin_messages',
+  'can_manage_roles', 'can_edit_group_info', 'can_stop_others_tagging',
+]);
+
+/** Whitelist a raw permissions object down to known boolean keys. */
+function cleanPermissions(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const key of ALL_PERMISSION_KEYS) {
+    if (raw[key] === true || raw[key] === 'true' || raw[key] === 1) out[key] = true;
+    else if (raw[key] === false || raw[key] === 'false' || raw[key] === 0) out[key] = false;
+  }
+  return out;
+}
+
+/**
+ * Strip invite secrets + rotate-on-next-fetch state from a group object
+ * before it reaches any client that is not the link-holder. Invite tokens
+ * are only (re)shared through getInviteLink.
+ */
+function sanitizeGroup(group) {
+  if (!group) return group;
+  const { inviteToken, inviteTokenExpiry, ...safe } = group;
+  return safe;
+}
 
 // Full admin permissions object
 const ADMIN_PERMISSIONS = {
@@ -66,7 +99,7 @@ async function listUserGroups(userId, anonSessions = []) {
   const unreadCounts = await getUnreadCountsBatch(userId, groupIds);
 
   const groups = memberships.map((m) => ({
-    ...m.group,
+    ...sanitizeGroup(m.group),
     memberCount: m.group._count.members,
     userRing: m.ring,
     userPermissions: m.permissions,
@@ -101,7 +134,7 @@ async function listUserGroups(userId, anonSessions = []) {
         if (!group) continue;
         if (groups.some(g => g.id === group.id)) continue; // dedupe
         groups.push({
-          ...group,
+          ...sanitizeGroup(group),
           memberCount: countMap[group.id] || 0,
           isAnonymous: true,
           userRing: null,
@@ -136,7 +169,7 @@ async function listUserGroups(userId, anonSessions = []) {
     if (!join.group.isAnonymous) continue;
     if (groups.some(g => g.id === join.groupId)) continue; // dedupe (active session)
     groups.push({
-      ...join.group,
+      ...sanitizeGroup(join.group),
       memberCount: join.group._count.anonIdentities || 0,
       isAnonymous: true,
       userRing: null,
@@ -206,7 +239,7 @@ async function getGroup(groupId) {
   if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404, code: 'GROUP_NOT_FOUND' });
   const memberCount = group.isAnonymous ? group._count.anonIdentities : group._count.members;
   const { _count, ...safe } = group;
-  return { ...safe, memberCount };
+  return { ...sanitizeGroup(safe), memberCount };
 }
 
 /**
@@ -220,7 +253,7 @@ async function createGroup({ name, displayName, description, type = 'custom', cr
   if (existing) throw Object.assign(new Error('A group with this name already exists.'), { statusCode: 409, code: 'DUPLICATE_GROUP' });
 
   const group = await prisma.cohortGroup.create({
-    data: { name, displayName, description, type, creatorId, avatarUrl, isAnonymous },
+    data: { name, displayName, description, type, creatorId, avatarUrl: sanitizeUrl(avatarUrl), isAnonymous },
   });
 
   // Auto-add creator as Ring 0 admin with full permissions
@@ -235,7 +268,7 @@ async function createGroup({ name, displayName, description, type = 'custom', cr
     });
   }
 
-  return group;
+  return sanitizeGroup(group);
 }
 
 /**
@@ -245,10 +278,10 @@ async function updateGroup(groupId, updates) {
   const allowed = {};
   if (updates.displayName !== undefined) allowed.displayName = updates.displayName;
   if (updates.description !== undefined) allowed.description = updates.description;
-  if (updates.avatarUrl !== undefined) allowed.avatarUrl = updates.avatarUrl;
+  if (updates.avatarUrl !== undefined) allowed.avatarUrl = sanitizeUrl(updates.avatarUrl);
   if (updates.ringConfig !== undefined) allowed.ringConfig = updates.ringConfig;
 
-  return prisma.cohortGroup.update({ where: { id: groupId }, data: allowed });
+  return sanitizeGroup(await prisma.cohortGroup.update({ where: { id: groupId }, data: allowed }));
 }
 
 /**
@@ -446,7 +479,7 @@ async function setMemberPermissions(groupId, actorRing, targetUserId, permission
 
   return prisma.groupMember.update({
     where: { userId_groupId: { userId: targetUserId, groupId } },
-    data: { permissions },
+    data: { permissions: cleanPermissions(permissions) },
   });
 }
 
@@ -579,7 +612,7 @@ async function listUserInvites(userId) {
     ...inv,
     invitedByUser: inviters.find(u => u.id === inv.invitedBy),
     group: {
-      ...inv.group,
+      ...sanitizeGroup(inv.group),
       memberCount: inv.group._count.members,
     },
   }));
@@ -660,7 +693,7 @@ async function joinViaLink(token, userId, alias, avatarUrl) {
     data: { status: 'accepted' }
   });
 
-  return { member, group };
+  return { member, group: sanitizeGroup(group) };
 }
 
 
@@ -676,29 +709,26 @@ async function updateRingConfig(groupId, config) {
   const { ringCount = 5, ringLabels = {}, ringPermissions = {}, defaultRing } = config;
   const clampedCount = Math.max(2, Math.min(10, parseInt(ringCount) || 5));
   
+  // defaultRing 0 is reserved for the creator — a group-admin-controlled
+  // 0 would let them mint full group admins. Lowest valid tier is 1.
   let safeDefaultRing = parseInt(defaultRing);
-  if (isNaN(safeDefaultRing) || safeDefaultRing < 0 || safeDefaultRing >= clampedCount) {
+  if (isNaN(safeDefaultRing) || safeDefaultRing < 1 || safeDefaultRing >= clampedCount) {
     safeDefaultRing = clampedCount - 1; // Default to lowest ring tier if invalid
   }
 
   // Clean labels & permissions: only keep entries within range
   const cleanLabels = {};
-  const cleanPermissions = {};
+  const cleanRingPermissions = {};
   for (let i = 0; i < clampedCount; i++) {
     cleanLabels[i] = ringLabels[i] || getDefaultRingLabel(i);
     // Sanitize permissions object for this ring to only hold booleans for valid keys
-    const rawPerms = ringPermissions[i] || {};
-    const sanitized = {};
-    for (const key of Object.keys(rawPerms)) {
-      sanitized[key] = !!rawPerms[key];
-    }
-    cleanPermissions[i] = sanitized;
+    cleanRingPermissions[i] = cleanPermissions(ringPermissions[i]);
   }
 
   const ringConfig = { 
     ringCount: clampedCount, 
     ringLabels: cleanLabels, 
-    ringPermissions: cleanPermissions,
+    ringPermissions: cleanRingPermissions,
     defaultRing: safeDefaultRing 
   };
   return prisma.cohortGroup.update({
@@ -807,7 +837,7 @@ async function claimAnonIdentity(groupId, userId, alias, avatarUrl) {
   const identity = await prisma.anonymousIdentity.create({
     data: {
       groupId, alias: cleanAlias, aliasKey, aliasTag,
-      avatarUrl: avatarUrl || null,
+      avatarUrl: sanitizeUrl(avatarUrl),
       secretHash: hashSecret(secret),
     },
   });
@@ -955,17 +985,18 @@ async function renameAnonIdentity(identityId, secret, newAlias, avatarUrl) {
   // Rotate the secret so a previously-shared link/device dies; the old alias
   // name is dropped forever (rename = fresh start, no tracking across names).
   const newSecret = issueSecret();
+  const cleanAvatar = sanitizeUrl(avatarUrl); // undefined = keep current
   await prisma.anonymousIdentity.update({
     where: { id: identityId },
     data: {
       alias: cleanAlias,
       aliasKey,
-      avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : identity.avatarUrl,
+      avatarUrl: cleanAvatar === undefined ? identity.avatarUrl : cleanAvatar,
       secretHash: hashSecret(newSecret),
     },
   });
 
-  return { secret: newSecret, alias: cleanAlias, aliasTag: identity.aliasTag, avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : identity.avatarUrl };
+  return { secret: newSecret, alias: cleanAlias, aliasTag: identity.aliasTag, avatarUrl: cleanAvatar === undefined ? identity.avatarUrl : cleanAvatar };
 }
 
 module.exports = {

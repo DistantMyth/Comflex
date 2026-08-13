@@ -55,9 +55,19 @@ router.get('/sent', async (req, res, next) => {
 /**
  * POST /api/v1/friends/request — Send a friend request.
  * Body: { userId: string }
+ * Per-user throttle: max 30 outgoing requests per 10 minutes so a single
+ * account can't spam the recipient's inbox with requests.
  */
+const requestLimit = require('../middleware/rateLimit').rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  message: 'Too many friend requests sent. Try again later.',
+  keyPrefix: 'friend-request-ip',
+});
+
 router.post(
   '/request',
+  requestLimit,
   [body('userId').notEmpty().withMessage('userId is required.')],
   async (req, res, next) => {
     try {
@@ -66,6 +76,9 @@ router.post(
         return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
           errors.array().map(e => ({ field: e.path, issue: e.msg }))
         );
+      }
+      if (!/^[0-9a-fA-F]{24}$/.test(req.body.userId)) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid userId.', 400);
       }
 
       const result = await friendService.sendRequest(req.user.id, req.body.userId);
@@ -77,11 +90,16 @@ router.post(
   }
 );
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+
 /**
  * POST /api/v1/friends/:id/accept — Accept a friend request.
  */
 router.post('/:id/accept', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid request id.', 400);
+    }
     const result = await friendService.acceptRequest(req.params.id, req.user.id);
     return success(res, result);
   } catch (err) {
@@ -95,6 +113,9 @@ router.post('/:id/accept', async (req, res, next) => {
  */
 router.post('/:id/reject', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid request id.', 400);
+    }
     const result = await friendService.rejectRequest(req.params.id, req.user.id);
     return success(res, result);
   } catch (err) {
@@ -108,6 +129,9 @@ router.post('/:id/reject', async (req, res, next) => {
  */
 router.delete('/:id', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid friend id.', 400);
+    }
     const result = await friendService.removeFriend(req.params.id, req.user.id);
     return success(res, result);
   } catch (err) {

@@ -9,7 +9,7 @@
  * GoogleLogin component used — no backend changes.
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGoogleOAuth } from '@react-oauth/google';
 import { Loader2 } from 'lucide-react';
 
@@ -48,8 +48,20 @@ export default function GoogleSignInButton({
 }) {
   const { clientId, scriptLoadedSuccessfully } = useGoogleOAuth();
   const [pending, setPending] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const pendingRef = useRef(false);
   const safetyTimer = useRef(null);
+
+  // The GIS script may take a moment or be blocked (network, ad-blocker,
+  // CSP). A silently-disabled button looks like a dead button, so surface
+  // the state: brief "loading", then an actionable message.
+  useEffect(() => {
+    if (scriptLoadedSuccessfully) return;
+    const t = setTimeout(() => setLoadFailed(true), 10 * 1000);
+    return () => clearTimeout(t);
+  }, [scriptLoadedSuccessfully]);
+
+  const notReady = !scriptLoadedSuccessfully || !window.google?.accounts?.id;
 
   const fire = useMemo(() => (fn, arg) => {
     if (typeof fn === 'function') fn(arg);
@@ -66,8 +78,8 @@ export default function GoogleSignInButton({
 
   const handleClick = () => {
     if (pendingRef.current) return;
-    if (!scriptLoadedSuccessfully || !window.google?.accounts?.id) {
-      fire(onError, 'Google sign-in is not ready yet. Please try again.');
+    if (notReady) {
+      fire(onError, 'Google sign-in is not ready yet. Please try again in a moment.');
       return;
     }
 
@@ -83,7 +95,6 @@ export default function GoogleSignInButton({
       client_id: clientId,
       auto_select: false,
       cancel_on_tap_outside: true,
-      use_fedcm_for_prompt: true,
       callback: (credentialResponse) => {
         if (!credentialResponse?.credential) {
           stopPending();
@@ -100,38 +111,55 @@ export default function GoogleSignInButton({
       if (!notification) return;
       if (notification.isDisplayed?.()) return;
       if (notification.isNotDisplayed?.() || notification.isSkipped?.()) {
-        // Only reset when the user actually dismissed/skipped it — a
-        // 'not displayed' that will still resolve via callback is rare.
+        // Some "not displayed" notifications still resolve later via the
+        // callback; only fail fast once we know why it didn't show. A
+        // config problem (e.g. missing authorized JavaScript origin in
+        // Google Cloud Console) surfaces here instead of dead silence.
+        const reason = notification.getNotDisplayedReason?.() || notification.getSkippedReason?.() || '';
         setTimeout(() => {
-          if (pendingRef.current) stopPending();
-        }, 400);
+          if (pendingRef.current) {
+            stopPending();
+            if (reason && reason !== 'user_cancel' && reason !== 'suppressed_by_user') {
+              fire(onError, `Google sign-in couldn't open (${reason}). Make sure "http://localhost:5173" is an authorized JavaScript origin for this OAuth client, then try again.`);
+            }
+          }
+        }, 500);
       }
     });
   };
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={pending || !scriptLoadedSuccessfully}
-      style={{ width }}
-      className={[
-        'flex items-center justify-center gap-3 h-12 rounded-full select-none font-medium text-[15px]',
-        'text-white bg-[#131314] hover:bg-[#1f1f20] active:bg-[#131314]',
-        'border border-[#747775]/40 border-solid',
-        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
-        'transition-colors duration-150',
-        'disabled:opacity-60 disabled:cursor-not-allowed',
-      ].join(' ')}
-    >
-      {pending ? (
-        <Loader2 size={18} className="animate-spin" />
-      ) : (
-        <>
-          <GoogleGLogo size={18} />
-          {label}
-        </>
+    <div className="flex flex-col items-center gap-2">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={pending || notReady}
+        style={{ width }}
+        className={[
+          'flex items-center justify-center gap-3 h-12 rounded-full select-none font-medium text-[15px]',
+          'text-white bg-[#131314] hover:bg-[#1f1f20] active:bg-[#131314]',
+          'border border-[#747775]/40 border-solid',
+          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]',
+          'transition-colors duration-150',
+          'disabled:opacity-60 disabled:cursor-not-allowed',
+        ].join(' ')}
+      >
+        {pending ? (
+          <Loader2 size={18} className="animate-spin" />
+        ) : (
+          <>
+            <GoogleGLogo size={18} />
+            {label}
+          </>
+        )}
+      </button>
+      {notReady && (
+        <span className="text-xs text-[var(--color-text-muted)] text-center" data-testid="gsi-load-state">
+          {loadFailed
+            ? "Couldn't load Google Sign-In — a network blocker (ad-blocker, VPN, browser extensions) or CSP may be blocking accounts.google.com. Reload the page to retry."
+            : 'Loading Google Sign-In…'}
+        </span>
       )}
-    </button>
+    </div>
   );
 }

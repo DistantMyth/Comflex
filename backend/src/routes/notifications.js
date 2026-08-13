@@ -70,6 +70,9 @@ router.post('/mark-read', async (req, res, next) => {
  */
 router.post('/:id/read', async (req, res, next) => {
   try {
+    if (!/^[0-9a-fA-F]{24}$/.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid notification id.', 400);
+    }
     const result = await notificationService.markRead(req.user.id, req.params.id);
     if (result.updated === 0) {
       return error(res, 'NOT_FOUND', 'Notification not found.', 404);

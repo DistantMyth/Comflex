@@ -17,6 +17,8 @@ const { validateStoredFile } = require('../utils/fileMagic');
 
 const router = express.Router();
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+
 // Ensure upload dir exists
 const uploadDir = path.join(env.STORAGE_PATH, 'resources');
 if (!fs.existsSync(uploadDir)) {
@@ -125,6 +127,9 @@ router.post('/subjects', [
 // Delete subject
 router.delete('/subjects/:id', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid subject id.', 400);
+    }
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (dbUser.globalRing !== 0 && !dbUser.canManageResources) {
       return error(res, 'FORBIDDEN', 'No permission', 403);
@@ -152,6 +157,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { subjectId } = req.query;
     if (!subjectId) return error(res, 'VALIDATION', 'subjectId is required', 400);
+    if (!ID_RE.test(subjectId)) return error(res, 'VALIDATION_ERROR', 'Invalid subjectId', 400);
 
     const subject = await prisma.resourceSubject.findUnique({ where: { id: subjectId } });
     if (!subject) return error(res, 'NOT_FOUND', 'Subject not found', 404);
@@ -183,6 +189,7 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     const { title, subjectId } = req.body;
     
     if (!subjectId) return error(res, 'VALIDATION', 'subjectId is required', 400);
+    if (!ID_RE.test(subjectId)) return error(res, 'VALIDATION_ERROR', 'Invalid subjectId', 400);
 
     // Verify subject exists
     const subject = await prisma.resourceSubject.findUnique({ where: { id: subjectId } });
@@ -225,6 +232,9 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
 // Delete a file
 router.delete('/:id', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid file id.', 400);
+    }
     const resource = await prisma.resource.findUnique({ where: { id: req.params.id } });
     if (!resource) return error(res, 'NOT_FOUND', 'File not found', 404);
 
@@ -257,6 +267,9 @@ router.delete('/:id', async (req, res, next) => {
 // Download a resource and reward uploader with credits
 router.get('/download/:id', async (req, res, next) => {
   try {
+    if (!ID_RE.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid file id.', 400);
+    }
     const resource = await prisma.resource.findUnique({ where: { id: req.params.id } });
     if (!resource) return res.status(404).json({ error: 'File not found' });
 

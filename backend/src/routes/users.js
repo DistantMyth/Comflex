@@ -158,10 +158,9 @@ router.post('/me/avatar', authMiddleware, upload.single('avatar'), async (req, r
       return error(res, 'UPLOAD_REQUIRED', 'No file uploaded. Please attach an image.', 400);
     }
 
-    // Cloudinary when configured (production-safe), local path in dev
-    // Magic-byte check: the extension allowlist alone can be bypassed by
-    // renaming a malicious file.
-    if (req.file.mimetype.startsWith('image/') && !validateStoredFile(req.file.path, req.file.mimetype)) {
+    // Magic-byte check regardless of the client-declared mimetype — a spoofed
+    // Content-Type must not skip the header inspection.
+    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
       try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
       return error(res, 'INVALID_FILE_TYPE', 'The uploaded file is not a valid image.', 400);
     }
@@ -205,7 +204,6 @@ router.get('/search', authMiddleware, async (req, res, next) => {
         id: { not: req.user.id },
         OR: [
           { username: { startsWith: q, mode: 'insensitive' } },
-          { email: { startsWith: q, mode: 'insensitive' } },
           { displayName: { contains: q, mode: 'insensitive' } },
         ],
       },
@@ -255,6 +253,9 @@ router.get('/search', authMiddleware, async (req, res, next) => {
  */
 router.get('/:id/profile', authMiddleware, async (req, res, next) => {
   try {
+    if (!/^[0-9a-fA-F]{24}$/.test(req.params.id)) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid user id.', 400);
+    }
     const prisma = require('../prisma');
     const user = await prisma.user.findUnique({
       where: { id: req.params.id },

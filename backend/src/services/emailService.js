@@ -47,13 +47,23 @@ function getTransporter() {
     return _transporter;
   }
 
-  // Default: "console" provider — just logs
+  // Default: "console" provider — just logs. Credentials and reset/verify
+  // tokens must NOT be written to logs (shared terminals, CI logs, crash
+  // dumps), so the recipient is masked and URL query params are redacted.
+  const redactUrl = (text) =>
+    text.replace(/([?&](?:token|code|key)=)[^&\s]+/gi, '$1[REDACTED]');
+  const maskEmail = (email) => {
+    const at = (email || '').indexOf('@');
+    if (at <= 2) return '***';
+    return email.slice(0, 2) + '***@***' + email.slice(at + 1, at + 2) + '*';
+  };
   _transporter = {
     sendMail: async (opts) => {
+      const body = redactUrl(opts.text || '(HTML only)');
       console.log('\n📧 [EMAIL — CONSOLE MODE]');
-      console.log(`   To:      ${opts.to}`);
+      console.log(`   To:      ${maskEmail(opts.to)}`);
       console.log(`   Subject: ${opts.subject}`);
-      console.log(`   Body:    ${opts.text || '(HTML only)'}`);
+      console.log(`   Body:    ${body}`);
       console.log('');
       return { messageId: `console-${Date.now()}` };
     },

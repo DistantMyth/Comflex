@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './useAuth';
 import { socketOrigin } from '../utils/resolveAsset';
-import { getAccessToken, getAnonSessions } from '../api/client';
+import { getAccessToken, getAnonSessions, refreshAccessToken } from '../api/client';
 
 // In dev, Vite proxies /socket.io to the backend. In production (Vercel → Render)
 // the socket must connect to the backend origin directly.
@@ -57,9 +57,23 @@ export function useSocket() {
       setConnected(false);
     });
 
-    socket.on('connect_error', (err) => {
+    socket.on('connect_error', async (err) => {
       console.error('[Socket] Connection error:', err.message);
       setConnected(false);
+
+      // The access token lives in memory and expires every ~15m — a
+      // reconnect after that is rejected with an auth error. Refresh
+      // silently via the httpOnly cookie and retry once with the new token.
+      if (/token|auth|unauthorized/i.test(err.message || '')) {
+        try {
+          const freshToken = await refreshAccessToken();
+          socket.auth = { ...(socket.auth || {}), token: freshToken };
+          socket.disconnect();
+          socket.connect();
+        } catch {
+          // Refresh failed — AuthContext's axios interceptor handles redirect.
+        }
+      }
     });
 
     socketRef.current = socket;

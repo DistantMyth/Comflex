@@ -90,6 +90,11 @@ model User {
   canManageStore    Boolean   @default(false) // Whether user can manage store (create badges/listings)
   sentTransactions  Transaction[] @relation("Sender")
   receivedTransactions Transaction[] @relation("Receiver")
+
+  // Crypto purchases — wallet that must equal the tx.from on buy-credits
+  walletAddress      String?
+  walletNonce        String?
+  walletNonceExpiry  DateTime?
 }
 
 // ============================================================
@@ -600,6 +605,12 @@ model Transaction {
   sender      User?    @relation("Sender", fields: [senderId], references: [id])
   receiver    User     @relation("Receiver", fields: [receiverId], references: [id])
 }
+
+// NOTE: a PARTIAL UNIQUE INDEX on (type, referenceId) — only for rows where
+// referenceId is a string — is created at boot (see backend/src/index.js
+// ensureUniqueIndexes). Prisma cannot express partial indexes, so it is
+// managed with $runCommandRaw. Every row the app writes sets a unique
+// referenceId per (type, group), which makes credit payouts idempotent.
 
 // ============================================================
 // CHATBOT NOTES

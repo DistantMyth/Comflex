@@ -131,6 +131,7 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
         { senderId: userId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: userId },
       ],
+      isDeleted: false,
     },
     orderBy: { createdAt: 'desc' },
     skip,
@@ -155,6 +156,7 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
         { senderId: userId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: userId },
       ],
+      isDeleted: false,
     },
   });
 
@@ -297,4 +299,4 @@ async function editDM(messageId, userId, newContent) {
   return updated;
 }
 
-module.exports = { sendDM, getConversation, listConversations, markAsRead, deleteDM, editDM };
+module.exports = { sendDM, getConversation, listConversations, markAsRead, deleteDM, editDM, requireFriendship };

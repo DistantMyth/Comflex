@@ -59,8 +59,10 @@ const env = {
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
-// In production, running with missing or known-default JWT secrets means any
-// attacker can forge admin tokens. Refuse to boot rather than ship insecure.
+// Any deployment that is not the local development server MUST run with
+// strong, non-default JWT secrets — otherwise an attacker can forge admin
+// tokens (HS256), and the anon-identity HMAC pepper below it. Refuse to
+// boot rather than ship insecure.
 const WEAK_JWT_SECRETS = ['dev-access-secret', 'dev-refresh-secret', 'your-access-secret-here-change-in-production', 'your-refresh-secret-here-change-in-production'];
 
 function assertStrongSecret(name, value) {
@@ -71,7 +73,10 @@ function assertStrongSecret(name, value) {
   }
 }
 
-if (env.NODE_ENV === 'production') {
+// 'development' is the only environment allowed to run with dev defaults
+// (local machine, no real users). Staging/preview/test/production must all
+// present real secrets.
+if (env.NODE_ENV !== 'development') {
   assertStrongSecret('JWT_ACCESS_SECRET', env.JWT_ACCESS_SECRET);
   assertStrongSecret('JWT_REFRESH_SECRET', env.JWT_REFRESH_SECRET);
 }

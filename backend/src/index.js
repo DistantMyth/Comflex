@@ -12,8 +12,11 @@ const path = require('path');
 const cookieParser = require('cookie-parser');
 const env = require('./config/env');
 const errorHandler = require('./middleware/errorHandler');
+const prisma = require('./prisma');
+const authMiddleware = require('./middleware/auth');
 const { seedAdmin } = require('./services/seedService');
 const { initSocket } = require('./services/chatSocketService');
+const { enforceBatchAccess } = require('./utils/batchAccess');
 
 // Route imports
 const authRoutes = require('./routes/auth');
@@ -62,7 +65,7 @@ app.use(cors({
   origin: env.NODE_ENV === 'development' ? true : env.FRONTEND_URL,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Anon-Identity'],
 }));
 
 // Parse JSON and URL-encoded bodies
@@ -80,6 +83,29 @@ app.use('/uploads', (req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   next();
 });
+
+// Resource files (/uploads/resources/...) are batch-scoped: seniors' notes
+// must not be fetchable by URL guessing. Require a valid JWT and enforce
+// batch access against the subject BEFORE the static handler runs.
+// (Avatars, badge images and chat media stay public — browsers fetch them
+// with <img src> which cannot carry an Authorization header.)
+app.use('/uploads/resources', authMiddleware, async (req, res, next) => {
+  try {
+    const fileUrl = `/uploads/resources${req.path}`;
+    const resource = await prisma.resource.findFirst({ where: { fileUrl } });
+    if (!resource) return res.status(404).json({ error: 'File not found.' });
+
+    const subject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
+    if (subject && !enforceBatchAccess(req, subject.subCategory)) {
+      return res.status(403).json({ error: 'You only have access to your own batch and your immediate juniors.' });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+app.use('/uploads/resources', express.static(path.join(env.STORAGE_PATH, 'resources')));
+
 app.use('/uploads', express.static(env.STORAGE_PATH));
 
 // ============================================================
@@ -114,6 +140,33 @@ app.use(errorHandler);
 // START SERVER
 // ============================================================
 
+// ============================================================
+// PARTIAL UNIQUE INDEX ON TRANSACTION (type, referenceId)
+// ============================================================
+// Prisma can't express partial indexes, so the one guarding credit-payout
+// idempotency (buy-credits claims, event rewards, distribution, downloads)
+// is created directly. Missing never fails boot — worst case the app falls
+// back to its findFirst guards.
+async function ensureUniqueIndexes() {
+  try {
+    await prisma.$runCommandRaw({
+      createIndexes: 'Transaction',
+      indexes: [{
+        key: { type: 1, referenceId: 1 },
+        name: 'unique_type_referenceId',
+        unique: true,
+        // Only rows that actually carry a referenceId participate; rows with
+        // null referenceId (transfers, admin mints) are exempt.
+        partialFilterExpression: { referenceId: { $type: 'string' } },
+        background: true,
+      }],
+    });
+    console.log('[DB] Transaction (type, referenceId) unique index ensured.');
+  } catch (err) {
+    console.warn('[DB] Could not ensure Transaction unique index (continuing):', err.message);
+  }
+}
+
 async function startServer() {
   // Bounded backoff: a transient DB/DNS outage at boot (e.g. Atlas resume,
   // DNS propagation) must not put the service into an instant crash loop —
@@ -122,6 +175,9 @@ async function startServer() {
   const MAX_BOOT_ATTEMPTS = 8;
   for (let attempt = 1; ; attempt++) {
     try {
+      // Ensure the ledger idempotency index exists (best-effort)
+      await ensureUniqueIndexes();
+
       // Seed the admin user on first boot (idempotent)
       await seedAdmin();
 

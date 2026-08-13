@@ -19,6 +19,7 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleBlocked, setGoogleBlocked] = useState(false);
 
   const handleGoogleSuccess = async (credential) => {
     setError('');
@@ -69,7 +70,10 @@ export default function RegisterPage() {
 
       <div className="flex flex-col items-center gap-5 py-2">
         {GOOGLE_CLIENT_ID ? (
-          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+          <GoogleOAuthProvider
+            clientId={GOOGLE_CLIENT_ID}
+            onScriptLoadError={() => setGoogleBlocked(true)}
+          >
             <GoogleSignInButton
               label="Sign up with Google"
               onSuccess={handleGoogleSuccess}
@@ -79,6 +83,13 @@ export default function RegisterPage() {
         ) : (
           <div className="alert alert-warning text-center">
             Google OAuth is not configured. Set <code>VITE_GOOGLE_CLIENT_ID</code> in the frontend <code>.env</code>.
+          </div>
+        )}
+
+        {googleBlocked && (
+          <div className="alert alert-warning text-center text-xs">
+            The Google Sign-In script was blocked (ad-blocker, VPN, or extension). Allow{' '}
+            <code>accounts.google.com</code> and reload.
           </div>
         )}
 
