@@ -366,7 +366,13 @@ async function refreshAccessToken(token) {
     throw Object.assign(new Error('Invalid or expired refresh token.'), { statusCode: 401, code: 'INVALID_REFRESH_TOKEN' });
   }
 
-  const user = await prisma.user.findUnique({ where: { id: decoded.sub } });
+  // Legacy cookies may carry a non-ObjectId (or missing) `sub` — Prisma would
+  // 500 on it. Treat it as an invalid session instead of crashing the server.
+  if (!decoded.sub || !/^[a-f0-9]{24}$/i.test(decoded.sub)) {
+    throw Object.assign(new Error('Invalid or expired refresh token.'), { statusCode: 401, code: 'INVALID_REFRESH_TOKEN' });
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: decoded.sub } }).catch(() => null);
   if (!user) {
     throw Object.assign(new Error('Account no longer exists.'), { statusCode: 401, code: 'USER_NOT_FOUND' });
   }

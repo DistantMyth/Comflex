@@ -27,6 +27,12 @@ function authMiddleware(req, res, next) {
     // Verify and decode the token
     const decoded = verifyAccessToken(token);
 
+    // Legacy tokens may carry a non-ObjectId (or missing) `sub` — Prisma
+    // would 500 on it. Treat as invalid, not a server error.
+    if (!decoded.sub || !/^[a-f0-9]{24}$/i.test(decoded.sub)) {
+      return error(res, 'INVALID_TOKEN', 'Invalid authentication token.', 401);
+    }
+
     // Re-read the user from the DB so deletions, demotions, and permission
     // changes take effect immediately instead of lingering for the token's
     // full lifetime. Cheap indexed lookup — fine at this scale.
