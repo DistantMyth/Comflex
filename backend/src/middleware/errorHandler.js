@@ -26,7 +26,14 @@ function errorHandler(err, req, res, _next) {
 
   // Multer file upload errors
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return error(res, 'FILE_TOO_LARGE', 'File exceeds the maximum allowed size (5MB).', 413);
+    return error(res, 'FILE_TOO_LARGE', 'File exceeds the maximum allowed size.', 413);
+  }
+  if (err.name === 'MulterError') {
+    return error(res, 'UPLOAD_ERROR', err.message || 'File upload failed.', 400);
+  }
+  if (err.message && typeof err.message === 'string' && err.message.startsWith('Only ')) {
+    // Multer fileFilter rejections (cb(new Error(...))) — surface as 400
+    return error(res, 'INVALID_FILE_TYPE', err.message, 400);
   }
 
   // Express-validator errors are handled in routes, but catch any escapes

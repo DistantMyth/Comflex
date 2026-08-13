@@ -41,7 +41,7 @@ function signRefreshToken(userId) {
  * Throws if token is invalid or expired.
  */
 function verifyAccessToken(token) {
-  return jwt.verify(token, env.JWT_ACCESS_SECRET);
+  return jwt.verify(token, env.JWT_ACCESS_SECRET, { algorithms: ['HS256'] });
 }
 
 /**
@@ -49,7 +49,7 @@ function verifyAccessToken(token) {
  * Throws if token is invalid or expired.
  */
 function verifyRefreshToken(token) {
-  return jwt.verify(token, env.JWT_REFRESH_SECRET);
+  return jwt.verify(token, env.JWT_REFRESH_SECRET, { algorithms: ['HS256'] });
 }
 
 module.exports = {

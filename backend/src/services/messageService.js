@@ -44,9 +44,26 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
 }
 
 /**
+ * Assert that a message belongs to the given group (IDOR guard).
+ * Throws 404 if the message doesn't exist or lives in another group.
+ */
+async function assertMessageInGroup(messageId, groupId) {
+  const msg = await prisma.message.findUnique({
+    where: { id: messageId },
+    select: { id: true, groupId: true },
+  });
+  if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
+  if (groupId && msg.groupId !== groupId) {
+    throw Object.assign(new Error('Message not found in this group.'), { statusCode: 404, code: 'MESSAGE_NOT_IN_GROUP' });
+  }
+  return msg;
+}
+
+/**
  * Get a single message by ID.
  */
-async function getMessage(messageId) {
+async function getMessage(messageId, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({
     where: { id: messageId },
     include: {
@@ -121,7 +138,8 @@ async function sendMessage(groupId, authorId, params) {
 /**
  * Edit own message (only content can change).
  */
-async function editMessage(messageId, userId, newContent) {
+async function editMessage(messageId, userId, newContent, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
   if (msg.authorId !== userId) {
@@ -153,7 +171,8 @@ async function editMessage(messageId, userId, newContent) {
 /**
  * Delete a message (soft delete — marks as deleted).
  */
-async function deleteMessage(messageId, userId, canDeleteOthers = false) {
+async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
 
@@ -170,7 +189,8 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false) {
 /**
  * Toggle a reaction on a message.
  */
-async function toggleReaction(messageId, userId, emoji) {
+async function toggleReaction(messageId, userId, emoji, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
 
@@ -214,7 +234,8 @@ async function toggleReaction(messageId, userId, emoji) {
 /**
  * Pin a message.
  */
-async function pinMessage(messageId) {
+async function pinMessage(messageId, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   // First, find the message to get its groupId
   const msg = await prisma.message.findUnique({
     where: { id: messageId },
@@ -275,7 +296,8 @@ async function pinMessage(messageId) {
 /**
  * Unpin a message.
  */
-async function unpinMessage(messageId) {
+async function unpinMessage(messageId, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   return prisma.message.update({
     where: { id: messageId },
     data: { isPinned: false, pinnedAt: null },
@@ -308,7 +330,8 @@ async function getPinnedMessages(groupId) {
 /**
  * Mark a single message as read by a user.
  */
-async function markMessageRead(messageId, userId) {
+async function markMessageRead(messageId, userId, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   return prisma.messageReadReceipt.upsert({
     where: { messageId_userId: { messageId, userId } },
     update: { readAt: new Date() },
@@ -357,7 +380,8 @@ async function markGroupMessagesRead(groupId, userId) {
 /**
  * Get read receipts for a specific message.
  */
-async function getReadReceipts(messageId) {
+async function getReadReceipts(messageId, groupId = null) {
+  await assertMessageInGroup(messageId, groupId);
   const receipts = await prisma.messageReadReceipt.findMany({
     where: { messageId },
     orderBy: { readAt: 'desc' },

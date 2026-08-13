@@ -42,6 +42,10 @@ function getClientIp(req) {
  * @param {string} [opts.message] - 429 message
  * @param {string} [opts.code] - error code (default 'RATE_LIMITED')
  * @param {string} [opts.keyPrefix] - namespace for the bucket key (default 'rl')
+ * @param {function} [opts.keyFn] - (req) => arbitrary string; when provided the
+ *   bucket key becomes `prefix:keyFn(req)` (e.g. per-account login throttling
+ *   keyed by the normalized email). Requests where keyFn returns a falsy value
+ *   are skipped (not counted) so malformed bodies never consume quota.
  * @param {function} [opts.shouldCount] - (req) => bool; skip counting when false
  * @returns {import('express').RequestHandler}
  */
@@ -52,13 +56,17 @@ function rateLimiter({
   code = 'RATE_LIMITED',
   keyPrefix = 'rl',
   shouldCount = () => true,
+  keyFn = null,
 } = {}) {
   const window = createSlidingWindow({ windowMs, max });
 
   return (req, res, next) => {
     if (!shouldCount(req)) return next();
 
-    const key = `${keyPrefix}:${getClientIp(req)}`;
+    const key = keyFn
+      ? (keyFn(req) && `${keyPrefix}:${keyFn(req)}`)
+      : `${keyPrefix}:${getClientIp(req)}`;
+    if (!key) return next();
 
     // Opportunistic sweep to bound memory growth
     if (window.size() > BUCKET_SWEEP_THRESHOLD) window.sweep();

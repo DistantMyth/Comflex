@@ -27,8 +27,13 @@ async function updateProfile(userId, updates) {
   if (updates.displayName !== undefined) allowed.displayName = updates.displayName;
   if (updates.bio !== undefined) allowed.bio = updates.bio.substring(0, 500); // Max 500 chars
   if (updates.displayBadges !== undefined) {
-    // Max 5 display badges
-    allowed.displayBadges = updates.displayBadges.slice(0, 5);
+    // Max 5 display badges — and only badges the user actually owns.
+    const requested = updates.displayBadges.slice(0, 5).filter((id) => typeof id === 'string');
+    const owned = await prisma.userBadge.findMany({
+      where: { userId, badgeId: { in: requested } },
+      select: { badgeId: true },
+    });
+    allowed.displayBadges = owned.map((b) => b.badgeId);
   }
   if (updates.cfHandle !== undefined) allowed.cfHandle = updates.cfHandle;
 

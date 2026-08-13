@@ -172,7 +172,7 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'receiverId and content are required.' });
         }
 
-        const message = await dmService.sendDM(socket.user.id, receiverId, content.trim());
+        const message = await dmService.sendDM(socket.user.id, receiverId, { content: content.trim() });
 
         // Deliver to receiver's personal room
         io.to(`user:${receiverId}`).emit('dm:new', {

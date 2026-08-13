@@ -1,14 +1,19 @@
 /**
  * Auth Context — Global authentication state provider.
- * 
+ *
  * Provides: user, token, isAuthenticated, isAdmin, login, logout,
  * register, googleLogin, setPassword, setUsername.
+ *
+ * Token handling changed to match the hardened backend:
+ * - Access token is held in memory via the client module (no localStorage)
+ * - Refresh token lives in an httpOnly cookie set by the backend
  */
 
 import { createContext, useState, useEffect, useCallback } from 'react';
 import { authApi } from '../api/authApi';
 import { userApi } from '../api/userApi';
 import { adminApi } from '../api/adminApi';
+import { getAccessToken, setAccessToken, clearAccessToken } from '../api/client';
 
 export const AuthContext = createContext(null);
 
@@ -25,16 +30,27 @@ export function AuthProvider({ children }) {
         const statusRes = await adminApi.getSystemStatus();
         setSystemStatus(statusRes.data.data);
 
-        // Check for existing token
-        const token = localStorage.getItem('accessToken');
+        // Existing access token in memory → just load the profile.
+        // Otherwise attempt a silent refresh via the httpOnly cookie so a
+        // fresh session survives page reloads without re-login.
+        let token = getAccessToken();
+        if (!token) {
+          try {
+            const refreshRes = await authApi.refreshToken();
+            setAccessToken(refreshRes.data.data.accessToken);
+            token = getAccessToken();
+          } catch {
+            token = null;
+          }
+        }
+
         if (token) {
           const profileRes = await userApi.getProfile();
           setUser(profileRes.data.data);
         }
       } catch {
         // Token invalid or expired — clear it
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
+        clearAccessToken();
         setUser(null);
       } finally {
         setLoading(false);
@@ -45,33 +61,30 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     const res = await authApi.login(email, password);
-    const { accessToken, refreshToken, user: userData } = res.data.data;
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    const { accessToken, user: userData } = res.data.data;
+    setAccessToken(accessToken);
     setUser(userData);
     return userData;
   }, []);
 
   const register = useCallback(async (email, password, displayName) => {
     const res = await authApi.register(email, password, displayName);
-    const { accessToken, refreshToken, user: userData } = res.data.data;
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    const { accessToken, user: userData } = res.data.data;
+    setAccessToken(accessToken);
     setUser(userData);
     return userData;
   }, []);
 
   const googleLogin = useCallback(async (idToken) => {
     const res = await authApi.googleLogin(idToken);
-    const { accessToken, refreshToken, user: userData, needsPassword, needsUsername } = res.data.data;
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    const { accessToken, user: userData, needsPassword, needsUsername } = res.data.data;
+    setAccessToken(accessToken);
     setUser(userData);
     return { user: userData, needsPassword, needsUsername };
   }, []);
 
-  const setPasswordFn = useCallback(async (newPassword) => {
-    const res = await authApi.setPassword(newPassword);
+  const setPasswordFn = useCallback(async (newPassword, currentPassword) => {
+    const res = await authApi.setPassword(newPassword, currentPassword);
     // Refresh the user profile to get updated hasPassword
     const profileRes = await userApi.getProfile();
     setUser(profileRes.data.data);
@@ -90,8 +103,7 @@ export function AuthProvider({ children }) {
     try {
       await authApi.logout();
     } catch { /* ignore */ }
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+    clearAccessToken();
     setUser(null);
   }, []);
 

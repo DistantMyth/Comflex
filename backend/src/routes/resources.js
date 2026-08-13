@@ -45,9 +45,25 @@ const storage = multer.diskStorage({
     cb(null, `res-${uniqueSuffix}${ext}`);
   }
 });
+
+// Documents/resources only — .html/.svg/.js and other executable formats are
+// rejected to prevent same-origin stored XSS via /uploads.
+const ALLOWED_RESOURCE_EXTENSIONS = [
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+  '.txt', '.md', '.csv', '.zip', '.rar', '.7z',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp',
+];
 const upload = multer({
   storage,
-  limits: { fileSize: 75 * 1024 * 1024 }
+  limits: { fileSize: 75 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_RESOURCE_EXTENSIONS.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only documents and common media types are allowed (PDF, DOC, PPT, XLS, TXT, ZIP, images).'));
+    }
+  },
 });
 
 router.use(authMiddleware);

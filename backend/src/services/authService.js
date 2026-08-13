@@ -18,28 +18,54 @@ const { createEmailSendLimiter, normalizeEmailKey } = require('../utils/emailRat
 const env = require('../config/env');
 
 /**
+ * Normalize an email for storage/lookup: trim + lowercase.
+ */
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * Hash a refresh token before storing (like reset/verify tokens).
+ * DB leaks never yield usable session tokens.
+ */
+function hashRefreshToken(rawToken) {
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
+
+/**
  * Register a new user (email/password — legacy, kept for admin accounts).
  * 1. Check institution is configured (registration gate)
- * 2. Check email is not already taken
- * 3. Hash password, create user
- * 4. Auto-assign cohort tags
- * 5. Return JWT pair
+ * 2. Enforce the institution email domain when configured
+ * 3. Check email is not already taken
+ * 4. Hash password, create user
+ * 5. Auto-assign cohort tags
+ * 6. Return JWT pair
  */
 async function register(email, password, displayName) {
+  const normalizedEmail = normalizeEmail(email);
+
   // Gate: institution must be configured before registration is allowed
   const config = await prisma.institutionConfig.findFirst();
   if (!config || !config.isConfigured) {
     throw Object.assign(new Error('Registration is disabled. The platform has not been configured yet.'), { statusCode: 403, code: 'REGISTRATION_DISABLED' });
   }
 
+  // Enforce the institution email domain when one is configured
+  if (config.domain) {
+    const domain = config.domain.toLowerCase().replace(/^@/, '');
+    if (!normalizedEmail.endsWith(`@${domain}`)) {
+      throw Object.assign(new Error(`Only institutional (@${domain}) email addresses can register.`), { statusCode: 403, code: 'DOMAIN_NOT_ALLOWED' });
+    }
+  }
+
   // Check for duplicate email
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing) {
     throw Object.assign(new Error('An account with this email already exists.'), { statusCode: 409, code: 'DUPLICATE_EMAIL' });
   }
 
   // Auto-generate a unique temporary username
-  const baseUsername = email.split('@')[0];
+  const baseUsername = normalizedEmail.split('@')[0];
   let tempUsername = baseUsername;
   let counter = 1;
   while (await prisma.user.findUnique({ where: { username: tempUsername } })) {
@@ -51,7 +77,7 @@ async function register(email, password, displayName) {
   const hashedPw = await hashPassword(password);
   const user = await prisma.user.create({
     data: {
-      email,
+      email: normalizedEmail,
       username: tempUsername,
       password: hashedPw,
       displayName,
@@ -64,7 +90,7 @@ async function register(email, password, displayName) {
   });
 
   // Auto-assign cohort tags based on email parsing rules
-  const tags = await assignCohortTags(user.id, email);
+  const tags = await assignCohortTags(user.id, normalizedEmail);
 
   // Fetch the updated user (with tags)
   const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
@@ -73,10 +99,10 @@ async function register(email, password, displayName) {
   const accessToken = signAccessToken(updatedUser);
   const refreshToken = signRefreshToken(updatedUser.id);
 
-  // Store hashed refresh token
+  // Store ONLY the hash of the refresh token
   await prisma.user.update({
     where: { id: user.id },
-    data: { refreshToken },
+    data: { refreshToken: hashRefreshToken(refreshToken) },
   });
 
   return {
@@ -103,6 +129,7 @@ async function googleLogin(idToken) {
 
   // Verify the Google token and get user info
   const googleUser = await verifyGoogleToken(idToken);
+  const googleEmail = normalizeEmail(googleUser.email);
 
   // Look up user by googleId first, then by email
   let user = await prisma.user.findFirst({ where: { googleId: googleUser.googleId } });
@@ -110,10 +137,24 @@ async function googleLogin(idToken) {
 
   if (!user) {
     // Check if an account with this email already exists (password-based)
-    user = await prisma.user.findUnique({ where: { email: googleUser.email } });
+    user = await prisma.user.findUnique({ where: { email: googleEmail } });
 
     if (user) {
-      // Link the existing account to Google
+      if (user.googleId && user.googleId !== googleUser.googleId) {
+        throw Object.assign(
+          new Error('This email is linked to a different Google account.'),
+          { statusCode: 409, code: 'GOOGLE_LINK_CONFLICT' }
+        );
+      }
+      if (user.hasPassword && !user.googleId) {
+        // Never silently absorb a password account into a Google identity —
+        // an attacker could pre-register a victim's email otherwise.
+        throw Object.assign(
+          new Error('An account with this email already exists. Please sign in with your email and password.'),
+          { statusCode: 409, code: 'EMAIL_TAKEN' }
+        );
+      }
+      // Link the existing Google-only account (or previously linked) to Google
       user = await prisma.user.update({
         where: { id: user.id },
         data: { googleId: googleUser.googleId },
@@ -121,7 +162,7 @@ async function googleLogin(idToken) {
     } else {
       // Create brand new user — no password yet
       isNewUser = true;
-      const baseUsername = googleUser.email.split('@')[0];
+      const baseUsername = googleEmail.split('@')[0];
       let tempUsername = baseUsername;
       let counter = 1;
       while (await prisma.user.findUnique({ where: { username: tempUsername } })) {
@@ -131,7 +172,7 @@ async function googleLogin(idToken) {
 
       user = await prisma.user.create({
         data: {
-          email: googleUser.email,
+          email: googleEmail,
           username: tempUsername,
           password: '', // No password — Google-only for now
           displayName: googleUser.name,
@@ -157,7 +198,7 @@ async function googleLogin(idToken) {
 
   await prisma.user.update({
     where: { id: user.id },
-    data: { refreshToken },
+    data: { refreshToken: hashRefreshToken(refreshToken) },
   });
 
   return {
@@ -171,12 +212,30 @@ async function googleLogin(idToken) {
 }
 
 /**
- * Set password for a Google-only user (hasPassword === false).
+ * Set password for a Google-only user (hasPassword === false), or change
+ * the password of an existing account — the latter REQUIRES the current
+ * password to prevent a stolen access token from taking over the account.
  */
-async function setPassword(userId, newPassword) {
+async function setPassword(userId, newPassword, currentPassword) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     throw Object.assign(new Error('User not found.'), { statusCode: 404, code: 'USER_NOT_FOUND' });
+  }
+
+  if (user.hasPassword) {
+    if (!currentPassword) {
+      throw Object.assign(
+        new Error('Your current password is required to change your password.'),
+        { statusCode: 400, code: 'CURRENT_PASSWORD_REQUIRED' }
+      );
+    }
+    const valid = await comparePassword(currentPassword, user.password);
+    if (!valid) {
+      throw Object.assign(
+        new Error('Current password is incorrect.'),
+        { statusCode: 401, code: 'INVALID_CURRENT_PASSWORD' }
+      );
+    }
   }
 
   const hashedPw = await hashPassword(newPassword);
@@ -185,6 +244,7 @@ async function setPassword(userId, newPassword) {
     data: {
       password: hashedPw,
       hasPassword: true,
+      refreshToken: null, // Invalidate all sessions after a password change
     },
   });
 
@@ -262,14 +322,12 @@ async function checkUsername(username) {
  * 3. Return JWT pair
  */
 async function login(email, password) {
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
+  const normalizedEmail = normalizeEmail(email);
+  const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+  if (!user || !user.hasPassword) {
+    // Identical message for unknown accounts and Google-only accounts —
+    // prevents account enumeration.
     throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401, code: 'INVALID_CREDENTIALS' });
-  }
-
-  // If user has no password (Google-only), tell them to use Google
-  if (!user.hasPassword) {
-    throw Object.assign(new Error('This account uses Google login. Please sign in with Google.'), { statusCode: 401, code: 'GOOGLE_ONLY' });
   }
 
   const valid = await comparePassword(password, user.password);
@@ -281,10 +339,10 @@ async function login(email, password) {
   const accessToken = signAccessToken(user);
   const refreshToken = signRefreshToken(user.id);
 
-  // Store refresh token
+  // Store ONLY the hash of the refresh token
   await prisma.user.update({
     where: { id: user.id },
-    data: { refreshToken },
+    data: { refreshToken: hashRefreshToken(refreshToken) },
   });
 
   return {
@@ -296,6 +354,9 @@ async function login(email, password) {
 
 /**
  * Refresh an access token using a valid refresh token.
+ * Rotates the refresh token on every use and detects reuse:
+ * if a valid-signed token no longer matches the stored hash, the whole
+ * session is revoked (the token was replayed or stolen).
  */
 async function refreshAccessToken(token) {
   let decoded;
@@ -306,12 +367,29 @@ async function refreshAccessToken(token) {
   }
 
   const user = await prisma.user.findUnique({ where: { id: decoded.sub } });
-  if (!user || user.refreshToken !== token) {
+  if (!user) {
+    throw Object.assign(new Error('Account no longer exists.'), { statusCode: 401, code: 'USER_NOT_FOUND' });
+  }
+
+  const presentedHash = hashRefreshToken(token);
+  if (user.refreshToken !== presentedHash) {
+    // Reuse of an old/revoked token — revoke the whole session.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { refreshToken: null },
+    });
     throw Object.assign(new Error('Refresh token has been revoked.'), { statusCode: 401, code: 'TOKEN_REVOKED' });
   }
 
+  // Rotate: issue a fresh refresh token and store its hash.
+  const newRefreshToken = signRefreshToken(user.id);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { refreshToken: hashRefreshToken(newRefreshToken) },
+  });
+
   const accessToken = signAccessToken(user);
-  return { accessToken };
+  return { accessToken, refreshToken: newRefreshToken };
 }
 
 /**
@@ -437,13 +515,34 @@ function getResetRateLimitStatus(email) {
 async function sendPersonalEmailVerification(userId, personalEmail) {
   await verifyEmailLimiter.check(userId);
 
+  // The personal email must not already belong to another account (as a
+  // primary or personal email) — otherwise an attacker could claim+verify
+  // a victim's address on their own account.
+  const normalized = normalizeEmail(personalEmail);
+  const clash = await prisma.user.findFirst({
+    where: {
+      id: { not: userId },
+      OR: [
+        { email: normalized },
+        { personalEmail: { equals: normalized, mode: 'default' } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (clash) {
+    throw Object.assign(
+      new Error('This email address is already in use by another account.'),
+      { statusCode: 409, code: 'EMAIL_IN_USE' }
+    );
+  }
+
   const rawToken = crypto.randomBytes(32).toString('hex');
   const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
   await prisma.user.update({
     where: { id: userId },
     data: {
-      personalEmail,
+      personalEmail: normalized,
       personalEmailVerified: false,
       emailVerifyToken: hashedToken,
       emailVerifyExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
@@ -452,7 +551,7 @@ async function sendPersonalEmailVerification(userId, personalEmail) {
 
   const verifyUrl = `${env.FRONTEND_URL}/verify-email?token=${rawToken}`;
   try {
-    await sendEmailVerification(personalEmail, verifyUrl);
+    await sendEmailVerification(normalized, verifyUrl);
   } catch (err) {
     // Surface per-recipient backstop 429s (see forgotPassword note).
     if (err.code === 'RATE_LIMITED') throw err;
@@ -534,4 +633,5 @@ module.exports = {
   removePersonalEmail,
   verifyPersonalEmail,
   sanitizeUser,
+  normalizeEmail,
 };

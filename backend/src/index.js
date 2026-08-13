@@ -55,7 +55,16 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Serve uploaded files (avatars) — dev only; use S3/CDN in production
+// Serve uploaded files (avatars) — dev only; use S3/CDN in production.
+// Security headers: even if an attacker managed to store an .html/.svg file
+// before the fileFilter hardening, nosniff + a sandboxing CSP prevent it
+// from executing in a browser under the app origin.
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('X-Frame-Options', 'DENY');
+  next();
+});
 app.use('/uploads', express.static(env.STORAGE_PATH));
 
 // ============================================================

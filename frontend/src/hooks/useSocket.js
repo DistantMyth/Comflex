@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './useAuth';
 import { socketOrigin } from '../utils/resolveAsset';
+import { getAccessToken } from '../api/client';
 
 // In dev, Vite proxies /socket.io to the backend. In production (Vercel → Render)
 // the socket must connect to the backend origin directly.
@@ -29,7 +30,7 @@ export function useSocket() {
       return;
     }
 
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken();
     if (!token) return;
 
     const socket = io(SOCKET_URL, {

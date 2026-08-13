@@ -32,12 +32,14 @@ const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
   fileFilter: (req, file, cb) => {
-    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'];
+    // SVG excluded deliberately — SVG can contain scripts and is served
+    // same-origin, making it a stored-XSS vector.
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
     const ext = path.extname(file.originalname).toLowerCase();
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Only JPEG, PNG, GIF, SVG and WebP images are allowed.'));
+      cb(new Error('Only JPEG, PNG, GIF and WebP images are allowed.'));
     }
   },
 });
@@ -427,10 +429,15 @@ router.post('/buy-credits', [
     const creditEthPrice = config?.membershipConfig?.creditEthPrice || {
       100: 0.01, 500: 0.045, 2000: 0.15
     };
-    
-    // If the exact tier package isn't directly defined, this acts as a hard limit unless admin extends pricing manually
+
+    // The amount MUST be a listed tier — otherwise the expected value check
+    // below would be skipped entirely, letting anyone mint free credits with
+    // a zero-value transaction.
     const expectedEth = creditEthPrice[amount];
-    
+    if (expectedEth === undefined) {
+      return error(res, 'VALIDATION', `Amount ${amount} is not a valid credit package.`, 400);
+    }
+
     // Validate using ethers on Sepolia
     const provider = new ethers.JsonRpcProvider('https://ethereum-sepolia-rpc.publicnode.com');
     const tx = await provider.getTransaction(txHash);
@@ -439,12 +446,17 @@ router.post('/buy-credits', [
     if (tx.to?.toLowerCase() !== treasury.toLowerCase()) {
       return error(res, 'VALIDATION', 'Transaction was not sent to the Treasury Address', 400);
     }
-    
-    if (expectedEth) {
-       const actualEth = Number(ethers.formatEther(tx.value));
-       if (actualEth < expectedEth) {
-         return error(res, 'VALIDATION', `Transaction value (${actualEth} ETH) is lower than required (${expectedEth} ETH) for ${amount} Credits.`, 400);
-       }
+
+    // Require the transaction to actually be confirmed on-chain — a dropped
+    // or un-mined transaction must not mint credits.
+    const receipt = await provider.getTransactionReceipt(txHash).catch(() => null);
+    if (!receipt) {
+      return error(res, 'VALIDATION', 'Transaction is not confirmed on the network yet.', 400);
+    }
+
+    const actualEth = Number(ethers.formatEther(tx.value));
+    if (actualEth < expectedEth) {
+      return error(res, 'VALIDATION', `Transaction value (${actualEth} ETH) is lower than required (${expectedEth} ETH) for ${amount} Credits.`, 400);
     }
 
     await prisma.$transaction(async (ptx) => {

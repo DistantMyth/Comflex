@@ -1,5 +1,6 @@
 /**
  * Auth API — Centralized auth API calls.
+ * Refresh token lives in an httpOnly cookie — it is never sent in bodies.
  */
 
 import client from './client';
@@ -14,8 +15,9 @@ export const authApi = {
   googleLogin: (idToken) =>
     client.post('/auth/google', { idToken }),
 
-  setPassword: (newPassword) =>
-    client.post('/auth/set-password', { newPassword }),
+  // currentPassword required when the account already has a password
+  setPassword: (newPassword, currentPassword) =>
+    client.post('/auth/set-password', { newPassword, currentPassword }),
 
   setUsername: (username) =>
     client.post('/auth/set-username', { username }),
@@ -26,8 +28,9 @@ export const authApi = {
   logout: () =>
     client.post('/auth/logout'),
 
-  refreshToken: (refreshToken) =>
-    client.post('/auth/refresh', { refreshToken }),
+  // Backend rotates the refresh token; body deliberately omitted (cookie-only)
+  refreshToken: () =>
+    client.post('/auth/refresh'),
 
   forgotPassword: (email) =>
     client.post('/auth/forgot-password', { email }),

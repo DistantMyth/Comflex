@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
+const { rateLimiter } = require('../middleware/rateLimit');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
 const { uploadFileToGemini, deleteGeminiFile, chatWithContext } = require('../services/chatbotService');
@@ -60,9 +61,15 @@ const TIER_LIMITS = {
   ultra: { uploads: 10, storage: 2 * 1024 * 1024 * 1024 } // 2GB
 };
 
-const ALLOWED_MIMES = ['application/pdf', 'application/rtf', 'text/csv', 'text/plain', 'text/markdown', 'text/html'];
+// text/html and image/svg+xml are deliberately excluded — they can carry
+// active content and are served from the same origin via /uploads.
+const ALLOWED_MIMES = ['application/pdf', 'application/rtf', 'text/csv', 'text/plain', 'text/markdown'];
+const ALLOWED_EXTENSIONS = ['.pdf', '.rtf', '.csv', '.txt', '.md', '.markdown'];
 function isMimeAllowed(mime) {
-  return mime.startsWith('text/') || ALLOWED_MIMES.includes(mime);
+  return ALLOWED_MIMES.includes(mime);
+}
+function isExtAllowed(filename) {
+  return ALLOWED_EXTENSIONS.includes(path.extname(filename || '').toLowerCase());
 }
 
 // GET my notes
@@ -112,7 +119,7 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
     const { title } = req.body;
     const finalTitle = title || req.file.originalname;
 
-    if (!isMimeAllowed(req.file.mimetype)) {
+    if (!isMimeAllowed(req.file.mimetype) || !isExtAllowed(req.file.originalname)) {
       return error(res, 'UNSUPPORTED_FORMAT', 'Unsupported file format. Please upload PDF, TXT, CSV, or Markdown files.', 400);
     }
 
@@ -141,8 +148,8 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
       }
     });
 
-    // Optionally cleanup local file to save disk space if solely relying on Gemini
-    // fs.unlinkSync(req.file.path);
+    // Cleanup local temp file — one copy is enough (Gemini holds the original)
+    try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
 
     return success(res, note, 201);
   } catch (err) {
@@ -230,7 +237,12 @@ router.delete('/:id', async (req, res, next) => {
 });
 
 // POST /chat
-router.post('/chat', checkAndResetDailyLimits, [
+router.post('/chat', rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  message: 'Too many chat requests. Please slow down.',
+  keyPrefix: 'chatbot-chat-ip',
+}), checkAndResetDailyLimits, [
   body('noteId').notEmpty(),
   body('query').notEmpty()
 ], async (req, res, next) => {

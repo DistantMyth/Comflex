@@ -33,9 +33,25 @@ const storage = multer.diskStorage({
   },
 });
 
+// DM attachments — common media + documents only. Executable formats
+// (.html/.svg/.js) are rejected to prevent same-origin stored XSS.
+const ALLOWED_DM_EXTENSIONS = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp',
+  '.pdf', '.txt', '.md', '.csv',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.zip', '.rar', '.7z', '.mp3', '.mp4', '.mov', '.webm',
+];
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ALLOWED_DM_EXTENSIONS.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only common media and document types are allowed.'));
+    }
+  },
 });
 
 

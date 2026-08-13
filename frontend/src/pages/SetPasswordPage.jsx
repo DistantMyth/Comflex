@@ -15,7 +15,7 @@ export default function SetPasswordPage() {
   const { user, setPassword, setUsername, refreshProfile } = useContext(AuthContext);
   const navigate = useNavigate();
 
-  const [step, setStep] = useState('username');
+  const [step, setStep] = useState(() => (user?.username ? 'password' : 'username'));
   const [username, setUsernameValue] = useState('');
   const [usernameAvailable, setUsernameAvailable] = useState(null);
   const [usernameChecking, setUsernameChecking] = useState(false);
@@ -24,8 +24,10 @@ export default function SetPasswordPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Only reachable for Google accounts without a password (needsPassword).
+  // Users with an existing password change it from the profile page.
   useEffect(() => {
-    if (user?.username && user?.hasPassword) navigate('/profile');
+    if (!user?.needsPassword && user?.username) navigate('/profile');
     if (user?.username) setStep('password');
   }, [user, navigate]);
 

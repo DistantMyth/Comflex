@@ -5,6 +5,7 @@ import { eventApi } from '../api/eventApi';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
 import resolveAsset from '../utils/resolveAsset';
+import Avatar from '../components/Avatar';
 
 const CountdownClock = ({ targetDate, label }) => {
   const [timeLeft, setTimeLeft] = useState(0);
@@ -563,7 +564,7 @@ export default function EventDetailsPage() {
                       {event.organizers.map(org => (
                         <div key={org.id} className="p-3 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <img src={resolveAsset(org.user.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(org.user.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
+                            <Avatar src={org.user.avatarUrl} name={org.user.displayName} className="w-8 h-8 rounded-full" />
                             <div>
                               <div className="font-bold text-sm">{org.user.displayName}</div>
                               <div className="text-xs text-[var(--color-text-secondary)]">
@@ -612,7 +613,7 @@ export default function EventDetailsPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                     {userTeam.members.map(m => (
                       <div key={m.userId} className="flex items-center gap-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] p-3 rounded-xl">
-                        <img src={resolveAsset(m.user.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(m.user.displayName)}&background=random`} alt={m.user.displayName} className="w-8 h-8 rounded-full" />
+                        <Avatar src={m.user.avatarUrl} name={m.user.displayName} alt={m.user.displayName} className="w-8 h-8 rounded-full" />
                         <span className="font-medium text-sm">{m.user.displayName}</span>
                       </div>
                     ))}
@@ -625,7 +626,7 @@ export default function EventDetailsPage() {
                          {userTeam.invites.filter(i => i.status === 'pending').map(inv => (
                            <li key={inv.id} className="flex items-center justify-between text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] px-3 py-2 rounded-lg">
                              <div className="flex items-center gap-2">
-                               <img src={resolveAsset(inv.invitedUser.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(inv.invitedUser.displayName)}&background=random`} className="w-5 h-5 rounded-full" />
+                               <Avatar src={inv.invitedUser.avatarUrl} name={inv.invitedUser.displayName} className="w-5 h-5 rounded-full" />
                                <span className="text-[var(--color-text-primary)] font-medium">{inv.invitedUser.displayName}</span>
                              </div>
                              <span className="text-xs text-[var(--color-text-muted)] italic">Waiting...</span>
@@ -654,7 +655,7 @@ export default function EventDetailsPage() {
                             return !isMember && !isInvited && isEligible;
                           }).map(u => (
                             <div key={u.id} className="flex items-center justify-between p-3 hover:bg-[var(--color-bg-secondary)] rounded-lg transition-colors">
-                              <div className="flex items-center gap-3">                                 <img src={resolveAsset(u.avatarUrl) || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.displayName)}&background=random`} className="w-8 h-8 rounded-full" />
+                              <div className="flex items-center gap-3">                                 <Avatar src={u.avatarUrl} name={u.displayName} className="w-8 h-8 rounded-full" />
                                 <div>
                                   <div className="font-medium text-sm">{u.displayName}</div>
                                   <div className="text-xs text-[var(--color-text-muted)]">{u.username || u.email}</div>

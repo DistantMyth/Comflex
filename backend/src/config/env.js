@@ -58,4 +58,22 @@ const env = {
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
 };
 
+// ── Fail-fast secrets validation ──────────────────────────────────────────
+// In production, running with missing or known-default JWT secrets means any
+// attacker can forge admin tokens. Refuse to boot rather than ship insecure.
+const WEAK_JWT_SECRETS = ['dev-access-secret', 'dev-refresh-secret', 'your-access-secret-here-change-in-production', 'your-refresh-secret-here-change-in-production'];
+
+function assertStrongSecret(name, value) {
+  if (!value || value.length < 32 || WEAK_JWT_SECRETS.includes(value)) {
+    console.error(`[ENV] ❌ ${name} is missing, too short (<32 chars), or uses a known default value.`);
+    console.error(`[ENV] Generate one with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`);
+    process.exit(1);
+  }
+}
+
+if (env.NODE_ENV === 'production') {
+  assertStrongSecret('JWT_ACCESS_SECRET', env.JWT_ACCESS_SECRET);
+  assertStrongSecret('JWT_REFRESH_SECRET', env.JWT_REFRESH_SECRET);
+}
+
 module.exports = env;

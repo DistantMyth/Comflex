@@ -12,6 +12,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const authMiddleware = require('../middleware/auth');
+const { rateLimiter } = require('../middleware/rateLimit');
 const { requireRing, canActOnUser } = require('../middleware/ringCheck');
 const { requireGroupMember, requireGroupPermission } = require('../middleware/groupPermission');
 const groupService = require('../services/groupService');
@@ -24,6 +25,19 @@ const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
 
 const router = express.Router();
+
+// Mentions arrive as a JSON string in multipart bodies — parse safely,
+// cap the array, and only accept string IDs.
+function parseMentions(raw) {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter((id) => typeof id === 'string' && id.length <= 64).slice(0, 50);
+  } catch {
+    return undefined;
+  }
+}
 
 // Multer config for group avatar uploads
 const groupUploadDir = path.join(env.STORAGE_PATH, 'groups');
@@ -135,12 +149,18 @@ router.get('/:id', requireGroupMember, async (req, res, next) => {
  */
 router.post(
   '/',
+  rateLimiter({
+    windowMs: 10 * 60 * 1000,
+    max: 20,
+    message: 'Too many groups created from this IP.',
+    keyPrefix: 'group-create-ip',
+  }),
   [
     body('name').trim().notEmpty().withMessage('Group name is required.'),
     body('displayName').optional().trim(),
     body('description').optional().trim(),
     body('type').optional().isIn(['primary', 'cross-year', 'custom']),
-    body('memberIds').optional().isArray(),
+    body('memberIds').optional().isArray({ max: 100 }).withMessage('Up to 100 members can be added at once.'),
     body('autoAdd').optional().isIn(['batch', 'branch-batch', 'cohort']),
     body('targetYears').optional().isArray(),
     body('targetBranches').optional().isArray()
@@ -216,6 +236,11 @@ router.post(
         memberIds = [...new Set(memberIds)];
       }
 
+      // Hard cap on members processed per request (autoAdd can expand wildly)
+      if (memberIds.length > 200) {
+        memberIds = memberIds.slice(0, 200);
+      }
+
       // Process each member
       for (const memberId of memberIds) {
         try {
@@ -239,9 +264,9 @@ router.post(
                    try {
                      const linkObj = await groupService.getInviteLink(group.id);
                      await groupService.createInvite(group.id, memberId, req.user.id);
-                     await dmService.sendDM(req.user.id, memberId, { 
-                       content: `Hi there! I've created a group "${group.displayName || group.name}". As you are a senior, I'm inviting you via link. Join using this link: ${env.FRONTEND_URL}/join/${linkObj.token}` 
-                     });
+                      await dmService.sendDM(req.user.id, memberId, { 
+                        content: `Hi there! I've created a group "${group.displayName || group.name}". As you are a senior, I'm inviting you via link. Join using this link: ${env.FRONTEND_URL}/join/${linkObj.token}` 
+                      }, true);
                      results.push({ userId: memberId, status: 'dm_invite_sent' });
                    } catch (dmErr) {
                      results.push({ userId: memberId, error: 'Failed to send DM invite.' });
@@ -375,7 +400,7 @@ router.post(
           const linkObj = await groupService.getInviteLink(req.params.id);
           await dmService.sendDM(req.user.id, req.body.userId, { 
             content: `Hi there! I'm inviting you to join the group "${group.displayName || group.name}". Join using this link: ${env.FRONTEND_URL}/join/${linkObj.token}` 
-          });
+          }, true);
           result.dmSent = true;
         } catch (linkErr) {
           result.dmFailed = true;
@@ -721,7 +746,7 @@ router.get('/:id/messages/pinned', requireGroupMember, async (req, res, next) =>
  */
 router.get('/:id/messages/:msgId', requireGroupMember, async (req, res, next) => {
   try {
-    const msg = await messageService.getMessage(req.params.msgId);
+    const msg = await messageService.getMessage(req.params.msgId, req.params.id);
     return success(res, msg);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -737,7 +762,7 @@ router.patch('/:id/messages/:msgId/react', requireGroupMember, async (req, res, 
     const { emoji } = req.body;
     if (!emoji) return error(res, 'VALIDATION_ERROR', 'Emoji is required.', 400);
 
-    const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji);
+    const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji, req.params.id);
     // Notify clients instantly of the updated reaction strip
     emitToGroup(req.params.id, 'message:react', { messageId: msg.id, reactions: msg.reactions });
     
@@ -772,7 +797,7 @@ router.post(
 
       const params = {
         content,
-        mentions: req.body.mentions ? JSON.parse(req.body.mentions) : undefined,
+        mentions: parseMentions(req.body.mentions),
         replyToId: req.body.replyToId || undefined,
         forwarded: req.body.forwarded === 'true',
         msgType: req.body.msgType || 'text',
@@ -821,7 +846,7 @@ router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => 
  */
 router.get('/:id/messages/:msgId/readby', requireGroupMember, async (req, res, next) => {
   try {
-    const receipts = await messageService.getReadReceipts(req.params.msgId);
+    const receipts = await messageService.getReadReceipts(req.params.msgId, req.params.id);
     return success(res, receipts);
   } catch (err) {
     next(err);
@@ -856,7 +881,7 @@ router.patch(
         );
       }
 
-      const msg = await messageService.editMessage(req.params.msgId, req.user.id, req.body.content);
+      const msg = await messageService.editMessage(req.params.msgId, req.user.id, req.body.content, req.params.id);
 
       // Broadcast edit to all connected clients in the group
       emitToGroup(req.params.id, 'message:edit', msg);
@@ -875,7 +900,7 @@ router.patch(
 router.delete('/:id/messages/:msgId', requireGroupMember, async (req, res, next) => {
   try {
     const perms = req.groupMembership?.permissions || {};
-    const msg = await messageService.deleteMessage(req.params.msgId, req.user.id, perms.can_delete_others_messages || req.user.globalRing === 0);
+    const msg = await messageService.deleteMessage(req.params.msgId, req.user.id, perms.can_delete_others_messages || req.user.globalRing === 0, req.params.id);
 
     // Broadcast deletion to all connected clients in the group
     emitToGroup(req.params.id, 'message:delete', {
@@ -896,7 +921,7 @@ router.delete('/:id/messages/:msgId', requireGroupMember, async (req, res, next)
  */
 router.post('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
   try {
-    const { msg, unpinnedIds } = await messageService.pinMessage(req.params.msgId);
+    const { msg, unpinnedIds } = await messageService.pinMessage(req.params.msgId, req.params.id);
     emitToGroup(req.params.id, 'message:pinnedUpdate', { pinnedMsg: msg, unpinnedIds });
     return success(res, { msg, unpinnedIds });
   } catch (err) {
@@ -909,7 +934,7 @@ router.post('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermissi
  */
 router.delete('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
   try {
-    const msg = await messageService.unpinMessage(req.params.msgId);
+    const msg = await messageService.unpinMessage(req.params.msgId, req.params.id);
     emitToGroup(req.params.id, 'message:unpinned', { messageId: msg.id });
     return success(res, msg);
   } catch (err) {

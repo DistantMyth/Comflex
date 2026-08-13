@@ -51,8 +51,11 @@ async function requireFriendship(userId, otherUserId) {
 
 /**
  * Send a direct message to a user.
+ * Requires an accepted friendship between the two users — EXCEPT for
+ * server-internal system messages (e.g. group invite links), which must
+ * explicitly pass bypassFriendship = true. No API route may set it.
  */
-async function sendDM(senderId, receiverId, data) {
+async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
   if (senderId === receiverId) {
     throw Object.assign(new Error('Cannot message yourself.'), { statusCode: 400, code: 'SELF_MESSAGE' });
   }
@@ -61,6 +64,11 @@ async function sendDM(senderId, receiverId, data) {
   const receiver = await prisma.user.findUnique({ where: { id: receiverId } });
   if (!receiver) {
     throw Object.assign(new Error('User not found.'), { statusCode: 404, code: 'USER_NOT_FOUND' });
+  }
+
+  // Friendship is required — prevents DMs (and spam) to arbitrary users.
+  if (!bypassFriendship) {
+    await requireFriendship(senderId, receiverId);
   }
 
   const message = await prisma.directMessage.create({
@@ -110,8 +118,10 @@ async function sendDM(senderId, receiverId, data) {
 
 /**
  * Get paginated conversation between two users.
+ * Requires an accepted friendship — blocks reading another user's DMs.
  */
 async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {}) {
+  await requireFriendship(userId, otherUserId);
 
   const skip = (page - 1) * limit;
 

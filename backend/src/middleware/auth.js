@@ -9,6 +9,7 @@
 
 const { verifyAccessToken } = require('../utils/jwt');
 const { error } = require('../utils/apiResponse');
+const prisma = require('../prisma');
 
 function authMiddleware(req, res, next) {
   try {
@@ -26,17 +27,27 @@ function authMiddleware(req, res, next) {
     // Verify and decode the token
     const decoded = verifyAccessToken(token);
 
-    // Attach user payload to request for downstream middleware/routes
-    req.user = {
-      id: decoded.sub,
-      email: decoded.email,
-      globalRing: decoded.globalRing,
-      cohortTags: decoded.cohortTags,
-      displayBadges: decoded.displayBadges,
-      avatarUrl: decoded.avatarUrl,
-    };
-
-    next();
+    // Re-read the user from the DB so deletions, demotions, and permission
+    // changes take effect immediately instead of lingering for the token's
+    // full lifetime. Cheap indexed lookup — fine at this scale.
+    prisma.user
+      .findUnique({ where: { id: decoded.sub } })
+      .then((dbUser) => {
+        if (!dbUser) {
+          return error(res, 'USER_NOT_FOUND', 'Account no longer exists.', 401);
+        }
+        // Overwrite JWT claims with fresh DB values
+        req.user = {
+          id: dbUser.id,
+          email: dbUser.email,
+          globalRing: dbUser.globalRing,
+          cohortTags: dbUser.cohortTags || [],
+          displayBadges: dbUser.displayBadges || [],
+          avatarUrl: dbUser.avatarUrl || null,
+        };
+        next();
+      })
+      .catch(() => error(res, 'AUTH_ERROR', 'Could not verify account.', 500));
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       return error(res, 'TOKEN_EXPIRED', 'Access token has expired. Please refresh.', 401);

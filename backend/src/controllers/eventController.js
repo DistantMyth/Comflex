@@ -179,7 +179,7 @@ exports.createEvent = async (req, res, next) => {
 exports.updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const body = req.body || {};
 
     const event = await prisma.event.findUnique({
       where: { id },
@@ -195,27 +195,47 @@ exports.updateEvent = async (req, res, next) => {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized.' } });
     }
 
+    const isCreatorOrGlobalAdmin = event.creatorId === user.id || user.globalRing === 0;
+
+    // Never allow privileged fields to be mass-assigned from the request body.
+    const FORBIDDEN_FIELDS = ['creatorId', 'parentId', 'id', 'organizers'];
+    for (const f of FORBIDDEN_FIELDS) delete body[f];
+
     // Granular permissions check
     const organizerRec = event.organizers.find(o => o.userId === user.id);
     const perms = organizerRec ? organizerRec.permissions || {} : {};
     
-    // If not creator and not global admin, check specific permissions
-    if (user.globalRing !== 0 && event.creatorId !== user.id) {
-      if ((updateData.startDate || updateData.endDate) && !perms.canChangeTiming) {
+    // If not creator and not global admin, check specific permissions and
+    // restrict which fields may change.
+    if (!isCreatorOrGlobalAdmin) {
+      if ((body.startDate || body.endDate) && !perms.canChangeTiming) {
          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized to change timings.' } });
       }
-      if ((updateData.durationHours || updateData.durationMinutes) && !perms.canChangeDurationWhileRunning) {
+      if ((body.durationHours || body.durationMinutes) && !perms.canChangeDurationWhileRunning) {
          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized to change duration.' } });
       }
-      if (updateData.wrongSubmissionPenalty !== undefined && !perms.canChangePenalty) {
+      if (body.wrongSubmissionPenalty !== undefined && !perms.canChangePenalty) {
          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized to change penalty.' } });
       }
       if (!perms.canEditDetails) {
-         // Fallback if they are trying to edit general details
-         delete updateData.title;
-         delete updateData.description;
-         delete updateData.category;
+         delete body.title;
+         delete body.description;
+         delete body.category;
       }
+      // Non-creator organizers cannot change lifecycle/reward/eligibility fields
+      for (const f of ['status', 'targetTags', 'minTeamSize', 'maxTeamSize', 'rewardTiers', 'isTeamEvent', 'autoStart', 'keepTeamsSame', 'taskViewMode', 'scoreMode']) {
+         delete body[f];
+      }
+    }
+
+    // Only allow editing sensible fields at all — strip anything unexpected
+    const ALLOWED_FIELDS = ['title', 'description', 'category', 'startDate', 'endDate',
+      'durationHours', 'durationMinutes', 'wrongSubmissionPenalty', 'status', 'targetTags',
+      'minTeamSize', 'maxTeamSize', 'rewardTiers', 'isTeamEvent', 'autoStart',
+      'keepTeamsSame', 'taskViewMode', 'scoreMode'];
+    const updateData = {};
+    for (const f of ALLOWED_FIELDS) {
+      if (body[f] !== undefined) updateData[f] = body[f];
     }
 
     const updatedEvent = await prisma.event.update({
@@ -738,9 +758,33 @@ exports.submitTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+/**
+ * Shared helper — is the user the event creator, an organizer, or a global admin?
+ */
+async function isEventOrganizer(eventId, userId) {
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { creatorId: true, organizers: { select: { userId: true } } },
+  });
+  if (!event) return { event: null, isOrganizer: false };
+  const isOrganizer =
+    event.creatorId === userId ||
+    event.organizers.some(o => o.userId === userId);
+  return { event, isOrganizer };
+}
+
 exports.listSubmissions = async (req, res, next) => {
   try {
     const { taskId } = req.params;
+    const task = await prisma.eventTask.findUnique({ where: { id: taskId }, select: { eventId: true } });
+    if (!task) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found.' } });
+
+    const { isOrganizer } = await isEventOrganizer(task.eventId, req.user.id);
+    const globalAdmin = req.user.globalRing === 0;
+    if (!isOrganizer && !globalAdmin) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can view submissions.' } });
+    }
+
     const subs = await prisma.eventSubmission.findMany({
       where: { taskId },
       include: { team: { select: { id: true, name: true } } },
@@ -755,7 +799,20 @@ exports.evaluateSubmission = async (req, res, next) => {
     const { submissionId } = req.params;
     const { status, scoreAwarded } = req.body;
 
-    const sub = await prisma.eventSubmission.update({
+    const sub = await prisma.eventSubmission.findUnique({
+      where: { id: submissionId },
+      select: { taskId: true },
+    });
+    if (!sub) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Submission not found.' } });
+
+    const task = await prisma.eventTask.findUnique({ where: { id: sub.taskId }, select: { eventId: true } });
+    const { isOrganizer } = task ? await isEventOrganizer(task.eventId, req.user.id) : { isOrganizer: false };
+    const globalAdmin = req.user.globalRing === 0;
+    if (!isOrganizer && !globalAdmin) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can evaluate submissions.' } });
+    }
+
+    const updated = await prisma.eventSubmission.update({
       where: { id: submissionId },
       data: {
         status,
@@ -764,8 +821,8 @@ exports.evaluateSubmission = async (req, res, next) => {
         evaluatedAt: new Date()
       }
     });
-    
-    return success(res, sub);
+
+    return success(res, updated);
   } catch(err) { next(err); }
 };
 
@@ -833,6 +890,11 @@ exports.adjustTeamPoints = async (req, res, next) => {
 
     const isOrganizer = event.creatorId === req.user.id || event.organizers.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
     if (!isOrganizer) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can adjust points.' } });
+
+    const team = await prisma.eventTeam.findUnique({ where: { id: teamId }, select: { id: true, eventId: true } });
+    if (!team || team.eventId !== eventId) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found in this event.' } });
+    }
 
     const adj = await prisma.teamPointAdjustment.create({
       data: {
@@ -902,7 +964,9 @@ exports.awardTeamRewards = async (req, res, next) => {
     if (!isOrganizer) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can award rewards.' } });
 
     const team = await prisma.eventTeam.findUnique({ where: { id: teamId }, include: { members: true } });
-    if (!team) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found.' } });
+    if (!team || team.eventId !== eventId) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found in this event.' } });
+    }
 
     const results = [];
 
