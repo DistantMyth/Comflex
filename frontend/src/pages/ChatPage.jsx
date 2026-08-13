@@ -246,16 +246,6 @@ export default function ChatPage() {
           setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, isDeleted: true, content: '[Message deleted]' } : m));
         }
       }),
-      onEvent('message:readUpdate', ({ userId, groupId: gid }) => {
-        if (gid === groupId) {
-          // Update read counts on messages
-          setMessages((prev) => prev.map(m => ({
-            ...m,
-            readCount: (m.readCount || 0) + 1,
-            readBy: [...(m.readBy || []), userId],
-          })));
-        }
-      }),
       onEvent('typing:start', ({ userId, displayName, groupId: gid }) => {
         if (gid === groupId && userId !== user?.id) {
           setTypingUsers((prev) => {

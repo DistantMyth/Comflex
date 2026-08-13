@@ -209,7 +209,8 @@ model GroupMember {
   ring        Int    @default(3) // Per-group ring level
   permissions Json?  // Granular permissions override (see RULES.md §6)
 
-  joinedAt DateTime @default(now())
+  joinedAt   DateTime @default(now())
+  lastReadAt DateTime? // High-water mark for unread tracking — replaces per-message read receipts
 
   // Relations
   user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -268,22 +269,6 @@ model Message {
   // Relations
   group        CohortGroup        @relation(fields: [groupId], references: [id], onDelete: Cascade)
   author       User?              @relation(fields: [authorId], references: [id], onDelete: SetNull)
-  readReceipts MessageReadReceipt[]
-}
-
-// ============================================================
-// MESSAGE READ RECEIPT — Tracks who has read which group message
-// ============================================================
-model MessageReadReceipt {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  messageId String   @db.ObjectId
-  userId    String   @db.ObjectId
-  readAt    DateTime @default(now())
-
-  // Relations
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId])
 }
 
 // ============================================================

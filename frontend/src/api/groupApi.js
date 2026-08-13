@@ -81,11 +81,9 @@ export const groupApi = {
   getPinnedMessages: (groupId) =>
     client.get(`/groups/${groupId}/messages/pinned`, withAnonIdentity({}, groupId)),
 
-  // Read Receipts
+  // Unread tracking
   markMessagesRead: (groupId) =>
     client.post(`/groups/${groupId}/messages/read`, {}, withAnonIdentity({}, groupId)),
-  getMessageReadBy: (groupId, msgId) =>
-    client.get(`/groups/${groupId}/messages/${msgId}/readby`, withAnonIdentity({}, groupId)),
   getUnreadCount: (groupId) =>
     client.get(`/groups/${groupId}/unread`, withAnonIdentity({}, groupId)),
 

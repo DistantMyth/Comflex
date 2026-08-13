@@ -4,8 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { Reply, Forward, Copy, Pencil, Pin, Trash2, Eye, FileText, Flag } from 'lucide-react';
-import { groupApi } from '../api/groupApi';
+import { Reply, Forward, Copy, Pencil, Pin, Trash2, FileText, Flag } from 'lucide-react';
 import resolveAsset from '../utils/resolveAsset';
 
 const RING_COLORS = {
@@ -68,15 +67,12 @@ function renderContentWithMentions(content, mentionData = [], onUserClick) {
 
 export default function MessageBubble({
   message, currentUserId, permissions = {}, isAdmin, onEdit, onDelete, onPin, onUserClick,
-  groupId, members = [], badgeMap = {}, onReply, onForward, replyMessage,
+  members = [], badgeMap = {}, onReply, onForward, replyMessage,
   anonMode = false, myIdentityId = null, isAnonCreator = false,
   onReport = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
-  const [showReadBy, setShowReadBy] = useState(false);
-  const [readByUsers, setReadByUsers] = useState([]);
-  const [loadingReadBy, setLoadingReadBy] = useState(false);
 
   const author = message.author || {};
   const isAnonMsg = author.isAnonymous === true || (anonMode && message.authorId === null);
@@ -105,21 +101,6 @@ export default function MessageBubble({
     ? `${author.displayName || 'Anonymous'}${author.aliasTag ? `#${author.aliasTag}` : ''}`
     : (author.displayName || 'Unknown');
 
-  const handleShowReadBy = async () => {
-    if (showReadBy) return setShowReadBy(false);
-    if (!groupId) return;
-    setLoadingReadBy(true);
-    try {
-      const res = await groupApi.getMessageReadBy(groupId, message.id);
-      setReadByUsers(res.data.data || []);
-    } catch {
-      setReadByUsers([]);
-    } finally {
-      setShowReadBy(true);
-      setLoadingReadBy(false);
-    }
-  };
-
   const mentionData = useMemo(() => {
     const mentionIds = message.mentions || [];
     if (!mentionIds.length || !members.length) return [];
@@ -128,8 +109,6 @@ export default function MessageBubble({
       .filter(Boolean)
       .map((member) => ({ userId: member.id, displayName: member.displayName }));
   }, [message.mentions, members]);
-
-  const readCount = message.readCount || 0;
 
   const renderedContent = useMemo(() => {
     if (message.isDeleted) return message.content;
@@ -236,43 +215,7 @@ export default function MessageBubble({
           </div>
         )}
 
-        {!message.isDeleted && !isAnonMsg && readCount > 0 && (
-          <div className="mt-1 relative">
-            <button onClick={handleShowReadBy} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1">
-              <Eye size={11} />
-              <span>{readCount > 1 ? `Read by ${readCount}` : 'Read'}</span>
-              {loadingReadBy && <span className="animate-pulse">...</span>}
-            </button>
-
-            {showReadBy && (
-              <div className="absolute bottom-full left-0 mb-1 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-3 shadow-lg z-10 min-w-[200px] max-w-[300px] max-h-[200px] overflow-y-auto backdrop-blur-xl">
-                <p className="text-xs font-semibold text-[var(--color-text-muted)] mb-2">Read by</p>
-                {readByUsers.length === 0 ? (
-                  <p className="text-xs text-[var(--color-text-muted)]">No read receipts</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {readByUsers.map((r) => (
-                      <div key={r.userId} className="flex items-center gap-2">
-                        {r.user?.avatarUrl ? (
-                          <img src={resolveAsset(r.user.avatarUrl)} alt="" className="w-5 h-5 rounded-full object-cover" />
-                        ) : (
-                          <div className="w-5 h-5 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white text-[8px] font-bold">
-                            {r.user?.displayName?.charAt(0)?.toUpperCase() || '?'}
-                          </div>
-                        )}
-                        <span className="text-xs flex-1">{r.user?.displayName}</span>
-                        <span className="text-[10px] text-[var(--color-text-muted)]">
-                          {new Date(r.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
 
       {/* Hover Actions */}
       {!message.isDeleted && (

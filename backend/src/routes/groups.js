@@ -601,7 +601,8 @@ router.post('/:id/invites/:inviteId/accept', [
   body('avatarUrl').optional().trim(),
 ], async (req, res, next) => {
   try {
-    const member = await groupService.acceptInvite(req.params.inviteId, req.user.id, req.body.alias, req.body.avatarUrl);
+    const { alias, avatarUrl } = req.body || {};
+    const member = await groupService.acceptInvite(req.params.inviteId, req.user.id, alias, avatarUrl);
     return success(res, member);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -1255,26 +1256,14 @@ router.post(
 
 /**
  * POST /api/v1/groups/:id/messages/read — Mark all messages in group as read.
+ * Advances the caller's lastReadAt high-water mark (single field write).
  */
 router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => {
   try {
-    // Anonymous groups have no read receipts (they'd leak identity) — skip.
-    if (req.anonIdentity) return success(res, { markedCount: 0, anonSkipped: true });
-    const result = await messageService.markGroupMessagesRead(req.params.id, req.user.id);
-    return success(res, result);
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
- * GET /api/v1/groups/:id/messages/:msgId/readby — Get who read a message.
- */
-router.get('/:id/messages/:msgId/readby', requireGroupMember, async (req, res, next) => {
-  try {
-    if (req.anonIdentity) return success(res, []); // no receipts in anon groups
-    const receipts = await messageService.getReadReceipts(req.params.msgId, req.params.id);
-    return success(res, receipts);
+    // Anonymous groups have no per-user unread tracking — skip.
+    if (req.anonIdentity) return success(res, { success: true, anonSkipped: true });
+    await groupService.markGroupRead(req.params.id, req.user.id);
+    return success(res, { success: true });
   } catch (err) {
     next(err);
   }

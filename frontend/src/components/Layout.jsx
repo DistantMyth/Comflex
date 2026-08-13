@@ -82,7 +82,6 @@ export default function Layout({ children }) {
     if (!connected || !onEvent) return;
     const cleanups = [
       onEvent('message:new', debouncedFetchUnread),
-      onEvent('message:readUpdate', debouncedFetchUnread),
       onEvent('message:delete', debouncedFetchUnread),
       onEvent('dm:new', debouncedFetchUnread),
       onEvent('dm:readUpdate', debouncedFetchUnread),

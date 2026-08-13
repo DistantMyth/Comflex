@@ -163,8 +163,9 @@ async function getUnreadCountsBatch(userId, groupIds) {
 
 /**
  * Get unread message count for a user in a group.
- * A message is "unread" if the user has no read receipt for it,
- * it was sent after the user joined, and the user is not the author.
+ * A message is "unread" if it was sent after the user's lastReadAt
+ * high-water mark (falling back to their join time), wasn't authored by
+ * them, and isn't deleted.
  */
 async function getUnreadCount(groupId, userId) {
   const membership = await prisma.groupMember.findUnique({
@@ -172,29 +173,26 @@ async function getUnreadCount(groupId, userId) {
   });
   if (!membership) return 0;
 
-  // Count messages the user hasn't read (not authored by them, not deleted)
-  const totalMessages = await prisma.message.count({
+  const waterMark = membership.lastReadAt || membership.joinedAt;
+  return prisma.message.count({
     where: {
       groupId,
       authorId: { not: userId },
       isDeleted: false,
-      createdAt: { gte: membership.joinedAt },
+      createdAt: { gt: waterMark },
     },
   });
+}
 
-  const readMessages = await prisma.messageReadReceipt.count({
-    where: {
-      userId,
-      message: {
-        groupId,
-        authorId: { not: userId },
-        isDeleted: false,
-        createdAt: { gte: membership.joinedAt },
-      },
-    },
+/**
+ * Mark all messages in a group as read for a user by advancing their
+ * lastReadAt high-water mark. One field update — no per-message writes.
+ */
+async function markGroupRead(groupId, userId) {
+  return prisma.groupMember.update({
+    where: { userId_groupId: { userId, groupId } },
+    data: { lastReadAt: new Date() },
   });
-
-  return Math.max(0, totalMessages - readMessages);
 }
 
 /**
@@ -974,7 +972,7 @@ module.exports = {
   listUserGroups, getGroup, createGroup, updateGroup, deleteGroup,
   listMembers, getMembership, addMember, removeMember,
   getMemberRing, setMemberRing, getMemberPermissions, setMemberPermissions,
-  muteMember, unmuteMember, isMuted, getUnreadCount,
+  muteMember, unmuteMember, isMuted, getUnreadCount, markGroupRead,
   createInvite, acceptInvite, rejectInvite, listGroupInvites, listUserInvites,
   getInviteLink, joinViaLink,
   areFriends, getDefaultPermissions, updateRingConfig,

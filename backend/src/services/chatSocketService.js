@@ -211,22 +211,13 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'groupId is required.' });
         }
 
-        // Anonymous groups have no read receipts (they'd leak identity).
+        // Anonymous groups have no per-user unread tracking.
         if (socket.anonSessions?.some(s => s.groupId === groupId)) {
           return callback?.({ success: true, anonSkipped: true });
         }
 
-        const result = await messageService.markGroupMessagesRead(groupId, socket.user.id);
-
-        // Broadcast read update to the group so others see read receipts update
-        socket.to(groupId).emit('message:readUpdate', {
-          userId: socket.user.id,
-          displayName: socket.user.displayName,
-          groupId,
-          markedCount: result.markedCount,
-        });
-
-        callback?.({ success: true, ...result });
+        await groupService.markGroupRead(groupId, socket.user.id);
+        callback?.({ success: true });
       } catch (err) {
         console.error('[WS] message:read error:', err.message);
         callback?.({ error: err.message });

@@ -9,9 +9,8 @@ const prisma = require('../prisma');
 const notificationService = require('./notificationService');
 
 /**
- * Get paginated messages for a group (newest first), with read receipt info.
- * In anonymous groups, read receipts don't exist (they'd leak identities) and
- * message authors resolve to their frozen alias snapshot.
+ * Get paginated messages for a group (newest first).
+ * In anonymous groups, message authors resolve to their frozen alias snapshot.
  */
 async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId = null, isAnon = false) {
   const baseInclude = isAnon
@@ -23,13 +22,6 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
             globalRing: true, displayBadges: true,
           },
         },
-        readReceipts: {
-          select: {
-            userId: true,
-            readAt: true,
-          },
-        },
-        _count: { select: { readReceipts: true } },
       };
 
   const [messages, total] = await Promise.all([
@@ -79,10 +71,6 @@ async function getMessage(messageId, groupId = null, isAnon = false) {
             globalRing: true, displayBadges: true,
           },
         },
-        readReceipts: {
-          select: { userId: true, readAt: true },
-        },
-        _count: { select: { readReceipts: true } },
       };
   const msg = await prisma.message.findUnique({ where: { id: messageId }, include });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
@@ -132,11 +120,6 @@ async function sendMessage(groupId, authorId, params, anon = null) {
     return formatMessage(msg);
   }
 
-  // Auto-create read receipt for the author
-  await prisma.messageReadReceipt.create({
-    data: { messageId: msg.id, userId: authorId },
-  }).catch(() => {}); // Ignore if already exists
-
   // Notify mentioned users (excluding the author) — fire-and-forget
   const mentionIds = [...new Set((mentions || []).filter((id) => id && id !== authorId))];
   if (mentionIds.length > 0) {
@@ -161,7 +144,7 @@ async function sendMessage(groupId, authorId, params, anon = null) {
     }
   }
 
-  return formatMessage({ ...msg, readReceipts: [{ userId: authorId, readAt: new Date() }], _count: { readReceipts: 1 } });
+  return formatMessage(msg);
 }
 
 /**
@@ -192,10 +175,6 @@ async function editMessage(messageId, userId, newContent, groupId = null, anon =
             globalRing: true, displayBadges: true,
           },
         },
-        readReceipts: {
-          select: { userId: true, readAt: true },
-        },
-        _count: { select: { readReceipts: true } },
       };
 
   const updated = await prisma.message.update({
@@ -269,8 +248,6 @@ async function toggleReaction(messageId, reactorId, emoji, groupId = null, anon 
             globalRing: true, displayBadges: true,
           },
         },
-        readReceipts: { select: { userId: true, readAt: true } },
-        _count: { select: { readReceipts: true } },
       };
 
   const updatedMsg = await prisma.message.update({
@@ -378,81 +355,8 @@ async function getPinnedMessages(groupId) {
 // ============================================================
 
 /**
- * Mark a single message as read by a user.
- */
-async function markMessageRead(messageId, userId, groupId = null) {
-  await assertMessageInGroup(messageId, groupId);
-  return prisma.messageReadReceipt.upsert({
-    where: { messageId_userId: { messageId, userId } },
-    update: { readAt: new Date() },
-    create: { messageId, userId },
-  });
-}
-
-/**
- * Mark all unread messages in a group as read for a user.
- * Returns the count of newly-read messages.
- */
-async function markGroupMessagesRead(groupId, userId) {
-  // Get all message IDs in this group that the user hasn't read yet
-  const unreadMessages = await prisma.message.findMany({
-    where: {
-      groupId,
-      isDeleted: false,
-      authorId: { not: userId },
-      readReceipts: {
-        none: { userId },
-      },
-    },
-    select: { id: true },
-  });
-
-  if (unreadMessages.length === 0) return { markedCount: 0 };
-
-  // Create read receipts in batch
-  const receipts = unreadMessages.map(m => ({
-    messageId: m.id,
-    userId,
-  }));
-
-  // Use createMany for efficiency (skipDuplicates is not supported on MongoDB)
-  try {
-    const result = await prisma.messageReadReceipt.createMany({
-      data: receipts,
-    });
-    return { markedCount: result.count };
-  } catch (err) {
-    // If a duplicate constraint error occurs during race conditions, just return 0
-    return { markedCount: 0 };
-  }
-}
-
-/**
- * Get read receipts for a specific message.
- */
-async function getReadReceipts(messageId, groupId = null) {
-  await assertMessageInGroup(messageId, groupId);
-  const receipts = await prisma.messageReadReceipt.findMany({
-    where: { messageId },
-    orderBy: { readAt: 'desc' },
-  });
-
-  const userIds = receipts.map(r => r.userId);
-  const users = await prisma.user.findMany({
-    where: { id: { in: userIds } },
-    select: { id: true, displayName: true, avatarUrl: true, username: true },
-  });
-
-  return receipts.map(r => ({
-    ...r,
-    user: users.find(u => u.id === r.userId),
-  }));
-}
-
-/**
  * Format a message for API response.
- * Anonymous-group messages surface the frozen alias snapshot as `author`
- * and never include read-receipt material (there are no receipts for anon).
+ * Anonymous-group messages surface the frozen alias snapshot as `author`.
  */
 function formatMessage(msg, currentUserId = null) {
   const isAnonMsg = msg.authorType === 'anon';
@@ -491,24 +395,10 @@ function formatMessage(msg, currentUserId = null) {
     mimetype: msg.mimetype || null,
   };
 
-  // Add read receipt summary if available (never for anonymous messages)
-  if (!isAnonMsg) {
-    if (msg._count) {
-      base.readCount = msg._count.readReceipts || 0;
-    }
-    if (msg.readReceipts) {
-      base.readBy = msg.readReceipts.slice(0, 5).map(r => r.userId);
-      if (currentUserId) {
-        base.isReadByMe = msg.readReceipts.some(r => r.userId === currentUserId);
-      }
-    }
-  }
-
   return base;
 }
 
 module.exports = {
   getMessages, getMessage, sendMessage, editMessage, deleteMessage,
   pinMessage, unpinMessage, getPinnedMessages, toggleReaction,
-  markMessageRead, markGroupMessagesRead, getReadReceipts,
 };
