@@ -8,7 +8,8 @@ import { motion } from 'framer-motion';
 import { Mail, Send, ArrowLeft, Loader2, MailCheck } from 'lucide-react';
 import { authApi } from '../api/authApi';
 import { useAuth } from '../hooks/useAuth';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -67,11 +68,11 @@ export default function ForgotPasswordPage() {
     [startCooldown]
   );
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (credential) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const result = await googleLogin(credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
     } catch (err) {
       setError(err.response?.data?.message || 'Google login failed.');
@@ -132,15 +133,10 @@ export default function ForgotPasswordPage() {
             <div className="mb-6">
               <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
                 <div className="flex justify-center">
-                  <GoogleLogin
+                  <GoogleSignInButton
+                    label="Continue with Google"
                     onSuccess={handleGoogleSuccess}
-                    onError={() => setError('Google login failed.')}
-                    useOneTap={false}
-                    text="continue_with"
-                    shape="pill"
-                    size="large"
-                    width={300}
-                    theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
+                    onError={(msg) => setError(msg)}
                   />
                 </div>
               </GoogleOAuthProvider>

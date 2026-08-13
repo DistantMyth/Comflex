@@ -7,7 +7,8 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Loader2, GraduationCap } from 'lucide-react';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/AuthShell';
 
@@ -19,11 +20,11 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (credential) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const result = await googleLogin(credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Registration failed. Make sure you use your college email.');
@@ -69,15 +70,10 @@ export default function RegisterPage() {
       <div className="flex flex-col items-center gap-5 py-2">
         {GOOGLE_CLIENT_ID ? (
           <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-            <GoogleLogin
+            <GoogleSignInButton
+              label="Sign up with Google"
               onSuccess={handleGoogleSuccess}
-              onError={() => setError('Google login failed. Please try again.')}
-              useOneTap={false}
-              text="signup_with"
-              shape="pill"
-              size="large"
-              width={300}
-              theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
+              onError={(msg) => setError(msg)}
             />
           </GoogleOAuthProvider>
         ) : (

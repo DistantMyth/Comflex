@@ -8,7 +8,8 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail, Lock, LogIn, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -40,11 +41,11 @@ export default function LoginPage() {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (credential) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const result = await googleLogin(credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
     } catch (err) {
       setError(err.response?.data?.message || 'Google login failed.');
@@ -76,16 +77,7 @@ export default function LoginPage() {
         <div className="mb-6">
           <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
             <div className="flex justify-center">
-              <GoogleLogin
-                onSuccess={handleGoogleSuccess}
-                onError={() => setError('Google login failed.')}
-                useOneTap={false}
-                text="signin_with"
-                shape="pill"
-                size="large"
-                width={300}
-                theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
-              />
+              <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={(msg) => setError(msg)} />
             </div>
           </GoogleOAuthProvider>
           <div className="flex items-center gap-3 my-6">
