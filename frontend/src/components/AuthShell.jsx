@@ -16,7 +16,7 @@ const FEATURES = [
 
 export default function AuthShell({ title, subtitle, children, footer }) {
   return (
-    <div className="min-h-screen flex relative overflow-hidden">
+    <div className="min-h-svh flex relative overflow-hidden">
       {/* Decorative orbs */}
       <div className="bg-orb w-[500px] h-[500px] -top-32 -left-32 bg-[var(--color-accent)]/25 animate-float-slow" />
       <div className="bg-orb w-[420px] h-[420px] bottom-[-10%] right-[-5%] bg-[#2563eb]/20 animate-float" />
@@ -84,12 +84,7 @@ export default function AuthShell({ title, subtitle, children, footer }) {
 
       {/* Form side */}
       <div className="flex-1 flex items-center justify-center p-4 sm:p-8 relative z-10">
-        <motion.div
-          initial={{ opacity: 0, y: 26, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-          className="w-full max-w-md"
-        >
+        <div className="w-full max-w-md my-auto py-2">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[var(--color-accent-light)] via-[var(--color-accent)] to-[#2563eb] flex items-center justify-center text-white">
@@ -104,7 +99,7 @@ export default function AuthShell({ title, subtitle, children, footer }) {
             {children}
             {footer && <div className="mt-6 text-center text-sm text-[var(--color-text-muted)]">{footer}</div>}
           </div>
-        </motion.div>
+        </div>
       </div>
     </div>
   );

@@ -120,7 +120,6 @@ export default function SetPasswordPage() {
                 minLength={3}
                 maxLength={30}
                 required
-                autoFocus
                 className="pl-10"
               />
             </div>
@@ -161,7 +160,6 @@ export default function SetPasswordPage() {
                 onChange={(e) => setPasswordValue(e.target.value)}
                 minLength={8}
                 required
-                autoFocus
                 className="pl-10"
               />
             </div>
