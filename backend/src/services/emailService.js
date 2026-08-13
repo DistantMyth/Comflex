@@ -4,8 +4,6 @@
  * Reads EMAIL_PROVIDER from env to determine transport:
  *   - "console" (default/dev) → logs emails to the terminal
  *   - "smtp" → uses Nodemailer with SMTP credentials
- *   - "brevo" → uses the Brevo transactional API (no SMTP login,
- *     no IP allowlisting — works from any egress, e.g. Render free tier).
  *
  * All email sending goes through this service so the transport
  * can be swapped via .env without touching any business logic.
@@ -46,41 +44,6 @@ function getTransporter() {
         pass: env.SMTP_PASS,
       },
     });
-    return _transporter;
-  }
-
-  if (env.EMAIL_PROVIDER === 'brevo') {
-    if (!env.EMAIL_API_KEY) {
-      throw new Error('EMAIL_PROVIDER=brevo requires EMAIL_API_KEY (generate one in Brevo → SMTP & API → API Keys).');
-    }
-    if (!env.EMAIL_FROM) {
-      throw new Error('EMAIL_PROVIDER=brevo requires EMAIL_FROM set to an approved sender in Brevo.');
-    }
-    _transporter = {
-      sendMail: async (opts) => {
-        const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-          method: 'POST',
-          headers: {
-            'api-key': env.EMAIL_API_KEY,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            sender: { email: env.EMAIL_FROM },
-            to: [{ email: opts.to }],
-            subject: opts.subject,
-            textContent: opts.text,
-            htmlContent: opts.html,
-          }),
-        });
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '');
-          throw new Error(`Brevo API error ${res.status}: ${detail.slice(0, 300)}`);
-        }
-        const data = await res.json().catch(() => ({}));
-        return { messageId: data.messageId || `brevo-${Date.now()}` };
-      },
-    };
     return _transporter;
   }
 
