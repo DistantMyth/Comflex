@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './useAuth';
 import { socketOrigin } from '../utils/resolveAsset';
-import { getAccessToken } from '../api/client';
+import { getAccessToken, getAnonSessions } from '../api/client';
 
 // In dev, Vite proxies /socket.io to the backend. In production (Vercel → Render)
 // the socket must connect to the backend origin directly.
@@ -33,8 +33,14 @@ export function useSocket() {
     const token = getAccessToken();
     if (!token) return;
 
+    // Anonymous group sessions ride along — verified on handshake so the
+    // server can join the corresponding rooms without knowing who we are.
+    const anonSessions = Object.entries(getAnonSessions())
+      .filter(([, s]) => s?.identityId && s?.secret)
+      .map(([groupId, s]) => ({ groupId, identityId: s.identityId, secret: s.secret }));
+
     const socket = io(SOCKET_URL, {
-      auth: { token },
+      auth: { token, anon: anonSessions },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
@@ -65,14 +71,30 @@ export function useSocket() {
     };
   }, [isAuthenticated]);
 
-  const sendMessage = useCallback((groupId, content, mentions = [], replyToId, forwarded = false, msgType = 'text') => {
+  const sendMessage = useCallback((groupId, content, mentions = [], replyToId, forwarded = false, msgType = 'text', anonIdentityId) => {
     return new Promise((resolve, reject) => {
       if (!socketRef.current?.connected) {
         return reject(new Error('Not connected'));
       }
-      socketRef.current.emit('message:send', { groupId, content, mentions, replyToId, forwarded, msgType }, (response) => {
+      socketRef.current.emit('message:send', { groupId, content, mentions, replyToId, forwarded, msgType, anonIdentityId }, (response) => {
         if (response?.error) reject(new Error(response.error));
         else resolve(response?.message);
+      });
+    });
+  }, []);
+
+  /**
+   * Join an anonymous group room mid-session (right after claiming an
+   * identity via link/invite/creator claim).
+   */
+  const joinAnonGroup = useCallback((groupId, identityId, secret) => {
+    return new Promise((resolve, reject) => {
+      if (!socketRef.current?.connected) {
+        return reject(new Error('Not connected'));
+      }
+      socketRef.current.emit('anon:join', { groupId, identityId, secret }, (response) => {
+        if (response?.error) reject(new Error(response.error));
+        else resolve(response);
       });
     });
   }, []);
@@ -124,6 +146,7 @@ export function useSocket() {
     socket: socketRef.current,
     connected,
     sendMessage,
+    joinAnonGroup,
     startTyping,
     stopTyping,
     markRead,

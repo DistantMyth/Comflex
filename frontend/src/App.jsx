@@ -35,6 +35,7 @@ import MessagesPage from './pages/MessagesPage';
 import EventsPage from './pages/EventsPage';
 import ManageEventsPage from './pages/ManageEventsPage';
 import EventDetailsPage from './pages/EventDetailsPage';
+import EventInvitePage from './pages/EventInvitePage';
 import JoinGroupPage from './pages/JoinGroupPage';
 import ResourcesPage from './pages/ResourcesPage';
 import StorePage from './pages/StorePage';
@@ -71,6 +72,7 @@ function AppRoutes() {
         <Route path="/messages/:userId" element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute><EventsPage /></ProtectedRoute>} />
         <Route path="/manage-events" element={<ProtectedRoute><ManageEventsPage /></ProtectedRoute>} />
+        <Route path="/events/invite/:token" element={<ProtectedRoute><EventInvitePage /></ProtectedRoute>} />
         <Route path="/events/:id" element={<ProtectedRoute><EventDetailsPage /></ProtectedRoute>} />
         <Route path="/resources" element={<ProtectedRoute><ResourcesPage /></ProtectedRoute>} />
         <Route path="/store" element={<ProtectedRoute><StorePage /></ProtectedRoute>} />

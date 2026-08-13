@@ -1,6 +1,24 @@
 const { PrismaClient } = require('@prisma/client');
+const crypto = require('crypto');
 const { success, error } = require('../utils/apiResponse');
 const prisma = new PrismaClient();
+
+/**
+ * Strip private/secret fields from event payloads before returning to clients.
+ * Invite tokens are secret (only shared via the generate endpoint); user-ID
+ * whitelists/blacklists are personal data and should not leak to non-organizers.
+ */
+function sanitizeEvent(event, { isOrganizer = false } = {}) {
+  if (!event) return event;
+  const safe = { ...event };
+  if (!isOrganizer) {
+    delete safe.inviteToken;
+    delete safe.inviteTokenExpiry;
+    delete safe.allowedUserIds;
+    delete safe.blockedUserIds;
+  }
+  return safe;
+}
 
 exports.listEvents = async (req, res, next) => {
   try {
@@ -24,7 +42,7 @@ exports.listEvents = async (req, res, next) => {
       orderBy: { startDate: 'asc' }
     });
 
-    return success(res, events);
+    return success(res, events.map(e => sanitizeEvent(e)));
   } catch (err) {
     next(err);
   }
@@ -51,7 +69,9 @@ exports.listManagedEvents = async (req, res, next) => {
       });
     }
 
-    return success(res, events);
+    // Managed events: organizers may manage access lists, but the raw invite
+    // token still stays secret — it is only re-shared via the invite-link endpoint.
+    return success(res, events.map(e => ({ ...e, inviteToken: undefined })));
   } catch (err) {
     next(err);
   }
@@ -74,7 +94,10 @@ exports.getEvent = async (req, res, next) => {
 
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
 
-    return success(res, event);
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const isOrganizer = event.creatorId === user.id || event.organizers.some(o => o.userId === user.id);
+
+    return success(res, sanitizeEvent(event, { isOrganizer: isOrganizer || user.globalRing === 0 }));
   } catch (err) {
     next(err);
   }
@@ -85,16 +108,14 @@ exports.createEvent = async (req, res, next) => {
     const {
       title, description, startDate, endDate, durationHours, durationMinutes, category, targetTags,
       parentId, keepTeamsSame, isTeamEvent, minTeamSize, maxTeamSize, status,
-      taskViewMode, scoreMode, wrongSubmissionPenalty, autoStart
+      taskViewMode, scoreMode, wrongSubmissionPenalty, autoStart,
+      inviteMode, allowedCohorts, blockedCohorts, allowedUserIds, blockedUserIds, rewardBudget
     } = req.body;
 
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
 
-    // Ensure the user has the right to create an event at the platform level
-    // Wait, let's treat admin (globalRing 0) or user.canCreateEvents as autorized.
-    if (user.globalRing > 1 && !user.canCreateEvents && !parentId) {
-      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized to create main events.' } });
-    }
+    // ANY authenticated user may create events; participation is invite-only
+    // by default (inviteMode) so open registration can never be forced on people.
 
     // If it's a subevent, check if user is an organizer of the parent event
     if (parentId) {
@@ -130,7 +151,13 @@ exports.createEvent = async (req, res, next) => {
         maxTeamSize: maxTeamSize || 1,
         status: status || 'draft',
         autoStart: autoStart !== undefined ? autoStart : true,
-        creatorId: user.id
+        creatorId: user.id,
+        inviteMode: inviteMode || 'open',
+        allowedCohorts: allowedCohorts || [],
+        blockedCohorts: blockedCohorts || [],
+        allowedUserIds: allowedUserIds || [],
+        blockedUserIds: blockedUserIds || [],
+        rewardBudget: rewardBudget || null
       }
     });
 
@@ -223,7 +250,7 @@ exports.updateEvent = async (req, res, next) => {
          delete body.category;
       }
       // Non-creator organizers cannot change lifecycle/reward/eligibility fields
-      for (const f of ['status', 'targetTags', 'minTeamSize', 'maxTeamSize', 'rewardTiers', 'isTeamEvent', 'autoStart', 'keepTeamsSame', 'taskViewMode', 'scoreMode']) {
+      for (const f of ['status', 'targetTags', 'minTeamSize', 'maxTeamSize', 'rewardTiers', 'isTeamEvent', 'autoStart', 'keepTeamsSame', 'taskViewMode', 'scoreMode', 'inviteMode', 'allowedCohorts', 'blockedCohorts', 'allowedUserIds', 'blockedUserIds', 'rewardBudget']) {
          delete body[f];
       }
     }
@@ -232,7 +259,8 @@ exports.updateEvent = async (req, res, next) => {
     const ALLOWED_FIELDS = ['title', 'description', 'category', 'startDate', 'endDate',
       'durationHours', 'durationMinutes', 'wrongSubmissionPenalty', 'status', 'targetTags',
       'minTeamSize', 'maxTeamSize', 'rewardTiers', 'isTeamEvent', 'autoStart',
-      'keepTeamsSame', 'taskViewMode', 'scoreMode'];
+      'keepTeamsSame', 'taskViewMode', 'scoreMode',
+      'inviteMode', 'allowedCohorts', 'blockedCohorts', 'allowedUserIds', 'blockedUserIds', 'rewardBudget'];
     const updateData = {};
     for (const f of ALLOWED_FIELDS) {
       if (body[f] !== undefined) updateData[f] = body[f];
@@ -279,13 +307,24 @@ exports.createTeam = async (req, res, next) => {
     const { id: eventId } = req.params;
     const { name } = req.body;
 
-    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    const event = await prisma.event.findUnique({ where: { id: eventId }, include: { organizers: true } });
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
 
     const hasStarted = event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate));
     if (hasStarted) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Team formation is closed. The event has already started.' } });
 
     const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const eligibility = eligibilityError(event, currentUser);
+    if (eligibility) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: eligibility } });
+    }
+
+    // Invite-only events have no "Join" button — participation is via organizer
+    // invite link or team invites only.
+    if (event.inviteMode === 'invite_only') {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'This event is invite-only. Join via an organizer invite link or a team invitation.' } });
+    }
+
     if (event.targetTags && event.targetTags.length > 0) {
       if (!currentUser.cohortTags || !event.targetTags.some(tag => currentUser.cohortTags.includes(tag))) {
         return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not eligible to participate in this event.' } });
@@ -329,7 +368,7 @@ exports.createTeam = async (req, res, next) => {
 exports.listTeams = async (req, res, next) => {
   try {
     const { id: eventId } = req.params;
-    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    const event = await prisma.event.findUnique({ where: { id: eventId }, include: { organizers: true } });
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
 
     const isOrganizer = event.creatorId === req.user.id || event.organizers?.some(o => o.userId === req.user.id) || req.user.globalRing === 0;
@@ -381,7 +420,7 @@ exports.inviteToTeam = async (req, res, next) => {
        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only team leader can invite.' } });
     }
 
-    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    const event = await prisma.event.findUnique({ where: { id: eventId }, include: { organizers: true } });
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
 
     const hasStarted = event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate));
@@ -395,7 +434,12 @@ exports.inviteToTeam = async (req, res, next) => {
 
     const invitedUser = await prisma.user.findUnique({ where: { id: userId } });
     if (!invitedUser) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'User not found.' } });
-    
+
+    const eligibility = eligibilityError(event, invitedUser);
+    if (eligibility) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: `Cannot invite: ${eligibility}` } });
+    }
+
     if (event.targetTags && event.targetTags.length > 0) {
       if (!invitedUser.cohortTags || !event.targetTags.some(tag => invitedUser.cohortTags.includes(tag))) {
         return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'User is not eligible for this event.' } });
@@ -449,6 +493,12 @@ exports.acceptTeamInvite = async (req, res, next) => {
     }
 
     const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+
+    const eligibility = eligibilityError(event, currentUser);
+    if (eligibility) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: `Cannot join: ${eligibility}` } });
+    }
+
     if (event.targetTags && event.targetTags.length > 0) {
       if (!currentUser.cohortTags || !event.targetTags.some(tag => currentUser.cohortTags.includes(tag))) {
         return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not eligible for this event.' } });
@@ -757,6 +807,9 @@ exports.submitTask = async (req, res, next) => {
 
     if (!member) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not in a team.' } });
 
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+
     // Ensure they haven't already solved it
     const existingCorrect = await prisma.eventSubmission.findFirst({
       where: { teamId: member.teamId, taskId, status: 'correct' }
@@ -795,9 +848,96 @@ exports.submitTask = async (req, res, next) => {
       }
     });
 
+    // AUTO-REWARD: when a preconfigured answer is graded correct, distribute
+    // credits/badges from the organizer's budget; when the budget runs out,
+    // the event completes automatically.
+    if (status === 'correct' && event.rewardBudget) {
+      await applyRewardBudget(event, member.team, sub, scoreAwarded);
+    }
+
     return success(res, sub, 201);
   } catch (err) { next(err); }
 };
+
+/**
+ * Consume the event's reward budget for a correct answer and pay out to the
+ * team. If the budget cannot cover the answer (credits or badges exhausted),
+ * the event is marked completed — it's over when the organizer runs out.
+ */
+async function applyRewardBudget(event, team, sub, scoreAwarded) {
+  const budget = event.rewardBudget || {};
+  const creditsPerCorrect = Number(budget.creditsPerCorrect) || 0;
+  const badgesPerCorrect = Number(budget.badgesPerCorrect) || 0;
+  const badgeId = budget.badgeId || null;
+  const maxCredits = Number(budget.maxCredits) || 0;
+  const maxBadges = Number(budget.maxBadges) || 0;
+
+  const members = await prisma.eventTeamMember.findMany({
+    where: { teamId: team.id },
+    select: { userId: true }
+  });
+  const memberCount = Math.max(members.length, 1);
+
+  const creditsCost = creditsPerCorrect * memberCount;
+  const badgesCost = (badgeId ? badgesPerCorrect : 0) * memberCount;
+
+  const creditsLeft = maxCredits - (event.rewardCreditsSpent || 0);
+  const badgesLeft = maxBadges - (event.rewardBadgesSpent || 0);
+
+  // Budget can't cover this answer → no payout, event is over.
+  if (creditsCost > creditsLeft || badgesCost > badgesLeft) {
+    await prisma.event.update({
+      where: { id: event.id },
+      data: { status: 'completed' }
+    });
+    return;
+  }
+
+  const rewardRef = `event_auto_${event.id}_${sub.id}`;
+
+  for (const m of members) {
+    if (creditsCost > 0) {
+      await prisma.user.update({
+        where: { id: m.userId },
+        data: { creditBalance: { increment: creditsPerCorrect } }
+      });
+      await prisma.transaction.create({
+        data: {
+          receiverId: m.userId,
+          amount: creditsPerCorrect,
+          type: 'event_reward',
+          referenceId: rewardRef
+        }
+      });
+    }
+    if (badgeId && badgesPerCorrect > 0) {
+      await prisma.userBadge.upsert({
+        where: { userId_badgeId: { userId: m.userId, badgeId } },
+        update: {},
+        create: { userId: m.userId, badgeId, source: 'event' }
+      });
+    }
+  }
+
+  await prisma.event.update({
+    where: { id: event.id },
+    data: {
+      rewardCreditsSpent: event.rewardCreditsSpent + creditsCost,
+      rewardBadgesSpent: event.rewardBadgesSpent + badgesCost
+    }
+  });
+
+  const creditsNowLeft = (maxCredits - (event.rewardCreditsSpent + creditsCost)) <= 0;
+  const badgesNowLeft = (maxBadges - (event.rewardBadgesSpent + badgesCost)) <= 0;
+  const hasCreditBudget = maxCredits > 0;
+  const hasBadgeBudget = maxBadges > 0;
+  if ((hasCreditBudget && creditsNowLeft) || (hasBadgeBudget && badgesNowLeft)) {
+    await prisma.event.update({
+      where: { id: event.id },
+      data: { status: 'completed' }
+    });
+  }
+}
 
 /**
  * Shared helper — is the user the event creator, an organizer, or a global admin?
@@ -813,6 +953,152 @@ async function isEventOrganizer(eventId, userId) {
     event.organizers.some(o => o.userId === userId);
   return { event, isOrganizer };
 }
+
+/**
+ * Eligibility check against an event's whitelist/blacklist.
+ * - Blacklisted user → denied.
+ * - Blacklisted cohort tag → denied.
+ * - If a whitelist exists (allowedUserIds / allowedCohorts non-empty),
+ *   the user must match at least one whitelist rule.
+ * - Global admins always pass.
+ * Returns null when eligible, otherwise an error message.
+ */
+function eligibilityError(event, user) {
+  if (user.globalRing === 0) return null;
+  if (event.creatorId === user.id) return null;
+  if (event.organizers?.some(o => o.userId === user.id)) return null;
+
+  if ((event.blockedUserIds || []).includes(user.id)) {
+    return 'You are blacklisted from this event.';
+  }
+  const userTags = user.cohortTags || [];
+  const blockedCohorts = event.blockedCohorts || [];
+  if (blockedCohorts.some(tag => userTags.includes(tag))) {
+    return 'Your cohort is blacklisted from this event.';
+  }
+
+  const allowedUsers = event.allowedUserIds || [];
+  const allowedCohorts = event.allowedCohorts || [];
+  const hasWhitelist = allowedUsers.length > 0 || allowedCohorts.length > 0;
+  if (hasWhitelist) {
+    const allowedByUser = allowedUsers.includes(user.id);
+    const allowedByCohort = allowedCohorts.some(tag => userTags.includes(tag));
+    if (!allowedByUser && !allowedByCohort) {
+      return 'This event is restricted to whitelisted users/cohorts.';
+    }
+  }
+  return null;
+}
+
+const EVENT_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+exports.generateEventInviteLink = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { isOrganizer, event } = await isEventOrganizer(id, req.user.id);
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+    if (!isOrganizer && req.user.globalRing !== 0) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Only organizers can create invite links.' } });
+    }
+
+    // Rotating links: keep the existing token while it's still valid.
+    const existing = await prisma.event.findUnique({
+      where: { id },
+      select: { inviteToken: true, inviteTokenExpiry: true }
+    });
+    if (existing.inviteToken && existing.inviteTokenExpiry && existing.inviteTokenExpiry.getTime() > Date.now()) {
+      return success(res, { token: existing.inviteToken, expiresAt: existing.inviteTokenExpiry });
+    }
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + EVENT_INVITE_TTL_MS);
+    await prisma.event.update({
+      where: { id },
+      data: { inviteToken: token, inviteTokenExpiry: expiresAt }
+    });
+
+    return success(res, { token, expiresAt });
+  } catch (err) { next(err); }
+};
+
+exports.getEventInviteInfo = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const event = await prisma.event.findFirst({ where: { inviteToken: token }, include: { organizers: true } });
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite link not found.' } });
+    if (!event.inviteTokenExpiry || event.inviteTokenExpiry.getTime() < Date.now()) {
+      return res.status(410).json({ error: { code: 'EXPIRED', message: 'This invite link has expired.' } });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const eligibility = eligibilityError(event, user);
+
+    const alreadyJoined = await prisma.eventTeamMember.findFirst({
+      where: { userId: req.user.id, team: { eventId: event.id } }
+    });
+
+    return success(res, {
+      id: event.id,
+      title: event.title,
+      description: event.description,
+      category: event.category,
+      startDate: event.startDate,
+      status: event.status,
+      isTeamEvent: event.isTeamEvent,
+      minTeamSize: event.minTeamSize,
+      maxTeamSize: event.maxTeamSize,
+      inviteMode: event.inviteMode,
+      eligible: eligibility === null,
+      reason: eligibility,
+      alreadyJoined: !!alreadyJoined
+    });
+  } catch (err) { next(err); }
+};
+
+exports.joinEventViaInvite = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const event = await prisma.event.findFirst({ where: { inviteToken: token }, include: { organizers: true } });
+    if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Invite link not found.' } });
+    if (!event.inviteTokenExpiry || event.inviteTokenExpiry.getTime() < Date.now()) {
+      return res.status(410).json({ error: { code: 'EXPIRED', message: 'This invite link has expired.' } });
+    }
+
+    const hasStarted = event.status === 'ongoing' || event.status === 'completed' ||
+      (event.autoStart && new Date() >= new Date(event.startDate));
+    if (hasStarted) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'The event has already started.' } });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const eligibility = eligibilityError(event, user);
+    if (eligibility) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: eligibility } });
+    }
+
+    // Already in a team → return it (idempotent join).
+    const existing = await prisma.eventTeamMember.findFirst({
+      where: { userId: req.user.id, team: { eventId: event.id } },
+      include: { team: true }
+    });
+    if (existing) return success(res, { team: existing.team, alreadyJoined: true });
+
+    const team = await prisma.eventTeam.create({
+      data: {
+        eventId: event.id,
+        name: `${user.displayName || 'Member'}'s Team`,
+        leaderId: req.user.id,
+        status: (event.isTeamEvent && event.minTeamSize > 1) ? 'pending' : 'registered'
+      }
+    });
+
+    await prisma.eventTeamMember.create({
+      data: { teamId: team.id, userId: req.user.id, status: 'verified' }
+    });
+
+    return success(res, { team, alreadyJoined: false }, 201);
+  } catch (err) { next(err); }
+};
 
 exports.listSubmissions = async (req, res, next) => {
   try {

@@ -23,5 +23,8 @@ export const eventApi = {
   evaluateSubmission: (eventId, submissionId, data) => client.post(`/events/${eventId}/submissions/${submissionId}/evaluate`, data),
   adjustTeamPoints: (eventId, teamId, data) => client.post(`/events/${eventId}/teams/${teamId}/points`, data),
   awardTeamRewards: (eventId, teamId, data) => client.post(`/events/${eventId}/teams/${teamId}/rewards`, data),
-  distributeRewards: (eventId) => client.post(`/events/${eventId}/distribute-rewards`)
+  distributeRewards: (eventId) => client.post(`/events/${eventId}/distribute-rewards`),
+  createInviteLink: (eventId) => client.post(`/events/${eventId}/invite-link`),
+  getEventInviteInfo: (token) => client.get(`/events/invite/${token}`),
+  joinEventViaInvite: (token) => client.post(`/events/invite/${token}/join`)
 };

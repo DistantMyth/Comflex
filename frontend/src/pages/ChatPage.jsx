@@ -12,10 +12,12 @@ import { Settings, Users } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { groupApi } from '../api/groupApi';
+import { getAnonSessions, setAnonSession, removeAnonSession } from '../api/client';
 import MessageBubble from '../components/MessageBubble';
 import GroupSidebar from '../components/GroupSidebar';
 import UserProfilePanel from '../components/UserProfilePanel';
 import GroupSettingsPanel from '../components/GroupSettingsPanel';
+import AnonGroupPanel from '../components/AnonGroupPanel';
 
 import { friendApi } from '../api/friendApi';
 import { storeApi } from '../api/storeApi';
@@ -24,7 +26,7 @@ import resolveAsset from '../utils/resolveAsset';
 export default function ChatPage() {
   const { id: groupId } = useParams();
   const { user } = useAuth();
-  const { connected, sendMessage: wsSendMessage, startTyping, stopTyping, markRead, onEvent } = useSocket();
+  const { connected, sendMessage: wsSendMessage, startTyping, stopTyping, markRead, onEvent, joinAnonGroup } = useSocket();
 
   const [group, setGroup] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -49,6 +51,17 @@ export default function ChatPage() {
   // Advanced messaging states
   const [replyingTo, setReplyingTo] = useState(null);
   const [fileAttachment, setFileAttachment] = useState(null);
+
+  // Anonymous group state
+  const [isAnon, setIsAnon] = useState(false);
+  const [myIdentity, setMyIdentity] = useState(null);
+  const [reportTarget, setReportTarget] = useState(null); // { identityId, alias }
+  const [reportReason, setReportReason] = useState('');
+  // Key-restore gate for anonymous groups (no session on this device)
+  const [anonGate, setAnonGate] = useState(null); // { joined, group } | null = not applicable
+  const [restoreKey, setRestoreKey] = useState('');
+  const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
   
   // Modals for forwarding
   const [forwardingMsg, setForwardingMsg] = useState(null);
@@ -108,7 +121,8 @@ export default function ChatPage() {
           friendApi.listFriends().catch(() => ({ data: { data: [] } })),
           storeApi.getAllBadges().catch(() => ({ data: { data: [] } })),
         ]);
-        setGroup(groupRes.data.data);
+        const grp = groupRes.data.data;
+        setGroup(grp);
         setMessages(msgsRes.data.data.messages.reverse()); // oldest first
         setFriendIds(friendsRes.data.data.map(f => f.id));
 
@@ -116,14 +130,27 @@ export default function ChatPage() {
         (badgesRes.data?.data || []).forEach(b => bMap[b.id] = b);
         setBadgeMap(bMap);
 
-        // Get members for mention autocomplete
-        try {
-          const membersRes = await groupApi.listMembers(groupId);
-          const membersList = membersRes.data.data || [];
-          setMembers(membersList);
-          const me = membersList.find((m) => m.id === user?.id);
-          if (me) setMembership(me);
-        } catch { /* ignore */ }
+        const anon = grp?.isAnonymous === true;
+        setIsAnon(anon);
+
+        if (anon) {
+          // Anonymous groups: no member list, no rings — identity from
+          // local storage.
+          const identity = getAnonSessions()[groupId] || null;
+          setMyIdentity(identity);
+          setAnonGate(null); // session present — no gate
+          setMembers([]);
+          setMembership(null);
+        } else {
+          // Get members for mention autocomplete
+          try {
+            const membersRes = await groupApi.listMembers(groupId);
+            const membersList = membersRes.data.data || [];
+            setMembers(membersList);
+            const me = membersList.find((m) => m.id === user?.id);
+            if (me) setMembership(me);
+          } catch { /* ignore */ }
+        }
 
         // Mark messages as read
         try {
@@ -133,12 +160,65 @@ export default function ChatPage() {
             groupApi.markMessagesRead(groupId).catch(() => {});
           }
         } catch {}
-      } catch { /* ignore */ }
+      } catch {
+        // getGroup fails with 403 for anonymous groups when this device has
+        // no session — the whole batch is rejected. Determine whether a
+        // saved key could get this user back in.
+        try {
+          const enterRes = await groupApi.anonEnterCheck(groupId);
+          const enter = enterRes.data.data;
+          setAnonGate({ joined: !!enter.joined, group: enter });
+          setIsAnon(true);
+          setMyIdentity(null);
+          setMembers([]);
+          setMembership(null);
+        } catch { /* not an anon group or other error — keep empty view */ }
+      }
       finally { setLoading(false); }
     };
 
     loadData();
   }, [groupId, user?.id]);
+
+  // Restore an anonymous identity with the user's saved key
+  const handleRestoreKey = async () => {
+    const key = restoreKey.trim();
+    if (!key) return;
+    setRestoring(true);
+    setRestoreError('');
+    try {
+      const res = await groupApi.restoreAnonIdentity(groupId, key);
+      const idn = res.data.data;
+      setAnonSession(groupId, {
+        identityId: idn.identityId,
+        secret: idn.secret,
+        alias: idn.alias,
+        aliasTag: idn.aliasTag,
+        avatarUrl: idn.avatarUrl,
+      });
+      setAnonGate(null);
+      setRestoreKey('');
+      // Reload chat with the restored identity
+      const [groupRes, msgsRes] = await Promise.all([
+        groupApi.getGroup(groupId),
+        groupApi.getMessages(groupId, 1, 50),
+      ]);
+      setGroup(groupRes.data.data);
+      setMyIdentity(getAnonSessions()[groupId]);
+      setMessages(msgsRes.data.data.messages.reverse());
+    } catch (err) {
+      const apiErr = err.response?.data?.error;
+      setRestoreError(apiErr?.message || 'Restore failed. Check your key.');
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  // Sub-tune socket events on anon group: send via socket requires identity
+  useEffect(() => {
+    if (!isAnon || !connected || !myIdentity?.identityId || !myIdentity?.secret) return;
+    joinAnonGroup(groupId, myIdentity.identityId, myIdentity.secret).catch(() => {});
+  }, [isAnon, connected, myIdentity, groupId, joinAnonGroup]);
 
   // Subscribe to real-time events
   useEffect(() => {
@@ -238,20 +318,20 @@ export default function ChatPage() {
     setShowMentionPopup(true);
   }, []);
 
-  // Handle typing indicator
+  // Handle typing indicator (suppressed for anonymous groups)
   const handleInputChange = useCallback((e) => {
     const value = e.target.value;
     setMessageInput(value);
-    detectMention(value, e.target.selectionStart || value.length);
+    if (!isAnon) detectMention(value, e.target.selectionStart || value.length);
 
     if (value.trim()) {
-      startTyping(groupId);
+      if (!isAnon) startTyping(groupId);
       clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = setTimeout(() => stopTyping(groupId), 2000);
+      typingTimeoutRef.current = setTimeout(() => { if (!isAnon) stopTyping(groupId); }, 2000);
     } else {
-      stopTyping(groupId);
+      if (!isAnon) stopTyping(groupId);
     }
-  }, [groupId, startTyping, stopTyping, detectMention]);
+  }, [groupId, isAnon, startTyping, stopTyping, detectMention]);
 
   // Insert a mention into the input
   const insertMention = useCallback((member) => {
@@ -312,7 +392,7 @@ export default function ChatPage() {
     if ((!content && !fileAttachment) || sending) return;
 
     setSending(true);
-    stopTyping(groupId);
+    if (!isAnon) stopTyping(groupId);
 
     // Provide instant UI feedback and allow typing the next message immediately
     setMessageInput('');
@@ -320,10 +400,12 @@ export default function ChatPage() {
     setPendingMentions([]);
     setShowMentionPopup(false);
 
-    // Extract mention user IDs
-    const mentionIds = pendingMentions
-      .filter(m => content.includes(`@${m.displayName}`))
-      .map(m => m.userId);
+    // Extract mention user IDs (anonymous groups have no mentions)
+    const mentionIds = isAnon
+      ? []
+      : pendingMentions
+          .filter(m => content.includes(`@${m.displayName}`))
+          .map(m => m.userId);
 
     try {
       if (fileAttachment) {
@@ -346,7 +428,7 @@ export default function ChatPage() {
       } else {
         // Standard payload via WebSocket or REST
         if (connected) {
-          const newMsg = await wsSendMessage(groupId, content, mentionIds, replyingTo?.id);
+          const newMsg = await wsSendMessage(groupId, content, mentionIds, replyingTo?.id, false, 'text', isAnon ? myIdentity?.identityId : undefined);
           if (newMsg) {
             setMessages((prev) => {
               if (prev.some(m => m.id === newMsg.id)) return prev;
@@ -454,13 +536,100 @@ export default function ChatPage() {
   };
 
   const userPerms = membership?.permissions || {};
-  const canManageSettings = userPerms.can_edit_group_info || userPerms.can_manage_roles || isAdmin || membership?.isCreator;
+  const canManageSettings = !isAnon && (userPerms.can_edit_group_info || userPerms.can_manage_roles || isAdmin || membership?.isCreator);
+  const isAnonCreator = isAnon && (group?.creatorId === user?.id || isAdmin);
+
+  // Report an identity (anonymous groups)
+  const submitReport = async (e) => {
+    e?.preventDefault();
+    if (!reportTarget || !reportReason.trim()) return;
+    try {
+      await groupApi.reportAnonIdentity(groupId, reportTarget.identityId, reportReason.trim());
+      setReportTarget(null);
+      setReportReason('');
+      alert('Report submitted. The group creator can review it.');
+    } catch (err) {
+      alert(err.response?.data?.error?.message || 'Report failed.');
+    }
+  };
+
+  // Leave an anonymous group
+  const handleAnonLeft = () => {
+    setMyIdentity(null);
+    setIsAnon(false);
+    window.location.href = '/groups';
+  };
 
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto">
         <div className="skeleton h-8 w-48 mb-4" />
         <div className="skeleton h-96 w-full rounded-xl" />
+      </div>
+    );
+  }
+
+  // Anonymous group without a local session: gate on the saved key.
+  if (anonGate) {
+    return anonGate.joined ? (
+      <div className="max-w-md mx-auto mt-16">
+        <div className="glass-card p-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center justify-center">
+            <span className="text-2xl">🔑</span>
+          </div>
+          <h2 className="font-display text-xl font-bold mb-1">
+            {anonGate.group.displayName || anonGate.group.name}
+          </h2>
+          <p className="text-sm text-[var(--color-text-muted)] mb-5">
+            Anonymous group — enter your saved key to restore your identity.
+            <span className="block mt-1 text-[var(--color-warning)] text-xs">
+              The key was shown once when you joined. Without it, you can't
+              recover this alias.
+            </span>
+          </p>
+          <input
+            type="password"
+            autoFocus
+            className="input w-full mb-3 text-center font-mono"
+            placeholder="identityId.secret"
+            value={restoreKey}
+            onChange={e => setRestoreKey(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleRestoreKey(); }}
+          />
+          {restoreError && (
+            <p className="text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 p-2 rounded-lg mb-3">
+              {restoreError}
+            </p>
+          )}
+          <button
+            onClick={handleRestoreKey}
+            disabled={restoring || !restoreKey.trim()}
+            className="btn btn-primary w-full"
+          >
+            {restoring ? 'Restoring...' : 'Restore identity'}
+          </button>
+        </div>
+      </div>
+    ) : (
+      <div className="max-w-md mx-auto mt-16">
+        <div className="glass-card p-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/25 flex items-center justify-center">
+            <span className="text-2xl">🔒</span>
+          </div>
+          <h2 className="font-display text-xl font-bold mb-1">
+            {anonGate.group.displayName || anonGate.group.name}
+          </h2>
+          <p className="text-sm text-[var(--color-text-secondary)] mt-2">
+            This is an anonymous group and you're not enrolled on this
+            account. You'll need an invite link from a member to join.
+          </p>
+          <Link
+            to="/groups"
+            className="btn btn-secondary w-full mt-5"
+          >
+            Back to My Groups
+          </Link>
+        </div>
       </div>
     );
   }
@@ -484,7 +653,9 @@ export default function ChatPage() {
           <div className="flex-1">
             <h1 className="text-lg font-bold">{group?.displayName || group?.name}</h1>
             <p className="text-xs text-[var(--color-text-muted)]">
-              {group?.memberCount} members
+              {group?.memberCount} member{group?.memberCount === 1 ? '' : 's'}
+              {isAnon && <span className="ml-2 text-[var(--color-accent)]">● Anonymous</span>}
+              {isAnon && <span className="ml-1">• no identities linked</span>}
               {connected && <span className="ml-2 text-[var(--color-success)]">● Live</span>}
               {!connected && <span className="ml-2 text-[var(--color-warning)]">● Reconnecting...</span>}
             </p>
@@ -503,7 +674,7 @@ export default function ChatPage() {
               onClick={() => setShowSidebar(!showSidebar)}
               className="btn btn-secondary text-sm px-3 py-2"
             >
-              <Users size={15} /> {showSidebar ? 'Hide' : 'Members'}
+              <Users size={15} /> {showSidebar ? 'Hide' : isAnon ? 'My alias' : 'Members'}
             </button>
           </div>
         </div>
@@ -581,6 +752,10 @@ export default function ChatPage() {
                     members={members}
                     badgeMap={badgeMap}
                     isFriend={msg.authorId !== user?.id && friendIds.includes(msg.authorId)}
+                    anonMode={isAnon}
+                    myIdentityId={isAnon ? myIdentity?.identityId : null}
+                    isAnonCreator={isAnonCreator}
+                    onReport={isAnon && !isAnonCreator ? (identityId, label) => setReportTarget({ identityId, label }) : null}
                   />
                 ))
               )}
@@ -595,7 +770,7 @@ export default function ChatPage() {
             )}
 
             {/* @Mention autocomplete popup */}
-            {showMentionPopup && mentionSuggestions.length > 0 && (
+            {showMentionPopup && !isAnon && mentionSuggestions.length > 0 && (
               <div className="mx-3 mb-1 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl shadow-lg overflow-hidden max-h-[200px] overflow-y-auto">
                 {mentionSuggestions.map((m, i) => (
                   <button
@@ -678,7 +853,7 @@ export default function ChatPage() {
                 value={messageInput}
                 onChange={handleInputChange}
                 onKeyDown={handleInputKeyDown}
-                placeholder="Type a message... (@ to mention)"
+                placeholder={isAnon ? "Type a message as your alias..." : "Type a message... (@ to mention)"}
                 className="flex-1 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
               />
               <button
@@ -725,7 +900,7 @@ export default function ChatPage() {
           )}
 
           {/* User Profile Panel */}
-          {selectedUserId && (
+          {selectedUserId && !isAnon && (
             <UserProfilePanel
               userId={selectedUserId}
               currentUserId={user?.id}
@@ -734,7 +909,15 @@ export default function ChatPage() {
           )}
 
           {/* Sidebar */}
-          {showSidebar && !selectedUserId && (
+          {showSidebar && !selectedUserId && isAnon && (
+            <AnonGroupPanel
+              groupId={groupId}
+              myIdentity={myIdentity}
+              isCreator={isAnonCreator}
+              onLeft={handleAnonLeft}
+            />
+          )}
+          {showSidebar && !selectedUserId && !isAnon && (
             <div className="w-64 glass-card overflow-y-auto flex-shrink-0 hidden md:block">
               <GroupSidebar
                 groupId={groupId}
@@ -748,8 +931,35 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {/* Report Modal (anonymous groups) */}
+      {reportTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <form onSubmit={submitReport} className="glass-card w-full max-w-sm flex flex-col p-5">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold">Report {reportTarget.label}</h3>
+              <button type="button" onClick={() => { setReportTarget(null); setReportReason(''); }} className="text-[var(--color-text-muted)] hover:text-white">✕</button>
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] mb-3">
+              The creator will see only this alias and your reason. They will never learn who reported them or who this is.
+            </p>
+            <textarea
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              maxLength={500}
+              rows={3}
+              required
+              placeholder="What did they do? (max 500 chars)"
+              className="w-full bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)] resize-none"
+            />
+            <button type="submit" disabled={!reportReason.trim()} className="btn btn-primary mt-3 w-full">
+              Submit report
+            </button>
+          </form>
+        </div>
+      )}
+
       {/* Group Settings Modal */}
-      {showSettings && (
+      {showSettings && !isAnon && (
         <GroupSettingsPanel
           groupId={groupId}
           group={group}

@@ -111,10 +111,8 @@ export default function Layout({ children }) {
     { path: '/messages', label: 'Messages', icon: Send, badge: totalUnread.dms },
     { path: '/resources', label: 'Resources', icon: BookOpen },
     { path: '/events', label: 'Events', icon: CalendarDays },
+    { path: '/manage-events', label: 'Manage Events', icon: ClipboardList },
     { path: '/store', label: 'Store', icon: Store },
-    ...(user?.globalRing <= 1 || user?.canCreateEvents
-      ? [{ path: '/manage-events', label: 'Manage Events', icon: ClipboardList }]
-      : []),
     ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: ShieldCheck }] : []),
   ];
 

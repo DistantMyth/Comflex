@@ -33,6 +33,37 @@ router.get('/', eventController.listEvents);
 router.get('/manage', eventController.listManagedEvents);
 
 /**
+ * GET /api/v1/events/invite/:token
+ * Resolve an event invite link (auth required) — returns event info and
+ * whether the current user is eligible to join.
+ */
+router.get('/invite/:token',
+  [param('token').isString().withMessage('Invalid invite token.')],
+  validate,
+  eventController.getEventInviteInfo
+);
+
+/**
+ * POST /api/v1/events/invite/:token/join
+ * Join an event via its invite link. Whitelist/blacklist still applies.
+ */
+router.post('/invite/:token/join',
+  [param('token').isString().withMessage('Invalid invite token.')],
+  validate,
+  eventController.joinEventViaInvite
+);
+
+/**
+ * POST /api/v1/events/:id/invite-link
+ * Organizer: create/rotate a shareable invite link (expires in 7 days).
+ */
+router.post('/:id/invite-link',
+  [param('id').isMongoId().withMessage('Invalid Event ID.')],
+  validate,
+  eventController.generateEventInviteLink
+);
+
+/**
  * GET /api/v1/events/:id
  * Get full event details.
  */

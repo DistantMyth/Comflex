@@ -6,6 +6,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { friendApi } from '../api/friendApi';
 import { groupApi } from '../api/groupApi';
+import { setAnonSession } from '../api/client';
+import BackupKeyModal from './BackupKeyModal';
 import resolveAsset from '../utils/resolveAsset';
 
 export default function CreateGroupModal({ onClose, onCreated }) {
@@ -16,8 +18,11 @@ export default function CreateGroupModal({ onClose, onCreated }) {
   const [avatarPreview, setAvatarPreview] = useState(null);
   const [friends, setFriends] = useState([]);
   const [selectedFriends, setSelectedFriends] = useState([]);
+  const [isAnonymous, setIsAnonymous] = useState(false);
+  const [alias, setAlias] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingAnonGroup, setPendingAnonGroup] = useState(null); // { group, identity }
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -43,6 +48,7 @@ export default function CreateGroupModal({ onClose, onCreated }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim()) return setError('Group name is required.');
+    if (isAnonymous && !alias.trim()) return setError('Your alias is required for anonymous groups.');
 
     setLoading(true);
     setError('');
@@ -54,7 +60,8 @@ export default function CreateGroupModal({ onClose, onCreated }) {
         displayName: displayName.trim() || name.trim(),
         description: description.trim(),
         type: 'custom',
-        memberIds: selectedFriends,
+        memberIds: isAnonymous ? [] : selectedFriends,
+        isAnonymous,
       });
 
       const group = res.data.data?.group || res.data.data;
@@ -68,6 +75,15 @@ export default function CreateGroupModal({ onClose, onCreated }) {
         }
       }
 
+      // Anonymous groups: creator claims the first alias — the returned
+      // secret is stored on this device only, and the key shown via modal.
+      if (isAnonymous && group?.id) {
+        const claimRes = await groupApi.claimAnonIdentity(group.id, alias.trim());
+        const idn = claimRes.data.data;
+        setPendingAnonGroup({ group, identity: idn });
+        return; // wait for ack before finishing
+      }
+
       onCreated?.(group);
       onClose();
     } catch (err) {
@@ -75,6 +91,20 @@ export default function CreateGroupModal({ onClose, onCreated }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAnonKeyDone = () => {
+    if (!pendingAnonGroup) return;
+    const { group, identity: idn } = pendingAnonGroup;
+    setAnonSession(group.id, {
+      identityId: idn.identityId,
+      secret: idn.secret,
+      alias: idn.alias,
+      aliasTag: idn.aliasTag,
+      avatarUrl: idn.avatarUrl,
+    });
+    onCreated?.(group);
+    onClose();
   };
 
   return (
@@ -151,8 +181,46 @@ export default function CreateGroupModal({ onClose, onCreated }) {
             />
           </div>
 
+          {/* Anonymous group toggle */}
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40">
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isAnonymous}
+                  onChange={e => setIsAnonymous(e.target.checked)}
+                  className="rounded text-[var(--color-accent)]"
+                />
+                <span>🔒 Anonymous group</span>
+              </label>
+              <p className="text-xs text-[var(--color-text-secondary)] mt-1">
+                No one can link aliases to your account — your identity is a
+                device key that only you hold.
+              </p>
+            </div>
+          </div>
+
+          {isAnonymous && (
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Your Alias (shown to the group) *</label>
+              <input
+                type="text"
+                className="input w-full"
+                placeholder="e.g. NightOwl"
+                value={alias}
+                onChange={e => setAlias(e.target.value)}
+                maxLength={32}
+                required
+              />
+              <p className="text-xs text-[var(--color-text-secondary)] mt-1">
+                You'll receive a one-time cryptographic key after creation —
+                keep it safe to restore your identity on another device.
+              </p>
+            </div>
+          )}
+
           {/* Add Friends */}
-          {friends.length > 0 && (
+          {!isAnonymous && friends.length > 0 && (
             <div>
               <label className="block text-sm font-medium mb-2">Add Friends ({selectedFriends.length} selected)</label>
               <div className="max-h-40 overflow-y-auto space-y-1 border border-[var(--color-border)] rounded-xl p-2">
@@ -194,6 +262,15 @@ export default function CreateGroupModal({ onClose, onCreated }) {
           </div>
         </form>
       </div>
+
+      {/* One-time key backup for anonymous group creation */}
+      {pendingAnonGroup && (
+        <BackupKeyModal
+          groupName={pendingAnonGroup.group.displayName || pendingAnonGroup.group.name}
+          identity={pendingAnonGroup.identity}
+          onDone={handleAnonKeyDone}
+        />
+      )}
     </div>
   );
 }

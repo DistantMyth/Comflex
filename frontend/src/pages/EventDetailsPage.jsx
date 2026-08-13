@@ -734,23 +734,30 @@ export default function EventDetailsPage() {
                   </div>
                 )}
                 
-                <div className="p-6 border border-[var(--color-border)] rounded-xl bg-[var(--color-bg-primary)] shadow-sm">
-                  <h4 className="font-bold text-lg mb-1">Create a New Team</h4>
-                  <p className="text-sm text-[var(--color-text-secondary)] mb-4">Start your own team to compete in this event and invite up to {event.maxTeamSize - 1} other members.</p>
-                  <form onSubmit={handleCreateTeam} className="flex gap-3">
-                    <input 
-                      type="text" 
-                      value={teamName}
-                      onChange={(e) => setTeamName(e.target.value)}
-                      placeholder="Enter a unique team name..."
-                      className="flex-1 text-sm bg-[var(--color-bg-card)]"
-                      required
-                    />
-                    <button type="submit" disabled={actionLoading || !teamName.trim()} className="btn btn-primary px-6">
-                      Create Team
-                    </button>
-                  </form>
-                </div>
+                {event.inviteMode === 'invite_only' ? (
+                  <div className="p-6 border border-[var(--color-border)] rounded-xl bg-[var(--color-bg-primary)] shadow-sm">
+                    <h4 className="font-bold text-lg mb-2">🔒 Invite-Only Event</h4>
+                    <p className="text-sm text-[var(--color-text-secondary)]">This event accepts participants only via organizer invite links or team invitations. Ask the organizer for an invite link.</p>
+                  </div>
+                ) : (
+                  <div className="p-6 border border-[var(--color-border)] rounded-xl bg-[var(--color-bg-primary)] shadow-sm">
+                    <h4 className="font-bold text-lg mb-1">Create a New Team</h4>
+                    <p className="text-sm text-[var(--color-text-secondary)] mb-4">Start your own team to compete in this event and invite up to {event.maxTeamSize - 1} other members.</p>
+                    <form onSubmit={handleCreateTeam} className="flex gap-3">
+                      <input 
+                        type="text" 
+                        value={teamName}
+                        onChange={(e) => setTeamName(e.target.value)}
+                        placeholder="Enter a unique team name..."
+                        className="flex-1 text-sm bg-[var(--color-bg-card)]"
+                        required
+                      />
+                      <button type="submit" disabled={actionLoading || !teamName.trim()} className="btn btn-primary px-6">
+                        Create Team
+                      </button>
+                    </form>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -759,6 +766,10 @@ export default function EventDetailsPage() {
             <h3 className="text-xl font-bold mb-4">Event Registration</h3>
             {userTeam ? (
               <div className="text-sm font-semibold text-[var(--color-success)] px-4 py-3 bg-[var(--color-success)]/10 rounded-lg">You are registered for this event.</div>
+            ) : event.inviteMode === 'invite_only' ? (
+              <div className="text-sm text-[var(--color-text-secondary)] px-4 py-3 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg">
+                🔒 This event is invite-only. Join via an organizer invite link.
+              </div>
             ) : (
               <button onClick={(e) => handleCreateTeam(e, true)} disabled={actionLoading} className="btn btn-primary px-6">
                 Register for Event

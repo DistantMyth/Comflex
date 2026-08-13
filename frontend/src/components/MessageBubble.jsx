@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { Reply, Forward, Copy, Pencil, Pin, Trash2, Eye, FileText } from 'lucide-react';
+import { Reply, Forward, Copy, Pencil, Pin, Trash2, Eye, FileText, Flag } from 'lucide-react';
 import { groupApi } from '../api/groupApi';
 import resolveAsset from '../utils/resolveAsset';
 
@@ -69,6 +69,8 @@ function renderContentWithMentions(content, mentionData = [], onUserClick) {
 export default function MessageBubble({
   message, currentUserId, permissions = {}, isAdmin, onEdit, onDelete, onPin, onUserClick,
   groupId, members = [], badgeMap = {}, onReply, onForward, replyMessage,
+  anonMode = false, myIdentityId = null, isAnonCreator = false,
+  onReport = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -76,21 +78,32 @@ export default function MessageBubble({
   const [readByUsers, setReadByUsers] = useState([]);
   const [loadingReadBy, setLoadingReadBy] = useState(false);
 
-  const isOwn = message.authorId === currentUserId;
-  const canDelete = isOwn || permissions.can_delete_others_messages || isAdmin;
-  const canPin = permissions.can_pin_messages || isAdmin;
   const author = message.author || {};
+  const isAnonMsg = author.isAnonymous === true || (anonMode && message.authorId === null);
+
+  const isOwn = isAnonMsg
+    ? (message.author?.id === myIdentityId)
+    : (message.authorId === currentUserId);
+  const canDelete = isOwn || (anonMode ? isAnonCreator : (permissions.can_delete_others_messages || isAdmin));
+  const canPin = anonMode ? isAnonCreator : (permissions.can_pin_messages || isAdmin);
 
   const handleSaveEdit = () => {
     if (editContent.trim() && editContent !== message.content) onEdit?.(message.id, editContent.trim());
     setEditing(false);
   };
 
-  const ringColor = RING_COLORS[author.globalRing] || 'var(--color-text-muted)';
+  const ringColor = isAnonMsg
+    ? 'var(--color-text-muted)'
+    : (RING_COLORS[author.globalRing] || 'var(--color-text-muted)');
 
   const handleAuthorClick = () => {
+    if (isAnonMsg) return; // no identity links in anonymous groups
     if (!isOwn && onUserClick) onUserClick(message.authorId);
   };
+
+  const authorLabel = isAnonMsg
+    ? `${author.displayName || 'Anonymous'}${author.aliasTag ? `#${author.aliasTag}` : ''}`
+    : (author.displayName || 'Unknown');
 
   const handleShowReadBy = async () => {
     if (showReadBy) return setShowReadBy(false);
@@ -159,9 +172,9 @@ export default function MessageBubble({
 
         <div className="flex items-center gap-2 mb-0.5 flex-wrap">
           <span className="font-semibold text-sm cursor-pointer hover:underline" style={{ color: ringColor }} onClick={handleAuthorClick}>
-            {author.displayName || 'Unknown'}
+            {authorLabel}{isOwn && ' (you)'}
           </span>
-          {author.displayBadges?.slice(0, 5).map((badgeId, i) => {
+          {!isAnonMsg && author.displayBadges?.slice(0, 5).map((badgeId, i) => {
             const badge = badgeMap[badgeId];
             if (!badge) return null;
             return <img key={i} src={resolveAsset(badge.imageUrl)} alt={badge.name} title={badge.name} className="w-5 h-5 object-cover drop-shadow select-none" />;
@@ -223,7 +236,7 @@ export default function MessageBubble({
           </div>
         )}
 
-        {!message.isDeleted && readCount > 0 && (
+        {!message.isDeleted && !isAnonMsg && readCount > 0 && (
           <div className="mt-1 relative">
             <button onClick={handleShowReadBy} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors flex items-center gap-1">
               <Eye size={11} />
@@ -268,6 +281,11 @@ export default function MessageBubble({
             <button onClick={() => onReply?.(message)} className="p-2 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]" title="Reply">
               <Reply size={13} />
             </button>
+            {isAnonMsg && !isOwn && onReport && (
+              <button onClick={() => onReport?.(author.id, authorLabel)} className="p-2 text-[var(--color-text-muted)] hover:bg-[var(--color-warning)]/10 hover:text-[var(--color-warning)]" title="Report identity">
+                <Flag size={13} />
+              </button>
+            )}
             <button onClick={() => onForward?.(message)} className="p-2 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)]" title="Forward">
               <Forward size={13} />
             </button>

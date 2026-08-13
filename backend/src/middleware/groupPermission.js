@@ -8,15 +8,21 @@
  * Reads the group membership from DB and checks the permission key.
  * Ring 0 (global admin) bypasses all permission checks.
  *
+ * Anonymous groups: there are no rings or permissions. Access is authorized
+ * by the client-presented identity secret (`x-anon-identity: <id>.<secret>`),
+ * and any identity in the group can use the group's chat features.
+ *
  * Usage:
  *   router.post('/groups/:id/messages', auth, requireGroupPermission('can_send_messages'), handler)
  */
 
 const prisma = require('../prisma');
 const { error } = require('../utils/apiResponse');
+const groupService = require('../services/groupService');
 
 /**
  * Check that the current user is a member of the group and attach membership to req.
+ * For anonymous groups, verifies the identity secret instead and attaches req.anonIdentity.
  */
 async function requireGroupMember(req, res, next) {
   try {
@@ -26,6 +32,36 @@ async function requireGroupMember(req, res, next) {
     // Ring 0 bypasses membership check
     if (req.user.globalRing === 0) {
       req.groupMembership = { ring: 0, permissions: {} };
+      return next();
+    }
+
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: groupId },
+      select: { isAnonymous: true, creatorId: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+
+    if (group.isAnonymous) {
+      // Zero-knowledge path: prove possession of the identity secret.
+      const header = req.headers['x-anon-identity'];
+      if (!header || typeof header !== 'string') {
+        return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
+      }
+      const [identityId, secret] = header.split('.');
+      const identity = await groupService.resolveAnonIdentity(identityId, secret);
+      if (!identity || identity.groupId !== groupId) {
+        return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
+      }
+      if (identity.bannedAt) {
+        return error(res, 'IDENTITY_BANNED', 'This identity is banned from the group.', 403);
+      }
+      req.anonIdentity = {
+        identityId: identity.id,
+        alias: identity.alias,
+        aliasTag: identity.aliasTag,
+        avatarUrl: identity.avatarUrl,
+        groupId: identity.groupId,
+      };
       return next();
     }
 
@@ -51,6 +87,9 @@ async function requireGroupMember(req, res, next) {
  */
 function requireGroupPermission(permissionKey) {
   return (req, res, next) => {
+    // Anonymous groups have no permission system — any identity can chat.
+    if (req.anonIdentity) return next();
+
     // Ring 0 bypasses
     if (req.user.globalRing === 0) return next();
 

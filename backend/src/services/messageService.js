@@ -10,15 +10,13 @@ const notificationService = require('./notificationService');
 
 /**
  * Get paginated messages for a group (newest first), with read receipt info.
+ * In anonymous groups, read receipts don't exist (they'd leak identities) and
+ * message authors resolve to their frozen alias snapshot.
  */
-async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId = null) {
-  const [messages, total] = await Promise.all([
-    prisma.message.findMany({
-      where: { groupId },
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-      include: {
+async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId = null, isAnon = false) {
+  const baseInclude = isAnon
+    ? {}
+    : {
         author: {
           select: {
             id: true, displayName: true, avatarUrl: true,
@@ -32,7 +30,15 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
           },
         },
         _count: { select: { readReceipts: true } },
-      },
+      };
+
+  const [messages, total] = await Promise.all([
+    prisma.message.findMany({
+      where: { groupId },
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+      include: baseInclude,
     }),
     prisma.message.count({ where: { groupId } }),
   ]);
@@ -62,38 +68,57 @@ async function assertMessageInGroup(messageId, groupId) {
 /**
  * Get a single message by ID.
  */
-async function getMessage(messageId, groupId = null) {
+async function getMessage(messageId, groupId = null, isAnon = false) {
   await assertMessageInGroup(messageId, groupId);
-  const msg = await prisma.message.findUnique({
-    where: { id: messageId },
-    include: {
-      author: {
-        select: {
-          id: true, displayName: true, avatarUrl: true,
-          globalRing: true, displayBadges: true,
+  const include = isAnon
+    ? {}
+    : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true,
+            globalRing: true, displayBadges: true,
+          },
         },
-      },
-      readReceipts: {
-        select: { userId: true, readAt: true },
-      },
-      _count: { select: { readReceipts: true } },
-    },
-  });
+        readReceipts: {
+          select: { userId: true, readAt: true },
+        },
+        _count: { select: { readReceipts: true } },
+      };
+  const msg = await prisma.message.findUnique({ where: { id: messageId }, include });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
   return formatMessage(msg);
 }
 
 /**
  * Send a new message.
+ * @param {string} groupId
+ * @param {string|null} authorId — real user id (null for anonymous groups)
+ * @param {object} params
+ * @param {object|null} anon — { identityId, alias, aliasTag, avatarUrl } for anon groups
  */
-async function sendMessage(groupId, authorId, params) {
+async function sendMessage(groupId, authorId, params, anon = null) {
   const { content, mentions = [], attachments = [], replyToId, forwarded = false, msgType = 'text', fileUrl, fileName, fileSize, mimetype } = params;
+
+  const isAnon = !!anon;
+  const data = isAnon
+    ? {
+        groupId,
+        authorId: null,
+        authorType: 'anon',
+        anonAuthorId: anon.identityId,
+        authorSnapshot: { alias: anon.alias, aliasTag: anon.aliasTag, avatarUrl: anon.avatarUrl || null },
+        content, attachments,
+        mentions: [], // mentions leak identity — never allowed in anon groups
+        replyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
+      }
+    : {
+        groupId, authorId, content, mentions, attachments,
+        replyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
+      };
+
   const msg = await prisma.message.create({
-    data: { 
-      groupId, authorId, content, mentions, attachments,
-      replyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype
-    },
-    include: {
+    data,
+    include: isAnon ? {} : {
       author: {
         select: {
           id: true, displayName: true, avatarUrl: true,
@@ -102,6 +127,10 @@ async function sendMessage(groupId, authorId, params) {
       },
     },
   });
+
+  if (isAnon) {
+    return formatMessage(msg);
+  }
 
   // Auto-create read receipt for the author
   await prisma.messageReadReceipt.create({
@@ -137,46 +166,59 @@ async function sendMessage(groupId, authorId, params) {
 
 /**
  * Edit own message (only content can change).
+ * Anonymous groups: ownership is proven by the identity secret.
  */
-async function editMessage(messageId, userId, newContent, groupId = null) {
+async function editMessage(messageId, userId, newContent, groupId = null, anon = null) {
   await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
-  if (msg.authorId !== userId) {
+  if (msg.authorType === 'anon') {
+    if (!anon || msg.anonAuthorId !== anon.identityId) {
+      throw Object.assign(new Error('You can only edit your own messages.'), { statusCode: 403, code: 'NOT_AUTHOR' });
+    }
+  } else if (msg.authorId !== userId) {
     throw Object.assign(new Error('You can only edit your own messages.'), { statusCode: 403, code: 'NOT_AUTHOR' });
   }
   if (msg.isDeleted) {
     throw Object.assign(new Error('Cannot edit a deleted message.'), { statusCode: 400, code: 'MESSAGE_DELETED' });
   }
 
+  const include = anon
+    ? {}
+    : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true,
+            globalRing: true, displayBadges: true,
+          },
+        },
+        readReceipts: {
+          select: { userId: true, readAt: true },
+        },
+        _count: { select: { readReceipts: true } },
+      };
+
   const updated = await prisma.message.update({
     where: { id: messageId },
     data: { content: newContent, editedAt: new Date() },
-    include: {
-      author: {
-        select: {
-          id: true, displayName: true, avatarUrl: true,
-          globalRing: true, displayBadges: true,
-        },
-      },
-      readReceipts: {
-        select: { userId: true, readAt: true },
-      },
-      _count: { select: { readReceipts: true } },
-    },
+    include,
   });
   return formatMessage(updated);
 }
 
 /**
  * Delete a message (soft delete — marks as deleted).
+ * Anonymous groups: ownership is proven by the identity secret.
  */
-async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId = null) {
+async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId = null, anon = null) {
   await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
 
-  if (msg.authorId !== userId && !canDeleteOthers) {
+  const isOwn = msg.authorType === 'anon'
+    ? (anon && msg.anonAuthorId === anon.identityId)
+    : msg.authorId === userId;
+  if (!isOwn && !canDeleteOthers) {
     throw Object.assign(new Error('You do not have permission to delete this message.'), { statusCode: 403, code: 'PERMISSION_DENIED' });
   }
 
@@ -188,22 +230,26 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId
 
 /**
  * Toggle a reaction on a message.
+ * Anonymous groups: reactions are keyed by identity (anon:<identityId>) so
+ * reactor identities never appear in payloads.
  */
-async function toggleReaction(messageId, userId, emoji, groupId = null) {
+async function toggleReaction(messageId, reactorId, emoji, groupId = null, anon = null) {
   await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
+
+  const reactorKey = anon ? `anon:${anon.identityId}` : reactorId;
 
   // Reactions are structured as { "👍": ["userId1", "userId2"] }
   const currentReactions = msg.reactions || {};
   let usersForEmoji = currentReactions[emoji] || [];
 
-  if (usersForEmoji.includes(userId)) {
+  if (usersForEmoji.includes(reactorKey)) {
     // Remove if already reacted
-    usersForEmoji = usersForEmoji.filter(id => id !== userId);
+    usersForEmoji = usersForEmoji.filter(id => id !== reactorKey);
   } else {
     // Add reaction
-    usersForEmoji.push(userId);
+    usersForEmoji.push(reactorKey);
   }
 
   // If no users left, remove the emoji key entirely
@@ -214,19 +260,23 @@ async function toggleReaction(messageId, userId, emoji, groupId = null) {
     updatedReactions[emoji] = usersForEmoji;
   }
 
+  const include = anon
+    ? {}
+    : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true,
+            globalRing: true, displayBadges: true,
+          },
+        },
+        readReceipts: { select: { userId: true, readAt: true } },
+        _count: { select: { readReceipts: true } },
+      };
+
   const updatedMsg = await prisma.message.update({
     where: { id: messageId },
     data: { reactions: updatedReactions },
-    include: {
-      author: {
-        select: {
-          id: true, displayName: true, avatarUrl: true,
-          globalRing: true, displayBadges: true,
-        },
-      },
-      readReceipts: { select: { userId: true, readAt: true } },
-      _count: { select: { readReceipts: true } },
-    },
+    include,
   });
   return formatMessage(updatedMsg);
 }
@@ -401,13 +451,26 @@ async function getReadReceipts(messageId, groupId = null) {
 
 /**
  * Format a message for API response.
+ * Anonymous-group messages surface the frozen alias snapshot as `author`
+ * and never include read-receipt material (there are no receipts for anon).
  */
 function formatMessage(msg, currentUserId = null) {
+  const isAnonMsg = msg.authorType === 'anon';
+  const snapshot = msg.authorSnapshot || null;
+
   const base = {
     id: msg.id,
     groupId: msg.groupId,
-    authorId: msg.authorId,
-    author: msg.author || null,
+    authorId: isAnonMsg ? null : msg.authorId,
+    author: isAnonMsg
+      ? {
+          id: msg.anonAuthorId,
+          displayName: snapshot?.alias || 'Anonymous',
+          aliasTag: snapshot?.aliasTag || null,
+          avatarUrl: snapshot?.avatarUrl || null,
+          isAnonymous: true,
+        }
+      : (msg.author || null),
     content: msg.isDeleted ? '[Message deleted]' : msg.content,
     attachments: msg.attachments || [],
     mentions: msg.mentions || [],
@@ -428,14 +491,16 @@ function formatMessage(msg, currentUserId = null) {
     mimetype: msg.mimetype || null,
   };
 
-  // Add read receipt summary if available
-  if (msg._count) {
-    base.readCount = msg._count.readReceipts || 0;
-  }
-  if (msg.readReceipts) {
-    base.readBy = msg.readReceipts.slice(0, 5).map(r => r.userId);
-    if (currentUserId) {
-      base.isReadByMe = msg.readReceipts.some(r => r.userId === currentUserId);
+  // Add read receipt summary if available (never for anonymous messages)
+  if (!isAnonMsg) {
+    if (msg._count) {
+      base.readCount = msg._count.readReceipts || 0;
+    }
+    if (msg.readReceipts) {
+      base.readBy = msg.readReceipts.slice(0, 5).map(r => r.userId);
+      if (currentUserId) {
+        base.isReadByMe = msg.readReceipts.some(r => r.userId === currentUserId);
+      }
     }
   }
 

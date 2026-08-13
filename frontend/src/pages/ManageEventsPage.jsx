@@ -3,6 +3,34 @@ import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
 import { Link } from 'react-router-dom';
 
+function InviteLinkButton({ eventId }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleCopy = async () => {
+    setError('');
+    try {
+      const res = await eventApi.createInviteLink(eventId);
+      const token = res.data.data.token;
+      const url = `${window.location.origin}/events/invite/${token}`;
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Failed to create invite link.');
+    }
+  };
+
+  return (
+    <span className="flex flex-col items-end">
+      <button onClick={handleCopy} className="btn btn-secondary text-xs px-3 py-1.5" title="Copy shareable invite link (valid 7 days)">
+        {copied ? '✓ Copied' : 'Copy Invite Link'}
+      </button>
+      {error && <span className="text-[10px] text-[var(--color-danger)] mt-1">{error}</span>}
+    </span>
+  );
+}
+
 export default function ManageEventsPage() {
   const { user } = useAuth();
   const [managedEvents, setManagedEvents] = useState([]);
@@ -23,7 +51,17 @@ export default function ManageEventsPage() {
     isTeamEvent: false,
     minTeamSize: 1,
     maxTeamSize: 4,
-    autoStart: true
+    autoStart: true,
+    inviteOnly: false,
+    allowedCohorts: '',
+    blockedCohorts: '',
+    allowedUserIds: '',
+    blockedUserIds: '',
+    creditsPerCorrect: 0,
+    maxCredits: 0,
+    badgesPerCorrect: 0,
+    badgeId: '',
+    maxBadges: 0
   });
   const [message, setMessage] = useState('');
 
@@ -51,7 +89,19 @@ export default function ManageEventsPage() {
     try {
       const payload = {
         ...form,
+        inviteMode: form.inviteOnly ? 'invite_only' : 'open',
         targetTags: form.targetTags ? form.targetTags.split(',').map(t => t.trim()).filter(Boolean) : [],
+        allowedCohorts: form.allowedCohorts ? form.allowedCohorts.split(',').map(t => t.trim()).filter(Boolean) : [],
+        blockedCohorts: form.blockedCohorts ? form.blockedCohorts.split(',').map(t => t.trim()).filter(Boolean) : [],
+        allowedUserIds: form.allowedUserIds ? form.allowedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
+        blockedUserIds: form.blockedUserIds ? form.blockedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
+        rewardBudget: (form.creditsPerCorrect > 0 || form.badgesPerCorrect > 0) ? {
+          creditsPerCorrect: Number(form.creditsPerCorrect) || 0,
+          maxCredits: Number(form.maxCredits) || 0,
+          badgeId: form.badgeId || null,
+          badgesPerCorrect: Number(form.badgesPerCorrect) || 0,
+          maxBadges: Number(form.maxBadges) || 0
+        } : null,
         startDate: new Date(form.startDate).toISOString()
       };
       
@@ -62,7 +112,9 @@ export default function ManageEventsPage() {
       // Reset form
       setForm({
         title: '', description: '', startDate: '', durationHours: 0, durationMinutes: 0, taskViewMode: 'all', category: '', targetTags: '', 
-        isTeamEvent: false, minTeamSize: 1, maxTeamSize: 4, autoStart: true
+        isTeamEvent: false, minTeamSize: 1, maxTeamSize: 4, autoStart: true,
+        inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: '',
+        creditsPerCorrect: 0, maxCredits: 0, badgesPerCorrect: 0, badgeId: '', maxBadges: 0
       });
       
       fetchEvents();
@@ -184,6 +236,62 @@ export default function ManageEventsPage() {
                <span className="text-xs text-[var(--color-text-secondary)]">If disabled, you will need to manually click 'Start Event' on the event page.</span>
             </div>
 
+            {/* Participation policy */}
+            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl space-y-4">
+              <h4 className="text-sm font-bold">Participation Policy</h4>
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input type="checkbox" checked={form.inviteOnly} onChange={e => setForm({...form, inviteOnly: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
+                Invite-only — no self-registration; participants join via invite link or team invitations
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed Cohorts (whitelist)</label>
+                  <input type="text" value={form.allowedCohorts} onChange={e => setForm({...form, allowedCohorts: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked Cohorts (blacklist)</label>
+                  <input type="text" value={form.blockedCohorts} onChange={e => setForm({...form, blockedCohorts: e.target.value})} placeholder="e.g. cohort-26" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed User IDs (whitelist)</label>
+                  <input type="text" value={form.allowedUserIds} onChange={e => setForm({...form, allowedUserIds: e.target.value})} placeholder="Comma separated user IDs" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked User IDs (blacklist)</label>
+                  <input type="text" value={form.blockedUserIds} onChange={e => setForm({...form, blockedUserIds: e.target.value})} placeholder="Comma separated user IDs" className="w-full text-sm" />
+                </div>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)]">Whitelists and blacklists are enforced even when someone has the invite link.</p>
+            </div>
+
+            {/* Auto reward budget */}
+            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl space-y-4">
+              <h4 className="text-sm font-bold">Auto-Reward Budget <span className="font-normal text-xs text-[var(--color-text-muted)]">(paid out on each correct auto-graded answer — event ends when the budget runs out)</span></h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Credits per correct answer</label>
+                  <input type="number" min="0" value={form.creditsPerCorrect} onChange={e => setForm({...form, creditsPerCorrect: e.target.value})} className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Max credits to give out</label>
+                  <input type="number" min="0" value={form.maxCredits} onChange={e => setForm({...form, maxCredits: e.target.value})} className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Badge ID to award</label>
+                  <input type="text" value={form.badgeId} onChange={e => setForm({...form, badgeId: e.target.value})} placeholder="Optional — store badge ID" className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Badges per correct answer</label>
+                  <input type="number" min="0" value={form.badgesPerCorrect} onChange={e => setForm({...form, badgesPerCorrect: e.target.value})} className="w-full text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Max badges to give out</label>
+                  <input type="number" min="0" value={form.maxBadges} onChange={e => setForm({...form, maxBadges: e.target.value})} className="w-full text-sm" />
+                </div>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)]">The event is automatically marked completed when the credit or badge budget is exhausted.</p>
+            </div>
+
             <button type="submit" disabled={creating || !form.title || !form.startDate || !form.category} className="btn btn-primary w-full md:w-auto">
               {creating ? <span className="spinner" /> : 'Create Event'}
             </button>
@@ -212,9 +320,12 @@ export default function ManageEventsPage() {
                   <p className="text-xs text-[var(--color-text-muted)] mt-1">
                     Starts: {new Date(event.startDate).toLocaleString()} • Targets: {event.targetTags?.length ? event.targetTags.join(', ') : 'Public'}
                     {event.isTeamEvent ? ` • Team (${event.minTeamSize}-${event.maxTeamSize})` : ' • Solo'}
+                    {event.inviteMode === 'invite_only' ? ' • Invite-only' : ''}
+                    {event.rewardBudget ? ` • Auto-reward: ${event.rewardBudget.creditsPerCorrect || 0}cr/${event.rewardBudget.badgesPerCorrect || 0}bd per correct` : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <InviteLinkButton eventId={event.id} />
                   <Link to={`/events/${event.id}`} className="btn btn-secondary text-xs px-3 py-1.5">Manage</Link>
                   <button onClick={() => handleDelete(event.id, event.title)} className="p-1.5 text-[var(--color-danger)] hover:bg-[rgba(239,68,68,0.1)] rounded-lg transition-colors" title="Delete Event">
                     🗑

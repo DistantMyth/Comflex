@@ -18,6 +18,7 @@ const { requireGroupMember, requireGroupPermission } = require('../middleware/gr
 const groupService = require('../services/groupService');
 const messageService = require('../services/messageService');
 const dmService = require('../services/dmService');
+const prisma = require('../prisma');
 const env = require('../config/env');
 const { extractCohortYear, extractBranch } = require('../services/cohortService');
 const { emitToGroup } = require('../services/chatSocketService');
@@ -117,9 +118,19 @@ const groupAddMemberUserLimit = rateLimiter({
 /**
  * POST /api/v1/groups/join/:token — Join a group using an invite link.
  */
-router.post('/join/:token', async (req, res, next) => {
+router.post('/join/:token', [
+  body('alias').optional().trim(),
+  body('avatarUrl').optional().trim(),
+], async (req, res, next) => {
   try {
-    const result = await groupService.joinViaLink(req.params.token, req.user.id);
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    // Anonymous groups require an alias — joinWithLink mints the identity.
+    const result = await groupService.joinViaLink(req.params.token, req.user.id, req.body.alias, req.body.avatarUrl);
     return success(res, result, 201);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -129,10 +140,24 @@ router.post('/join/:token', async (req, res, next) => {
 
 /**
  * GET /api/v1/groups — List all groups the user belongs to (with unread counts).
+ * Anonymous memberships come from `x-anon-sessions` header: a JSON array of
+ * { groupId, identityId, secret } presented by the client.
  */
 router.get('/', async (req, res, next) => {
   try {
-    const groups = await groupService.listUserGroups(req.user.id);
+    let anonSessions = [];
+    try {
+      const raw = req.headers['x-anon-sessions'];
+      if (raw && typeof raw === 'string') {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          anonSessions = parsed
+            .filter(s => s && typeof s === 'object' && s.groupId && s.identityId && s.secret)
+            .map(s => ({ groupId: s.groupId, identityId: s.identityId, secret: s.secret }));
+        }
+      }
+    } catch { /* malformed header — ignore */ }
+    const groups = await groupService.listUserGroups(req.user.id, anonSessions);
     return success(res, groups);
   } catch (err) {
     next(err);
@@ -185,7 +210,8 @@ router.post(
     body('memberIds').optional().isArray({ max: 100 }).withMessage('Up to 100 members can be added at once.'),
     body('autoAdd').optional().isIn(['batch', 'branch-batch', 'cohort']),
     body('targetYears').optional().isArray(),
-    body('targetBranches').optional().isArray()
+    body('targetBranches').optional().isArray(),
+    body('isAnonymous').optional().isBoolean().withMessage('isAnonymous must be a boolean.')
   ],
   async (req, res, next) => {
     try {
@@ -568,10 +594,14 @@ router.post(
 
 /**
  * POST /api/v1/groups/:id/invites/:inviteId/accept — Accept a group invite.
+ * Anonymous groups: acceptance mints an identity; alias is required.
  */
-router.post('/:id/invites/:inviteId/accept', async (req, res, next) => {
+router.post('/:id/invites/:inviteId/accept', [
+  body('alias').optional().trim(),
+  body('avatarUrl').optional().trim(),
+], async (req, res, next) => {
   try {
-    const member = await groupService.acceptInvite(req.params.inviteId, req.user.id);
+    const member = await groupService.acceptInvite(req.params.inviteId, req.user.id, req.body.alias, req.body.avatarUrl);
     return success(res, member);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -593,9 +623,32 @@ router.post('/:id/invites/:inviteId/reject', async (req, res, next) => {
 });
 
 /**
+ * Guard: in anonymous groups the group creator (and global admins) keep
+ * moderation powers — but they act through their identity, so plain ring
+ * permission checks don't apply. Must run after requireGroupMember.
+ */
+async function requireAnonCreator(req, res, next) {
+  try {
+    if (req.anonIdentity) {
+      const group = await prisma.cohortGroup.findUnique({
+        where: { id: req.params.id },
+        select: { creatorId: true },
+      });
+      if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+      if (group.creatorId !== req.user.id && req.user.globalRing !== 0) {
+        return error(res, 'PERMISSION_DENIED', 'Only the group creator can do that.', 403);
+      }
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/v1/groups/:id/invite-link — Get or create the group's invite link.
  */
-router.get('/:id/invite-link', requireGroupMember, requireGroupPermission('can_add_members'), async (req, res, next) => {
+router.get('/:id/invite-link', requireGroupMember, requireAnonCreator, requireGroupPermission('can_add_members'), async (req, res, next) => {
   try {
     const linkObj = await groupService.getInviteLink(req.params.id);
     return success(res, linkObj);
@@ -746,6 +799,319 @@ router.patch(
 );
 
 // ============================================================
+// ANONYMOUS GROUPS — identity claim, rename, reports, bans, word bans
+// ============================================================
+
+/**
+ * POST /api/v1/groups/:id/anons/claim — Creator claims their alias right
+ * after creating an anonymous group. The resulting secret is given to the
+ * client once and never stored.
+ */
+router.post('/:id/anons/claim', authMiddleware, [
+  body('alias').trim().notEmpty().withMessage('Alias is required.'),
+  body('avatarUrl').optional().trim(),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { creatorId: true, isAnonymous: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+    if (!group.isAnonymous) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    if (group.creatorId !== req.user.id && req.user.globalRing !== 0) {
+      return error(res, 'PERMISSION_DENIED', 'Only the group creator can claim the first identity.', 403);
+    }
+
+    const identity = await groupService.claimAnonIdentity(req.params.id, req.user.id, req.body.alias, req.body.avatarUrl);
+    return success(res, identity, 201);
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/groups/:id/anons/me — The current identity (needs
+ * x-anon-identity header). Used to re-auth on page reload.
+ */
+router.get('/:id/anons/me', requireGroupMember, async (req, res, next) => {
+  try {
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    return success(res, req.anonIdentity);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/groups/:id/anons/enter — Lightweight "have I joined?" check for
+ * anon groups WITHOUT needing an identity header. Used when the user opens an
+ * anonymous group with no session (e.g. cookies cleared): joined:true means
+ * "prompt for your saved key", false means "you need an invite".
+ */
+router.get('/:id/anons/enter', authMiddleware, async (req, res, next) => {
+  try {
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, isAnonymous: true, creatorId: true, name: true, displayName: true, avatarUrl: true, description: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+    if (!group.isAnonymous) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+
+    const joined = await groupService.hasAnonJoin(group.id, req.user.id);
+    return success(res, {
+      groupId: group.id,
+      joined,
+      isAnonymous: true,
+      name: group.name,
+      displayName: group.displayName,
+      avatarUrl: group.avatarUrl,
+      description: group.description,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/restore — Restore an identity from a saved
+ * cryptographic key (`identityId.secret`). Enrollment requires the boolean
+ * AnonGroupJoin flag (or the creator). On success the client stores the SAME
+ * key back into cookies — the key never changes, no server copy exists.
+ */
+router.post('/:id/anons/restore', authMiddleware, [
+  body('key').trim().notEmpty().withMessage('Your saved key is required.'),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    const identity = await groupService.restoreAnonIdentity(
+      req.params.id, req.body.key.trim(), req.user.id
+    );
+    return success(res, identity);
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/rename — Rename own identity + rotate secret.
+ * The old alias is permanently released (no cross-name tracking).
+ */
+router.post('/:id/anons/rename', requireGroupMember, [
+  body('alias').trim().notEmpty().withMessage('Alias is required.'),
+  body('avatarUrl').optional().trim(),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    const result = await groupService.renameAnonIdentity(
+      req.anonIdentity.identityId,
+      req.headers['x-anon-identity']?.split('.')[1],
+      req.body.alias,
+      req.body.avatarUrl
+    );
+    // Other clients see the new alias via the refresh below.
+    emitToGroup(req.params.id, 'anon:identityChanged', { identityId: req.anonIdentity.identityId });
+    return success(res, result);
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/report — Report an identity (hidden report:
+ * the creator sees only the alias + report count, never anyone's real user).
+ */
+router.post('/:id/anons/report', requireGroupMember, [
+  body('targetIdentityId').notEmpty().withMessage('targetIdentityId is required.'),
+  body('reason').trim().isLength({ max: 500 }).withMessage('A short reason is required (max 500 chars).'),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    if (req.anonIdentity.identityId === req.body.targetIdentityId) {
+      return error(res, 'SELF_REPORT', 'You cannot report yourself.', 400);
+    }
+    const target = await prisma.anonymousIdentity.findFirst({
+      where: { id: req.body.targetIdentityId, groupId: req.params.id },
+      select: { id: true, bannedAt: true },
+    });
+    if (!target) return error(res, 'NOT_FOUND', 'Identity not found in this group.', 404);
+
+    await prisma.anonReport.create({
+      data: {
+        groupId: req.params.id,
+        targetIdentityId: req.body.targetIdentityId,
+        reporterIdentityId: req.anonIdentity.identityId,
+        reason: req.body.reason.slice(0, 500),
+      },
+    });
+    return success(res, { message: 'Report submitted. The group creator can review it.' }, 201);
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/v1/groups/:id/anons/reports — Creator view: identities with
+ * open reports (alias + tag + avatar only — never user info).
+ */
+router.get('/:id/anons/reports', requireGroupMember, requireAnonCreator, async (req, res, next) => {
+  try {
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    const reports = await prisma.anonReport.findMany({
+      where: { groupId: req.params.id, status: 'open' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const ids = [...new Set(reports.map(r => r.targetIdentityId))];
+    const identities = ids.length > 0
+      ? await prisma.anonymousIdentity.findMany({ where: { id: { in: ids } }, select: { id: true, alias: true, aliasTag: true, avatarUrl: true, bannedAt: true } })
+      : [];
+    const byId = Object.fromEntries(identities.map(i => [i.id, i]));
+
+    const grouped = {};
+    for (const r of reports) {
+      if (!grouped[r.targetIdentityId]) {
+        grouped[r.targetIdentityId] = {
+          identity: byId[r.targetIdentityId] || { id: r.targetIdentityId, alias: 'Unknown', aliasTag: '????' },
+          reports: [],
+        };
+      }
+      grouped[r.targetIdentityId].reports.push({
+        reason: r.reason, createdAt: r.createdAt, reporterIdentityId: r.reporterIdentityId,
+      });
+    }
+    return success(res, Object.values(grouped));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/:identityId/ban — Creator bans an identity.
+ * The owner is never revealed; their future posts are rejected and their
+ * messages are hidden from the feed.
+ */
+router.post('/:id/anons/:identityId/ban', requireGroupMember, requireAnonCreator, async (req, res, next) => {
+  try {
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    const target = await prisma.anonymousIdentity.findFirst({
+      where: { id: req.params.identityId, groupId: req.params.id },
+    });
+    if (!target) return error(res, 'NOT_FOUND', 'Identity not found in this group.', 404);
+
+    await prisma.anonymousIdentity.update({
+      where: { id: target.id },
+      data: { bannedAt: new Date() },
+    });
+    // Close open reports against them.
+    await prisma.anonReport.updateMany({
+      where: { groupId: req.params.id, targetIdentityId: target.id, status: 'open' },
+      data: { status: 'cleared' },
+    });
+    emitToGroup(req.params.id, 'anon:moderation', {
+      type: 'ban', identityId: target.id,
+      groupId: req.params.id, at: new Date().toISOString(),
+    });
+    return success(res, { message: 'Identity banned.', identityId: target.id });
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/:identityId/unban — Creator un-bans.
+ */
+router.post('/:id/anons/:identityId/unban', requireGroupMember, requireAnonCreator, async (req, res, next) => {
+  try {
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    const target = await prisma.anonymousIdentity.findFirst({
+      where: { id: req.params.identityId, groupId: req.params.id },
+    });
+    if (!target) return error(res, 'NOT_FOUND', 'Identity not found in this group.', 404);
+    await prisma.anonymousIdentity.update({
+      where: { id: target.id },
+      data: { bannedAt: null },
+    });
+    emitToGroup(req.params.id, 'anon:moderation', {
+      type: 'unban', identityId: target.id,
+      groupId: req.params.id, at: new Date().toISOString(),
+    });
+    return success(res, { message: 'Identity un-banned.', identityId: target.id });
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+    next(err);
+  }
+});
+
+/**
+ * PUT /api/v1/groups/:id/wordbans — Creator sets the word-ban list.
+ * Body: { words: ["...", "..."] }
+ */
+router.put('/:id/wordbans', requireGroupMember, requireAnonCreator, [
+  body('words').isArray({ max: 100 }).withMessage('words must be an array (max 100).'),
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+        errors.array().map(e => ({ field: e.path, issue: e.msg }))
+      );
+    }
+    const words = req.body.words
+      .map(w => String(w).trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 100);
+    await prisma.cohortGroup.update({
+      where: { id: req.params.id },
+      data: { wordBanList: words },
+    });
+    return success(res, { message: 'Word ban list updated.', words });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/groups/:id/anons/leave — Permanently delete own identity.
+ * Past messages keep the alias snapshot; the alias+freedom secret is released.
+ */
+router.post('/:id/anons/leave', requireGroupMember, async (req, res, next) => {
+  try {
+    if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    await prisma.anonymousIdentity.delete({ where: { id: req.anonIdentity.identityId } });
+    return success(res, { message: 'Identity deleted. Your alias is released.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
 // MESSAGES (REST fallback — prefer WebSocket for real-time)
 // ============================================================
 
@@ -756,7 +1122,7 @@ router.get('/:id/messages', requireGroupMember, async (req, res, next) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const result = await messageService.getMessages(req.params.id, { page, limit }, req.user.id);
+    const result = await messageService.getMessages(req.params.id, { page, limit }, req.user.id, !!req.anonIdentity);
     return success(res, result);
   } catch (err) {
     next(err);
@@ -780,7 +1146,7 @@ router.get('/:id/messages/pinned', requireGroupMember, async (req, res, next) =>
  */
 router.get('/:id/messages/:msgId', requireGroupMember, async (req, res, next) => {
   try {
-    const msg = await messageService.getMessage(req.params.msgId, req.params.id);
+    const msg = await messageService.getMessage(req.params.msgId, req.params.id, !!req.anonIdentity);
     return success(res, msg);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -796,7 +1162,7 @@ router.patch('/:id/messages/:msgId/react', requireGroupMember, async (req, res, 
     const { emoji } = req.body;
     if (!emoji) return error(res, 'VALIDATION_ERROR', 'Emoji is required.', 400);
 
-    const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji, req.params.id);
+    const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji, req.params.id, req.anonIdentity || null);
     // Notify clients instantly of the updated reaction strip
     emitToGroup(req.params.id, 'message:react', { messageId: msg.id, reactions: msg.reactions });
     
@@ -823,15 +1189,18 @@ router.post(
         return error(res, 'VALIDATION_ERROR', 'Message content or attachment is required.', 400);
       }
 
-      // Check mute status
-      const muteStatus = await groupService.isMuted(req.params.id, req.user.id);
-      if (muteStatus) {
-        return error(res, 'USER_MUTED', `You are muted until ${muteStatus.mutedUntil.toISOString()}.`, 403);
+      // Check mute status (user-level — anonymous identities can't be muted,
+      // only banned; this check is skipped for anon groups).
+      if (!req.anonIdentity) {
+        const muteStatus = await groupService.isMuted(req.params.id, req.user.id);
+        if (muteStatus) {
+          return error(res, 'USER_MUTED', `You are muted until ${muteStatus.mutedUntil.toISOString()}.`, 403);
+        }
       }
 
       const params = {
         content,
-        mentions: parseMentions(req.body.mentions),
+        mentions: req.anonIdentity ? [] : parseMentions(req.body.mentions),
         replyToId: req.body.replyToId || undefined,
         forwarded: req.body.forwarded === 'true',
         msgType: req.body.msgType || 'text',
@@ -853,7 +1222,24 @@ router.post(
         }
       }
 
-      const msg = await messageService.sendMessage(req.params.id, req.user.id, params);
+      // Word-ban filter (creator-configured, anonymous and normal groups)
+      if (content) {
+        const grp = await prisma.cohortGroup.findUnique({
+          where: { id: req.params.id },
+          select: { wordBanList: true },
+        });
+        const bannedWord = groupService.containsBannedWord(content, grp?.wordBanList);
+        if (bannedWord) {
+          return error(res, 'BANNED_WORD', `Your message contains a banned word ("${bannedWord}").`, 403);
+        }
+      }
+
+      const msg = await messageService.sendMessage(
+        req.params.id,
+        req.user.id,
+        params,
+        req.anonIdentity || null
+      );
       
       // We don't emit a socket here because this is the fallback, the frontend usually handles its own,
       // but actually we DO want to emit here if we're uploading files so real-time clients see it.
@@ -872,6 +1258,8 @@ router.post(
  */
 router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => {
   try {
+    // Anonymous groups have no read receipts (they'd leak identity) — skip.
+    if (req.anonIdentity) return success(res, { markedCount: 0, anonSkipped: true });
     const result = await messageService.markGroupMessagesRead(req.params.id, req.user.id);
     return success(res, result);
   } catch (err) {
@@ -884,6 +1272,7 @@ router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => 
  */
 router.get('/:id/messages/:msgId/readby', requireGroupMember, async (req, res, next) => {
   try {
+    if (req.anonIdentity) return success(res, []); // no receipts in anon groups
     const receipts = await messageService.getReadReceipts(req.params.msgId, req.params.id);
     return success(res, receipts);
   } catch (err) {
@@ -894,14 +1283,16 @@ router.get('/:id/messages/:msgId/readby', requireGroupMember, async (req, res, n
 /**
  * GET /api/v1/groups/:id/unread — Get unread count for current user.
  */
-router.get('/:id/unread', requireGroupMember, async (req, res, next) => {
-  try {
-    const count = await groupService.getUnreadCount(req.params.id, req.user.id);
-    return success(res, { unreadCount: count });
-  } catch (err) {
-    next(err);
-  }
-});
+// Anonymous groups have no per-user unread tracking — report 0.
+    router.get('/:id/unread', requireGroupMember, async (req, res, next) => {
+      try {
+        if (req.anonIdentity) return success(res, { unreadCount: 0 });
+        const count = await groupService.getUnreadCount(req.params.id, req.user.id);
+        return success(res, { unreadCount: count });
+      } catch (err) {
+        next(err);
+      }
+    });
 
 /**
  * PATCH /api/v1/groups/:id/messages/:msgId — Edit own message.
@@ -919,7 +1310,7 @@ router.patch(
         );
       }
 
-      const msg = await messageService.editMessage(req.params.msgId, req.user.id, req.body.content, req.params.id);
+      const msg = await messageService.editMessage(req.params.msgId, req.user.id, req.body.content, req.params.id, req.anonIdentity || null);
 
       // Broadcast edit to all connected clients in the group
       emitToGroup(req.params.id, 'message:edit', msg);
@@ -938,13 +1329,23 @@ router.patch(
 router.delete('/:id/messages/:msgId', requireGroupMember, async (req, res, next) => {
   try {
     const perms = req.groupMembership?.permissions || {};
-    const msg = await messageService.deleteMessage(req.params.msgId, req.user.id, perms.can_delete_others_messages || req.user.globalRing === 0, req.params.id);
+    // In anonymous groups the creator can delete any message (never knowing
+    // the author); other identities can only delete their own.
+    let canDeleteOthers = !req.anonIdentity && (perms.can_delete_others_messages || req.user.globalRing === 0);
+    if (req.anonIdentity) {
+      const grp = await prisma.cohortGroup.findUnique({
+        where: { id: req.params.id },
+        select: { creatorId: true },
+      });
+      canDeleteOthers = (grp?.creatorId === req.user.id) || req.user.globalRing === 0;
+    }
+    const msg = await messageService.deleteMessage(req.params.msgId, req.user.id, canDeleteOthers, req.params.id, req.anonIdentity || null);
 
     // Broadcast deletion to all connected clients in the group
     emitToGroup(req.params.id, 'message:delete', {
       messageId: req.params.msgId,
       groupId: req.params.id,
-      deletedBy: req.user.id,
+      deletedBy: req.anonIdentity ? `anon:${req.anonIdentity.identityId}` : req.user.id,
     });
 
     return success(res, { message: 'Message deleted.' });
@@ -957,7 +1358,7 @@ router.delete('/:id/messages/:msgId', requireGroupMember, async (req, res, next)
 /**
  * POST /api/v1/groups/:id/messages/:msgId/pin — Pin a message.
  */
-router.post('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
+router.post('/:id/messages/:msgId/pin', requireGroupMember, requireAnonCreator, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
   try {
     const { msg, unpinnedIds } = await messageService.pinMessage(req.params.msgId, req.params.id);
     emitToGroup(req.params.id, 'message:pinnedUpdate', { pinnedMsg: msg, unpinnedIds });
@@ -970,7 +1371,7 @@ router.post('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermissi
 /**
  * DELETE /api/v1/groups/:id/messages/:msgId/pin — Unpin a message.
  */
-router.delete('/:id/messages/:msgId/pin', requireGroupMember, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
+router.delete('/:id/messages/:msgId/pin', requireGroupMember, requireAnonCreator, requireGroupPermission('can_pin_messages'), async (req, res, next) => {
   try {
     const msg = await messageService.unpinMessage(req.params.msgId, req.params.id);
     emitToGroup(req.params.id, 'message:unpinned', { messageId: msg.id });

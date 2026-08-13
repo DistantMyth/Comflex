@@ -80,6 +80,10 @@ model User {
   // Notifications
   notifications     Notification[]
 
+  // Anonymous groups — boolean "has joined" flags only. NEVER linked to an
+  // identity: a DB dump reveals who joined which group, but never who is who.
+  anonJoins AnonGroupJoin[]
+
   // Credits & Badges Relations
   acquiredBadges    UserBadge[]
   chatbotNotes      ChatbotNote[]
@@ -123,6 +127,8 @@ model CohortGroup {
   ringConfig  Json?            // { ringCount: 5, ringLabels: { 0: "Admin", 1: "Manager", ... } }
   inviteToken String?          // unique token for invite links
   inviteTokenExpiry DateTime?  // rotating invite links expire (7 days)
+  isAnonymous Boolean          @default(false) // anonymous mode: no rings, alias-only identities
+  wordBanList  String[]        @default([])    // creator-set filter enforced on message send
   createdAt   DateTime @default(now())
 
   // Relations
@@ -130,6 +136,66 @@ model CohortGroup {
   mutes    MuteRecord[]
   messages Message[]
   invites  GroupInvite[]
+  anonIdentities AnonymousIdentity[]
+  anonReports    AnonReport[]
+  anonJoins      AnonGroupJoin[]
+}
+
+// ============================================================
+// ANONYMOUS GROUP IDENTITY — Zero-knowledge alias for anon groups
+// The real userId is NEVER stored here (or on anon messages). The server
+// only keeps a one-way HMAC hash of a per-identity secret that the client
+// holds; identity actions are authorized by proving possession of that
+// secret. Nothing in the DB can be de-anonymized, even by the operator.
+// ============================================================
+model AnonymousIdentity {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  groupId    String   @db.ObjectId
+  alias      String            // display name chosen at join
+  aliasKey   String            // lowercase(alias) for case-insensitive uniqueness
+  aliasTag   String            // 4-digit disambiguator, e.g. "4821"
+  avatarUrl  String?           // optional pfp chosen at join
+  secretHash String            // HMAC-SHA256(secret, server pepper) — one-way
+  bannedAt   DateTime?
+  createdAt  DateTime @default(now())
+
+  // Relations
+  group CohortGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, aliasKey]) // one alias per group case-insensitively
+}
+
+// ============================================================
+// ANON GROUP JOIN — Boolean "has joined group X" flag (user-level).
+// Deliberately NOT linked to an AnonymousIdentity: it tells the app
+// whether a returning user should be prompted for their key, without
+// ever recording which identity they are. A DB dump cannot correlate.
+// ============================================================
+model AnonGroupJoin {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  groupId  String   @db.ObjectId
+  userId   String   @db.ObjectId
+  joinedAt DateTime @default(now())
+
+  group CohortGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+// ============================================================
+// ANON REPORT — Identity-level (never user-level) reports in anon groups
+// ============================================================
+model AnonReport {
+  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
+  groupId             String   @db.ObjectId
+  targetIdentityId    String   @db.ObjectId
+  reporterIdentityId  String   @db.ObjectId
+  reason              String
+  status              String   @default("open") // "open" | "cleared"
+  createdAt           DateTime @default(now())
+
+  group CohortGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 }
 
 // ============================================================
@@ -176,7 +242,10 @@ model GroupInvite {
 model Message {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   groupId     String   @db.ObjectId
-  authorId    String   @db.ObjectId
+  authorId    String?  @db.ObjectId // null for anonymous group messages
+  authorType  String   @default("user") // "user" | "anon"
+  anonAuthorId String? @db.ObjectId // AnonymousIdentity id for anon messages (no FK — zero-knowledge)
+  authorSnapshot Json? // { alias, aliasTag, avatarUrl } — the anon author's public face, frozen at send time
   content     String
   attachments String[] @default([])
   mentions    String[] @default([])
@@ -198,7 +267,7 @@ model Message {
 
   // Relations
   group        CohortGroup        @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  author       User               @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  author       User?              @relation(fields: [authorId], references: [id], onDelete: SetNull)
   readReceipts MessageReadReceipt[]
 }
 
@@ -308,6 +377,23 @@ model Event {
   autoStart       Boolean  @default(true)
 
   rewardTiers     Json?    // [{ rank: 1, credits: 500, badgeId: "optional-id" }]
+
+  // Invite-only participation + shareable invite link (rotating, 7-day expiry)
+  inviteMode          String?  @default("open") // "open" | "invite_only"
+  inviteToken         String?  // unique token for event invite links (32-byte random, no index needed)
+  inviteTokenExpiry   DateTime? // rotating invite links expire (7 days)
+
+  // Access control: whitelist/blacklist cohorts and users
+  allowedCohorts      String[] @default([]) // cohort tags that MAY join (empty = no whitelist)
+  blockedCohorts      String[] @default([]) // cohort tags that may NOT join
+  allowedUserIds      String[] @default([]) // users that MAY join (empty = no whitelist)
+  blockedUserIds      String[] @default([]) // users that may NOT join
+
+  // Automatic reward distribution: budget consumed per correct auto-graded answer;
+  // the event completes when the budget runs out.
+  rewardBudget        Json?    // { creditsPerCorrect, maxCredits, badgeId, badgesPerCorrect, maxBadges }
+  rewardCreditsSpent  Int      @default(0)
+  rewardBadgesSpent   Int      @default(0)
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

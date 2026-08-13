@@ -8,10 +8,12 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { groupApi } from '../api/groupApi';
 import { adminApi } from '../api/adminApi';
+import { setAnonSession } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
-import { Mail, MessagesSquare, Users } from 'lucide-react';
+import { Mail, MessagesSquare, Users, KeyRound } from 'lucide-react';
 import CreateGroupModal from '../components/CreateGroupModal';
 import CreateCohortGroupModal from '../components/CreateCohortGroupModal';
+import BackupKeyModal from '../components/BackupKeyModal';
 import resolveAsset from '../utils/resolveAsset';
 
 const TYPE_LABELS = { primary: 'Cohort', 'cross-year': 'Cross-Year', custom: 'Custom' };
@@ -24,6 +26,10 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateCohort, setShowCreateCohort] = useState(false);
+  const [aliasGroupId, setAliasGroupId] = useState(null); // anon invite awaiting alias
+  const [pendingAnon, setPendingAnon] = useState(null); // { inviteId, groupId, identity }
+  const [aliasInput, setAliasInput] = useState('');
+  const [loadingAliasInvite, setLoadingAliasInvite] = useState(null);
   const { user } = useAuth();
   const navigate = useNavigate();
   const isAdmin = user?.globalRing === 0;
@@ -48,10 +54,21 @@ export default function GroupsPage() {
 
   const handleAcceptInvite = async (groupId, inviteId) => {
     try {
-      await groupApi.acceptInvite(groupId, inviteId);
+      const res = await groupApi.acceptInvite(groupId, inviteId);
+      const payload = res.data.data;
+      if (payload?.identityId && payload?.secret) {
+        // Anonymous group identity minted — require a key backup first.
+        setPendingAnon({ inviteId, groupId, identity: payload });
+        return;
+      }
       fetchData();
     } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to accept invite.');
+      const apiErr = err.response?.data?.error;
+      if (apiErr?.code === 'ALIAS_REQUIRED') {
+        setAliasGroupId(groupId);
+        return;
+      }
+      alert(apiErr?.message || 'Failed to accept invite.');
     }
   };
 
@@ -62,6 +79,38 @@ export default function GroupsPage() {
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to reject invite.');
     }
+  };
+
+  const acceptAnonWithAlias = async (groupId, inviteId) => {
+    if (!aliasInput.trim()) return;
+    setLoadingAliasInvite(inviteId);
+    try {
+      const res = await groupApi.acceptInvite(groupId, inviteId, aliasInput.trim());
+      const payload = res.data.data;
+      setAliasGroupId(null);
+      setAliasInput('');
+      setPendingAnon({ groupId, identity: payload });
+    } catch (err) {
+      setAliasGroupId(null);
+      setAliasInput('');
+      alert(err.response?.data?.error?.message || 'Failed to accept invite.');
+    } finally {
+      setLoadingAliasInvite(null);
+    }
+  };
+
+  const handlePendingAnonDone = () => {
+    if (!pendingAnon) return;
+    const { groupId, identity } = pendingAnon;
+    setAnonSession(groupId, {
+      identityId: identity.identityId,
+      secret: identity.secret,
+      alias: identity.alias,
+      aliasTag: identity.aliasTag,
+      avatarUrl: identity.avatarUrl,
+    });
+    setPendingAnon(null);
+    fetchData();
   };
 
   return (
@@ -120,10 +169,25 @@ export default function GroupsPage() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleAcceptInvite(inv.groupId, inv.id)}
+                      disabled={loadingAliasInvite === inv.id}
                       className="btn btn-primary text-xs px-3 py-1.5"
                     >
-                      Accept
+                      {loadingAliasInvite === inv.id ? 'Joining...' : 'Accept'}
                     </button>
+                      {aliasGroupId === inv.groupId && (
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Choose an anonymous alias..."
+                          value={aliasInput}
+                          maxLength={32}
+                          onChange={e => setAliasInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') acceptAnonWithAlias(inv.groupId, inv.id);
+                          }}
+                          className="input !w-44 !py-1.5 !text-xs"
+                        />
+                      )}
                     <button
                       onClick={() => handleRejectInvite(inv.groupId, inv.id)}
                       className="btn btn-secondary text-xs px-3 py-1.5"
@@ -196,6 +260,16 @@ export default function GroupsPage() {
                   </span>
                 )}
 
+                {/* Needs key restore badge */}
+                {group.needsKeyRestore && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-[var(--color-warning)] text-[var(--color-warning)]"
+                    title="Your anonymous identity key for this group was removed from this device. Click to restore it."
+                  >
+                    <KeyRound size={12} /> Restore key
+                  </span>
+                )}
+
                 {/* Ring badge */}
                 {isAdmin ? (
                   <span className="px-2.5 py-1 rounded-full text-xs text-white bg-[var(--color-accent)]">
@@ -229,6 +303,13 @@ export default function GroupsPage() {
             fetchData();
             if (group?.id) navigate(`/groups/${group.id}`);
           }}
+        />
+      )}
+    {pendingAnon && (
+        <BackupKeyModal
+          groupName={pendingAnon.identity.alias ? `your anonymous group` : 'this group'}
+          identity={pendingAnon.identity}
+          onDone={handlePendingAnonDone}
         />
       )}
     </>

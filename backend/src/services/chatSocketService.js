@@ -83,6 +83,35 @@ function initSocket(httpServer, frontendUrl) {
     // Join personal room for DM delivery
     socket.join(`user:${socket.user.id}`);
 
+    // Anonymous-group sessions: the client presents { groupId, identityId, secret }
+    // pairs; verified identities join their group rooms (zero-knowledge — the
+    // server can't map them back to this user id).
+    socket.anonSessions = [];
+    try {
+      const anonAuth = socket.handshake.auth?.anon;
+      if (Array.isArray(anonAuth)) {
+        for (const session of anonAuth) {
+          if (!session?.groupId || !session?.identityId || !session?.secret) continue;
+          const identity = await groupService.resolveAnonIdentity(session.identityId, session.secret);
+          if (!identity || identity.groupId !== session.groupId) continue;
+          if (identity.bannedAt) {
+            socket.emit('anon:banned', { groupId: identity.groupId, identityId: identity.id });
+            continue;
+          }
+          socket.anonSessions.push({
+            groupId: session.groupId,
+            identityId: identity.id,
+            alias: identity.alias,
+            aliasTag: identity.aliasTag,
+            avatarUrl: identity.avatarUrl,
+          });
+          socket.join(session.groupId);
+        }
+      }
+    } catch (err) {
+      console.error('[WS] Failed to resolve anon sessions:', err.message);
+    }
+
     // Auto-join all group rooms the user belongs to
     try {
       const memberships = await prisma.groupMember.findMany({
@@ -92,7 +121,7 @@ function initSocket(httpServer, frontendUrl) {
       for (const m of memberships) {
         socket.join(m.groupId);
       }
-      console.log(`[WS] Joined ${memberships.length} group rooms + personal room for ${socket.user.email}`);
+      console.log(`[WS] Joined ${memberships.length} group rooms + ${socket.anonSessions.length} anon rooms + personal room for ${socket.user.email}`);
     } catch (err) {
       console.error(`[WS] Failed to join rooms for ${socket.user.email}:`, err.message);
     }
@@ -105,6 +134,34 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'groupId and content are required.' });
         }
 
+        const group = await prisma.cohortGroup.findUnique({
+          where: { id: groupId },
+          select: { isAnonymous: true, wordBanList: true },
+        });
+        if (!group) return callback?.({ error: 'Group not found.' });
+
+        if (group.isAnonymous) {
+          // ── Anonymous path: prove identity secret ─────────────
+          const anon = socket.anonSessions?.find(s => s.groupId === groupId && s.identityId === (data.anonIdentityId || ''));
+          if (!anon) return callback?.({ error: 'Not a member of this group.' });
+
+          const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
+          if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
+
+          const msg = await messageService.sendMessage(groupId, socket.user.id, {
+            content: content?.trim() || '',
+            mentions: [],
+            attachments,
+            replyToId,
+            forwarded,
+            msgType,
+          }, anon);
+
+          io.to(groupId).emit('message:new', msg);
+          return callback?.({ success: true, message: msg });
+        }
+
+        // ── Normal path ────────────────────────────────────────
         // Check membership
         const membership = await prisma.groupMember.findUnique({
           where: { userId_groupId: { userId: socket.user.id, groupId } },
@@ -124,6 +181,9 @@ function initSocket(httpServer, frontendUrl) {
         if (muteStatus) {
           return callback?.({ error: `Muted until ${muteStatus.mutedUntil.toISOString()}` });
         }
+
+        const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
+        if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
 
         const msg = await messageService.sendMessage(groupId, socket.user.id, {
           content: content?.trim() || '',
@@ -151,6 +211,11 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'groupId is required.' });
         }
 
+        // Anonymous groups have no read receipts (they'd leak identity).
+        if (socket.anonSessions?.some(s => s.groupId === groupId)) {
+          return callback?.({ success: true, anonSkipped: true });
+        }
+
         const result = await messageService.markGroupMessagesRead(groupId, socket.user.id);
 
         // Broadcast read update to the group so others see read receipts update
@@ -171,6 +236,9 @@ function initSocket(httpServer, frontendUrl) {
     // ── typing:start (groups) ────────────────────────────
     socket.on('typing:start', ({ groupId }) => {
       if (groupId) {
+        // Typing indicators are suppressed in anonymous groups — the payload
+        // would carry the real user's id/displayName.
+        if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
         socket.to(groupId).emit('typing:start', {
           userId: socket.user.id,
           displayName: socket.user.displayName,
@@ -182,6 +250,7 @@ function initSocket(httpServer, frontendUrl) {
     // ── typing:stop (groups) ─────────────────────────────
     socket.on('typing:stop', ({ groupId }) => {
       if (groupId) {
+        if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
         socket.to(groupId).emit('typing:stop', {
           userId: socket.user.id,
           groupId,
@@ -254,6 +323,34 @@ function initSocket(httpServer, frontendUrl) {
         io.to(`user:${receiverId}`).emit('dm:typing:stop', {
           userId: socket.user.id,
         });
+      }
+    });
+
+    // ── anon:join — join an anonymous group room (used after connect, e.g.
+    // when the user accepted an invite / joined via link mid-session) ─────
+    socket.on('anon:join', async (data, callback) => {
+      try {
+        const { groupId, identityId, secret } = data || {};
+        if (!groupId || !identityId || !secret) {
+          return callback?.({ error: 'groupId, identityId and secret are required.' });
+        }
+        const identity = await groupService.resolveAnonIdentity(identityId, secret);
+        if (!identity || identity.groupId !== groupId) {
+          return callback?.({ error: 'Invalid anon session for this group.' });
+        }
+        if (identity.bannedAt) {
+          socket.emit('anon:banned', { groupId, identityId });
+          return callback?.({ error: 'This identity is banned from the group.' });
+        }
+        socket.join(groupId);
+        socket.anonSessions = socket.anonSessions || [];
+        socket.anonSessions.push({
+          groupId, identityId: identity.id,
+          alias: identity.alias, aliasTag: identity.aliasTag, avatarUrl: identity.avatarUrl,
+        });
+        callback?.({ success: true });
+      } catch (err) {
+        callback?.({ error: err.message });
       }
     });
 

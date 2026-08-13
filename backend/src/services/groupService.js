@@ -7,6 +7,9 @@
 
 const prisma = require('../prisma');
 const { canActOnUser } = require('../middleware/ringCheck');
+const { issueSecret, hashSecret, verifySecret, issueAliasTag } = require('../utils/anonIdentity');
+
+const ALIAS_MAX_LEN = 24;
 
 // Full admin permissions object
 const ADMIN_PERMISSIONS = {
@@ -41,8 +44,13 @@ function getDefaultPermissions(ring) {
 
 /**
  * List all groups the user belongs to, with unread counts.
+ * Anonymous memberships are merged in from the identity sessions the client
+ * presents — the server never learns an identity's owner, so it can't look
+ * anon groups up by userId.
+ * @param {string} userId
+ * @param {Array<{groupId: string, identityId: string, secret: string}>} anonSessions
  */
-async function listUserGroups(userId) {
+async function listUserGroups(userId, anonSessions = []) {
   const memberships = await prisma.groupMember.findMany({
     where: { userId },
     include: {
@@ -57,13 +65,89 @@ async function listUserGroups(userId) {
   const groupIds = memberships.map(m => m.groupId);
   const unreadCounts = await getUnreadCountsBatch(userId, groupIds);
 
-  return memberships.map((m) => ({
+  const groups = memberships.map((m) => ({
     ...m.group,
     memberCount: m.group._count.members,
     userRing: m.ring,
     userPermissions: m.permissions,
     unreadCount: unreadCounts[m.groupId] || 0,
   }));
+
+  // Identify-only sessions for anonymous groups
+  if (anonSessions.length > 0) {
+    const identities = await prisma.anonymousIdentity.findMany({
+      where: {
+        id: { in: anonSessions.map(s => s.identityId) },
+        bannedAt: null,
+      },
+    });
+    const anonGroupIds = [...new Set(identities.map(i => i.groupId))];
+    if (anonGroupIds.length > 0) {
+      const anonGroups = await prisma.cohortGroup.findMany({
+        where: { id: { in: anonGroupIds }, isAnonymous: true },
+        include: { _count: { select: { anonIdentities: true } } },
+      });
+      const counts = await prisma.anonymousIdentity.groupBy({
+        by: ['groupId'],
+        _count: { _id: true },
+        where: { groupId: { in: anonGroupIds }, bannedAt: null },
+      });
+      const countMap = Object.fromEntries(counts.map(c => [c.groupId, c._count._id]));
+
+      for (const session of anonSessions) {
+        const identity = identities.find(i => i.id === session.identityId);
+        if (!identity || !verifySecret(session.secret, identity.secretHash)) continue;
+        const group = anonGroups.find(g => g.id === identity.groupId);
+        if (!group) continue;
+        if (groups.some(g => g.id === group.id)) continue; // dedupe
+        groups.push({
+          ...group,
+          memberCount: countMap[group.id] || 0,
+          isAnonymous: true,
+          userRing: null,
+          userPermissions: null,
+          unreadCount: 0,
+          myIdentity: {
+            identityId: identity.id,
+            alias: identity.alias,
+            aliasTag: identity.aliasTag,
+            avatarUrl: identity.avatarUrl,
+          },
+        });
+      }
+      // Re-sort merged list newest-first by join time is impossible for anon;
+      // keep stable order (memberships first, then anon groups).
+    }
+  }
+
+  // Groups the user has joined anonymously (boolean flag in AnonGroupJoin) but
+  // for which they currently hold no valid session — e.g. cookies cleared.
+  // They still appear so the UI can prompt for the saved key to restore in.
+  const anonJoins = await prisma.anonGroupJoin.findMany({
+    where: { userId },
+    include: {
+      group: {
+        include: { _count: { select: { anonIdentities: true } } },
+      },
+    },
+    orderBy: { joinedAt: 'desc' },
+  });
+  for (const join of anonJoins) {
+    if (!join.group.isAnonymous) continue;
+    if (groups.some(g => g.id === join.groupId)) continue; // dedupe (active session)
+    groups.push({
+      ...join.group,
+      memberCount: join.group._count.anonIdentities || 0,
+      isAnonymous: true,
+      userRing: null,
+      userPermissions: null,
+      unreadCount: 0,
+      myIdentity: null,   // no session — restore via key
+      needsKeyRestore: true,
+    });
+  }
+
+  return groups;
 }
 
 /**
@@ -119,26 +203,30 @@ async function getUnreadCount(groupId, userId) {
 async function getGroup(groupId) {
   const group = await prisma.cohortGroup.findUnique({
     where: { id: groupId },
-    include: { _count: { select: { members: true } } },
+    include: { _count: { select: { members: true, anonIdentities: { where: { bannedAt: null } } } } },
   });
   if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404, code: 'GROUP_NOT_FOUND' });
-  return { ...group, memberCount: group._count.members };
+  const memberCount = group.isAnonymous ? group._count.anonIdentities : group._count.members;
+  const { _count, ...safe } = group;
+  return { ...safe, memberCount };
 }
 
 /**
  * Create a new group. Any authenticated user can create.
- * Creator is automatically added as Ring 0 admin.
+ * Creator is automatically added as Ring 0 admin (normal groups) — for
+ * anonymous groups there are no rings and no GroupMember rows; the creator
+ * claims an alias via POST /groups/:id/anons/claim right after.
  */
-async function createGroup({ name, displayName, description, type = 'custom', creatorId, avatarUrl }) {
+async function createGroup({ name, displayName, description, type = 'custom', creatorId, avatarUrl, isAnonymous = false }) {
   const existing = await prisma.cohortGroup.findUnique({ where: { name } });
   if (existing) throw Object.assign(new Error('A group with this name already exists.'), { statusCode: 409, code: 'DUPLICATE_GROUP' });
 
   const group = await prisma.cohortGroup.create({
-    data: { name, displayName, description, type, creatorId, avatarUrl },
+    data: { name, displayName, description, type, creatorId, avatarUrl, isAnonymous },
   });
 
   // Auto-add creator as Ring 0 admin with full permissions
-  if (creatorId) {
+  if (creatorId && !isAnonymous) {
     await prisma.groupMember.create({
       data: {
         userId: creatorId,
@@ -239,6 +327,13 @@ async function addMember(groupId, userId, addedByUserId, ringInput, bypassFriend
   });
   if (existing) throw Object.assign(new Error('User is already a member.'), { statusCode: 409, code: 'ALREADY_MEMBER' });
 
+  // Anonymous groups have no GroupMember rows — membership is an identity the
+  // invitee claims themselves (they must pick an alias). Route through invites.
+  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: groupId }, select: { isAnonymous: true, ringConfig: true } });
+  if (groupInfo?.isAnonymous) {
+    return createInvite(groupId, userId, addedByUserId || userId);
+  }
+
   // Check friendship (skip for system/admin additions where addedByUserId is null, or if bypass requested)
   if (!bypassFriendCheck && addedByUserId && addedByUserId !== userId) {
     const friends = await areFriends(addedByUserId, userId);
@@ -249,7 +344,6 @@ async function addMember(groupId, userId, addedByUserId, ringInput, bypassFriend
   }
 
   // Get default joining ring
-  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: groupId }, select: { ringConfig: true } });
   const defaultRingSetting = groupInfo?.ringConfig?.defaultRing !== undefined ? groupInfo.ringConfig.defaultRing : 3;
   const computedRing = ringInput !== undefined ? ringInput : defaultRingSetting;
 
@@ -388,8 +482,10 @@ async function createInvite(groupId, userId, invitedBy) {
 
 /**
  * Accept a group invite. Only the invited user can accept.
+ * Anonymous groups: acceptance mints an identity — the real user is never
+ * recorded, only the alias and a one-way hash of the client-held secret.
  */
-async function acceptInvite(inviteId, userId) {
+async function acceptInvite(inviteId, userId, alias, avatarUrl) {
   const invite = await prisma.groupInvite.findUnique({ where: { id: inviteId } });
   if (!invite) throw Object.assign(new Error('Invite not found.'), { statusCode: 404, code: 'INVITE_NOT_FOUND' });
   if (invite.userId !== userId) {
@@ -405,7 +501,11 @@ async function acceptInvite(inviteId, userId) {
     data: { status: 'accepted' },
   });
 
-  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: invite.groupId }, select: { ringConfig: true } });
+  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: invite.groupId }, select: { isAnonymous: true } });
+  if (groupInfo?.isAnonymous) {
+    return claimAnonIdentity(invite.groupId, userId, alias, avatarUrl);
+  }
+
   const joinRing = groupInfo?.ringConfig?.defaultRing !== undefined ? groupInfo.ringConfig.defaultRing : 3;
 
   // Add user as member
@@ -525,7 +625,7 @@ async function getInviteLink(groupId) {
 /**
  * Join a group using an invite token.
  */
-async function joinViaLink(token, userId) {
+async function joinViaLink(token, userId, alias, avatarUrl) {
   const group = await prisma.cohortGroup.findFirst({ where: { inviteToken: token } });
   if (!group) throw Object.assign(new Error('Invalid or expired invite link.'), { statusCode: 404, code: 'INVALID_LINK' });
 
@@ -533,6 +633,12 @@ async function joinViaLink(token, userId) {
     // Rotate the stale token out immediately.
     await prisma.cohortGroup.update({ where: { id: group.id }, data: { inviteToken: null, inviteTokenExpiry: null } });
     throw Object.assign(new Error('This invite link has expired. Ask for a fresh link.'), { statusCode: 410, code: 'LINK_EXPIRED' });
+  }
+
+  if (group.isAnonymous) {
+    // Claims an alias-based identity; joining twice creates a second identity
+    // (inherent to zero-knowledge — a banned alias just rejoins with a new one).
+    return claimAnonIdentity(group.id, userId, alias, avatarUrl);
   }
 
   // Add the user bypassing friend check
@@ -650,6 +756,220 @@ async function isMuted(groupId, userId) {
   return { muted: true, mutedUntil: mute.mutedUntil };
 }
 
+// ============================================================
+// ANONYMOUS GROUP IDENTITIES  (zero-knowledge by design)
+// ============================================================
+
+function sanitizeAlias(alias) {
+  if (typeof alias !== 'string') return null;
+  const clean = alias.trim().slice(0, ALIAS_MAX_LEN);
+  return clean;
+}
+
+/**
+ * Mint an anonymous identity for a group. `userId` is used only for the
+ * caller checks done BEFORE this runs (link token / invite ownership /
+ * creator claim); it is never persisted here or on any message.
+ * Returns the identity + the one-time secret — the controller hands the
+ * secret to the client and nothing reversible survives in the DB.
+ */
+async function claimAnonIdentity(groupId, userId, alias, avatarUrl) {
+  const cleanAlias = sanitizeAlias(alias);
+  if (!cleanAlias) {
+    throw Object.assign(new Error('A display alias is required for anonymous groups.'), { statusCode: 400, code: 'ALIAS_REQUIRED' });
+  }
+
+  const group = await prisma.cohortGroup.findUnique({ where: { id: groupId } });
+  if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404, code: 'GROUP_NOT_FOUND' });
+
+  if (!group.isAnonymous) {
+    throw Object.assign(new Error('This group is not anonymous.'), { statusCode: 400, code: 'NOT_ANONYMOUS' });
+  }
+
+  // Alias must be unique in the group case-insensitively (impersonation guard).
+  const aliasKey = cleanAlias.toLowerCase();
+  const clash = await prisma.anonymousIdentity.findFirst({
+    where: { groupId, aliasKey, bannedAt: null },
+    select: { id: true },
+  });
+  if (clash) {
+    throw Object.assign(new Error('That alias is already taken in this group. Try another.'), { statusCode: 409, code: 'ALIAS_TAKEN' });
+  }
+
+  // Free a tag: regenerate until it doesn't collide (trivial chance).
+  let aliasTag;
+  let tagClash = true;
+  while (tagClash) {
+    aliasTag = issueAliasTag();
+    const dup = await prisma.anonymousIdentity.findFirst({ where: { groupId, aliasTag }, select: { id: true } });
+    tagClash = !!dup;
+  }
+
+  const secret = issueSecret();
+  const identity = await prisma.anonymousIdentity.create({
+    data: {
+      groupId, alias: cleanAlias, aliasKey, aliasTag,
+      avatarUrl: avatarUrl || null,
+      secretHash: hashSecret(secret),
+    },
+  });
+
+  // Boolean "has joined" flag (user-level, no identity link). This is what
+  // lets the app prompt for a saved key later instead of forcing a new alias.
+  if (userId) {
+    await prisma.anonGroupJoin.upsert({
+      where: { groupId_userId: { groupId, userId } },
+      update: {},
+      create: { groupId, userId },
+    });
+  }
+
+  return {
+    groupId: identity.groupId,
+    identityId: identity.id,
+    secret,               // given to the client exactly once — never stored
+    alias: cleanAlias,
+    aliasTag,
+    avatarUrl: identity.avatarUrl,
+    _anonWarning: 'This secret is the only thing proving your identity in this group. It is not stored on the server.',
+  };
+}
+
+/**
+ * Resolve + authorize an anonymous identity from a client-presented
+ * `identityId.secret` pair. Returns the identity or null (never throws
+ * identity-existence info to APIs that shouldn't have it).
+ */
+async function resolveAnonIdentity(identityId, secret) {
+  if (!identityId || !secret) return null;
+  // Reject malformed ObjectIds before Prisma can (clean 400, not a 500).
+  if (!/^[a-f0-9]{24}$/i.test(identityId)) return null;
+  const identity = await prisma.anonymousIdentity.findUnique({ where: { id: identityId } }).catch(() => null);
+  if (!identity) return null;
+  if (!verifySecret(secret, identity.secretHash)) return null;
+  return identity;
+}
+
+/**
+ * Restore an anonymous identity from a saved key (`identityId.secret`).
+ * Enrollment rule: the user must hold the boolean AnonGroupJoin for the group
+ * (or be the creator) — the key proves WHO the identity is, the join flag
+ * proves the user belongs. Returns the identity + the secret (the key itself),
+ * mirroring claimAnonIdentity's shape so the client can store it verbatim.
+ */
+async function restoreAnonIdentity(groupId, key, userId) {
+  if (!key || typeof key !== 'string') {
+    throw Object.assign(new Error('Your saved key is required.'), { statusCode: 400, code: 'KEY_REQUIRED' });
+  }
+  const dot = key.indexOf('.');
+  if (dot <= 0 || dot === key.length - 1) {
+    throw Object.assign(new Error('That key does not look right. It should be in the format identityId.secret.'), { statusCode: 400, code: 'KEY_MALFORMED' });
+  }
+  const identityId = key.slice(0, dot);
+  const secret = key.slice(dot + 1);
+
+  const identity = await resolveAnonIdentity(identityId, secret);
+  if (!identity) {
+    throw Object.assign(new Error('That key is invalid or has been rotated. If you renamed your alias, the old key no longer works.'), { statusCode: 401, code: 'INVALID_KEY' });
+  }
+  if (identity.groupId !== groupId) {
+    throw Object.assign(new Error('That key belongs to a different group.'), { statusCode: 400, code: 'WRONG_GROUP' });
+  }
+  if (identity.bannedAt) {
+    throw Object.assign(new Error('This identity is banned in the group.'), { statusCode: 403, code: 'IDENTITY_BANNED' });
+  }
+
+  // The user must genuinely have joined this group (boolean flag). The creator
+  // is implicitly enrolled via their own flag when they claimed their alias.
+  const group = await prisma.cohortGroup.findUnique({ where: { id: groupId }, select: { id: true, isAnonymous: true, creatorId: true } });
+  if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404, code: 'GROUP_NOT_FOUND' });
+  if (!group.isAnonymous) {
+    throw Object.assign(new Error('This group is not anonymous.'), { statusCode: 400, code: 'NOT_ANONYMOUS' });
+  }
+  if (userId) {
+    const joined = await prisma.anonGroupJoin.findUnique({
+      where: { groupId_userId: { groupId, userId } },
+      select: { id: true },
+    }).catch(() => null);
+    if (!joined && group.creatorId !== userId) {
+      throw Object.assign(new Error('You are not enrolled in this group.'), { statusCode: 403, code: 'NOT_JOINED' });
+    }
+    // Keep the flag fresh so the group still surfaces in the user's list.
+    await prisma.anonGroupJoin.upsert({
+      where: { groupId_userId: { groupId, userId } },
+      update: {},
+      create: { groupId, userId },
+    });
+  }
+
+  return {
+    identityId: identity.id,
+    secret,             // the preserved key — unchanged by restore
+    alias: identity.alias,
+    aliasTag: identity.aliasTag,
+    avatarUrl: identity.avatarUrl,
+  };
+}
+
+/** Does this user hold a join flag (or own) the given (anon) group? */
+async function hasAnonJoin(groupId, userId) {
+  if (!userId) return false;
+  const group = await prisma.cohortGroup.findUnique({
+    where: { id: groupId },
+    select: { creatorId: true, isAnonymous: true },
+  });
+  if (!group || !group.isAnonymous) return false;
+  if (group.creatorId === userId) return true;
+  const join = await prisma.anonGroupJoin.findUnique({
+    where: { groupId_userId: { groupId, userId } },
+    select: { id: true },
+  }).catch(() => null);
+  return !!join;
+}
+
+/** Word-ban filtering — case-insensitive substring match on each word. */
+function containsBannedWord(content, wordBanList) {
+  const words = (wordBanList || []).filter(Boolean).map(w => w.trim().toLowerCase());
+  if (words.length === 0 || !content) return null;
+  const lower = content.toLowerCase();
+  const hit = words.find(w => w && lower.includes(w));
+  return hit || null;
+}
+
+/** Rename an identity / rotate its secret. Returns {secret} — new secret. */
+async function renameAnonIdentity(identityId, secret, newAlias, avatarUrl) {
+  const identity = await resolveAnonIdentity(identityId, secret);
+  if (!identity) throw Object.assign(new Error('Invalid identity secret.'), { statusCode: 401, code: 'INVALID_IDENTITY' });
+  if (identity.bannedAt) throw Object.assign(new Error('This identity is banned.'), { statusCode: 403, code: 'IDENTITY_BANNED' });
+
+  const cleanAlias = sanitizeAlias(newAlias);
+  if (!cleanAlias) throw Object.assign(new Error('An alias is required.'), { statusCode: 400, code: 'ALIAS_REQUIRED' });
+
+  const aliasKey = cleanAlias.toLowerCase();
+  if (aliasKey !== identity.aliasKey) {
+    const clash = await prisma.anonymousIdentity.findFirst({
+      where: { groupId: identity.groupId, aliasKey, id: { not: identityId } },
+      select: { id: true },
+    });
+    if (clash) throw Object.assign(new Error('That alias is already taken in this group.'), { statusCode: 409, code: 'ALIAS_TAKEN' });
+  }
+
+  // Rotate the secret so a previously-shared link/device dies; the old alias
+  // name is dropped forever (rename = fresh start, no tracking across names).
+  const newSecret = issueSecret();
+  await prisma.anonymousIdentity.update({
+    where: { id: identityId },
+    data: {
+      alias: cleanAlias,
+      aliasKey,
+      avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : identity.avatarUrl,
+      secretHash: hashSecret(newSecret),
+    },
+  });
+
+  return { secret: newSecret, alias: cleanAlias, aliasTag: identity.aliasTag, avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : identity.avatarUrl };
+}
+
 module.exports = {
   listUserGroups, getGroup, createGroup, updateGroup, deleteGroup,
   listMembers, getMembership, addMember, removeMember,
@@ -658,4 +978,6 @@ module.exports = {
   createInvite, acceptInvite, rejectInvite, listGroupInvites, listUserInvites,
   getInviteLink, joinViaLink,
   areFriends, getDefaultPermissions, updateRingConfig,
+  claimAnonIdentity, resolveAnonIdentity, renameAnonIdentity, containsBannedWord,
+  restoreAnonIdentity, hasAnonJoin,
 };
