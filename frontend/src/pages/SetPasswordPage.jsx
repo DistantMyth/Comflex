@@ -24,10 +24,12 @@ export default function SetPasswordPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Only reachable for Google accounts without a password (needsPassword).
-  // Users with an existing password change it from the profile page.
+  // Onboarding is only done when BOTH username and password exist.
+  // hasPassword comes from the profile response; needsPassword is only
+  // present on the login/googleLogin response — relying on it here caused
+  // an infinite /set-password ⇄ /profile redirect loop (the "flicker").
   useEffect(() => {
-    if (!user?.needsPassword && user?.username) navigate('/profile');
+    if (user?.hasPassword && user?.username) navigate('/profile');
     if (user?.username) setStep('password');
   }, [user, navigate]);
 

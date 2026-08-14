@@ -30,6 +30,7 @@ import VerifyEmailPage from './pages/VerifyEmailPage';
 import GroupsPage from './pages/GroupsPage';
 import ChatPage from './pages/ChatPage';
 import SetPasswordPage from './pages/SetPasswordPage';
+import GoogleAuthRedirectPage from './pages/GoogleAuthRedirectPage';
 import FriendsPage from './pages/FriendsPage';
 import MessagesPage from './pages/MessagesPage';
 import EventsPage from './pages/EventsPage';
@@ -54,6 +55,7 @@ function AppRoutes() {
       <Route path="/forgot-password" element={tr(<ForgotPasswordPage />)} />
       <Route path="/reset-password" element={tr(<ResetPasswordPage />)} />
       <Route path="/verify-email" element={tr(<VerifyEmailPage />)} />
+      <Route path="/google-auth" element={tr(<GoogleAuthRedirectPage />)} />
 
       {/* Standalone guarded pages (own full-screen shell, no sidebar) */}
       <Route path="/set-password" element={tr(<ProtectedRoute><SetPasswordPage /></ProtectedRoute>)} />

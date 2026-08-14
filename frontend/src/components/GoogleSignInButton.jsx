@@ -14,14 +14,17 @@
  *      dialog instead of a popup.
  *   2. If FedCM can't run (user opted out, browser without FedCM, ...),
  *      retry once with the classic popup flow.
- *   3. Both failing → surface an actionable message (browser/account
- *      setting vs. OAuth client origin misconfiguration) instead of the
- *      silent no-op this used to be.
+ *   3. Both failing (e.g. Brave Shields or Firefox blocking both) →
+ *      fall back to Google's full-page redirect flow (`ux_mode: 'redirect'`),
+ *      which needs no cookies at all and always shows Google's login page.
+ *      A "use Google in this window" link triggers the same redirect on
+ *      demand.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGoogleOAuth } from '@react-oauth/google';
 import { Loader2 } from 'lucide-react';
+import { GOOGLE_REDIRECT_PATH } from '../pages/GoogleAuthRedirectPage';
 
 // Reasons for which retrying without FedCM is worth it. Everything else
 // (invalid_client, unregistered_origin, ...) is an OAuth config problem
@@ -30,6 +33,15 @@ const FEDCM_FALLBACK_REASONS = [
   'opt_out_or_no_session',
   'browser_not_supported',
   'secure_http_required',
+  'suppressed_by_user',
+  'unknown_reason',
+];
+
+// When both attempts fail with one of these, the browser simply can't run
+// an embedded Google flow — switch to the full-page redirect instead.
+const REDIRECT_FALLBACK_REASONS = [
+  'opt_out_or_no_session',
+  'browser_not_supported',
   'suppressed_by_user',
   'unknown_reason',
 ];
@@ -170,6 +182,26 @@ export default function GoogleSignInButton({
       }, 30 * 1000);
     });
 
+  /**
+   * Full-page redirect flow — works in every browser regardless of
+   * cookie/FedCM settings because it's a plain top-level navigation.
+   * The ID token comes back on the `/google-auth` route and is handed to
+   * the same googleLogin() endpoint. Requires `<origin>/google-auth` to be
+   * registered as an Authorized redirect URI for the OAuth client.
+   */
+  const startRedirectFlow = () => {
+    const gis = window.google?.accounts?.id;
+    if (!gis || !clientId) return;
+    gis.cancel?.();
+    gis.initialize({
+      client_id: clientId,
+      callback: () => {}, // unused in redirect mode — token arrives on the redirect URI
+      ux_mode: 'redirect',
+      redirect_uri: `${origin}${GOOGLE_REDIRECT_PATH}`,
+    });
+    gis.prompt(); // navigates the whole page to accounts.google.com
+  };
+
   const handleClick = async () => {
     if (pendingRef.current) return;
     if (notReady) {
@@ -193,6 +225,11 @@ export default function GoogleSignInButton({
         fire(onSuccess, result.credential);
       } else if (result.kind === 'cancel' || (result.kind === 'failed' && QUIET_REASONS.includes(result.reason))) {
         fire(onError, 'Google sign-in was cancelled.');
+      } else if (result.kind === 'failed' && REDIRECT_FALLBACK_REASONS.includes(result.reason)) {
+        // Popup + FedCM both refused (Brave Shields, privacy browsers):
+        // hand off to the cookie-free redirect flow — Google's login page
+        // always opens there.
+        startRedirectFlow();
       } else {
         fire(onError, guidanceFor(result.reason, origin));
       }
@@ -232,6 +269,15 @@ export default function GoogleSignInButton({
             ? "Couldn't load Google Sign-In — a network blocker (ad-blocker, VPN, browser extensions) or CSP may be blocking accounts.google.com. Reload the page to retry."
             : 'Loading Google Sign-In…'}
         </span>
+      )}
+      {!notReady && !pending && (
+        <button
+          type="button"
+          onClick={startRedirectFlow}
+          className="text-xs text-[var(--color-text-muted)] underline underline-offset-2 hover:text-[var(--color-accent)] transition-colors"
+        >
+          Google not opening? Sign in in this window instead
+        </button>
       )}
     </div>
   );
