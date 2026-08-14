@@ -53,9 +53,22 @@ function guidanceFor(reason, origin) {
 
 // The full-page redirect flow needs no cookie/FedCM support at all, so we
 // drive it with a plain top-level URL rather than gis.prompt() — a direct
-// navigation the browser cannot silently swallow. The ID token lands on
+// navigation the browser cannot silently swallow. This is Google's
+// documented OpenID Connect implicit flow (authorize endpoint,
+// response_type=id_token): the ID token lands on
 // `/google-auth#id_token=...`, which GoogleAuthRedirectPage hands to
-// googleLogin().
+// googleLogin(). nonce is required for id_token responses; state guards
+// against CSRF.
+const OAUTH_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+
+function randomToken() {
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 function buildRedirectUrl(clientId, origin) {
   if (!clientId || !origin) return '';
   const params = new URLSearchParams({
@@ -63,11 +76,11 @@ function buildRedirectUrl(clientId, origin) {
     redirect_uri: `${origin}${GOOGLE_REDIRECT_PATH}`,
     response_type: 'id_token',
     scope: 'openid email profile',
-    ux_mode: 'redirect',
-    origin,
+    nonce: randomToken(),
+    state: randomToken(),
     prompt: 'select_account',
   });
-  return `https://accounts.google.com/gsi/auth?${params.toString()}`;
+  return `${OAUTH_AUTHORIZE_URL}?${params.toString()}`;
 }
 
 const GoogleGLogo = ({ size = 18 }) => (
