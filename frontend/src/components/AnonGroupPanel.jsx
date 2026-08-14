@@ -21,10 +21,21 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
   const [savingBans, setSavingBans] = useState(false);
   const [actionMsg, setActionMsg] = useState('');
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const flash = (msg) => {
     setActionMsg(msg);
     setTimeout(() => setActionMsg(''), 2500);
+  };
+
+  const handleDeleteGroup = async () => {
+    try {
+      await groupApi.deleteGroup(groupId);
+      removeAnonSession(groupId);
+      onLeft?.();
+    } catch (err) {
+      alert(err.response?.data?.error?.message || 'Failed to delete group.');
+    }
   };
 
   useEffect(() => {
@@ -216,6 +227,40 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
           </div>
         )}
       </div>
+
+      {/* Creator delete group */}
+      {isCreator && (
+        <div className="pt-2 border-t border-[var(--color-border)]">
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="text-xs text-[var(--color-danger)] hover:underline flex items-center gap-1.5 font-medium"
+            >
+              <Trash2 size={12} /> Delete entire group
+            </button>
+          ) : (
+            <div className="space-y-1.5 p-2.5 rounded-lg bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30">
+              <p className="text-[11px] text-[var(--color-danger)] font-medium">
+                Permanently delete this group and all its messages for everyone?
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleDeleteGroup}
+                  className="btn text-xs py-1 px-2.5 bg-[var(--color-danger)] text-white font-medium"
+                >
+                  Yes, delete
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  className="btn btn-secondary text-xs py-1 px-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

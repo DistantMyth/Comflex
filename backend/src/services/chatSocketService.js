@@ -408,8 +408,12 @@ function initSocket(httpServer, frontendUrl) {
         socket.join(groupId);
         socket.anonSessions = socket.anonSessions || [];
         socket.anonSessions.push({
-          groupId, identityId: identity.id,
-          alias: identity.alias, aliasTag: identity.aliasTag, avatarUrl: identity.avatarUrl,
+          groupId,
+          identityId: identity.id,
+          secret,
+          alias: identity.alias,
+          aliasTag: identity.aliasTag,
+          avatarUrl: identity.avatarUrl,
         });
         callback?.({ success: true });
       } catch (err) {

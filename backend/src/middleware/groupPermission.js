@@ -56,39 +56,47 @@ async function requireGroupMember(req, res, next) {
     const groupId = req.params.id || req.params.groupId;
     if (!groupId) return error(res, 'MISSING_GROUP', 'Group ID is required.', 400);
 
-    // Ring 0 bypasses membership check
-    if (req.user.globalRing === 0) {
-      req.groupMembership = { ring: 0, permissions: {} };
-      return next();
-    }
-
     const group = await prisma.cohortGroup.findUnique({
       where: { id: groupId },
-      select: { isAnonymous: true, creatorId: true },
+      select: { id: true, isAnonymous: true, creatorId: true, ringConfig: true },
     });
     if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
 
     if (group.isAnonymous) {
       // Zero-knowledge path: prove possession of the identity secret.
       const header = req.headers['x-anon-identity'];
-      if (!header || typeof header !== 'string') {
-        return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
+      if (header && typeof header === 'string') {
+        const [identityId, secret] = header.split('.');
+        if (identityId && secret) {
+          const identity = await groupService.resolveAnonIdentity(identityId, secret);
+          if (identity && identity.groupId === groupId) {
+            if (identity.bannedAt) {
+              return error(res, 'IDENTITY_BANNED', 'This identity is banned from the group.', 403);
+            }
+            req.anonIdentity = {
+              identityId: identity.id,
+              alias: identity.alias,
+              aliasTag: identity.aliasTag,
+              avatarUrl: identity.avatarUrl,
+              groupId: identity.groupId,
+            };
+            return next();
+          }
+        }
       }
-      const [identityId, secret] = header.split('.');
-      const identity = await groupService.resolveAnonIdentity(identityId, secret);
-      if (!identity || identity.groupId !== groupId) {
-        return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
+
+      // Group creator or global admin can access group metadata even without active anon identity
+      if (req.user.globalRing === 0 || group.creatorId === req.user.id) {
+        req.groupMembership = { ring: 0, permissions: {} };
+        return next();
       }
-      if (identity.bannedAt) {
-        return error(res, 'IDENTITY_BANNED', 'This identity is banned from the group.', 403);
-      }
-      req.anonIdentity = {
-        identityId: identity.id,
-        alias: identity.alias,
-        aliasTag: identity.aliasTag,
-        avatarUrl: identity.avatarUrl,
-        groupId: identity.groupId,
-      };
+
+      return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
+    }
+
+    // Normal (non-anonymous) group: Ring 0 bypasses membership check
+    if (req.user.globalRing === 0) {
+      req.groupMembership = { ring: 0, permissions: {} };
       return next();
     }
 

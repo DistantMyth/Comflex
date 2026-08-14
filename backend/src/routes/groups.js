@@ -151,9 +151,10 @@ router.get('/', async (req, res, next) => {
       if (raw && typeof raw === 'string') {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
+          const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
           anonSessions = parsed
-            .filter(s => s && typeof s === 'object' && s.groupId && s.identityId && s.secret)
-            .map(s => ({ groupId: s.groupId, identityId: s.identityId, secret: s.secret }));
+            .filter(s => s && typeof s === 'object' && typeof s.groupId === 'string' && OBJECT_ID_RE.test(s.groupId) && typeof s.identityId === 'string' && OBJECT_ID_RE.test(s.identityId) && s.secret)
+            .map(s => ({ groupId: s.groupId, identityId: s.identityId, secret: String(s.secret) }));
         }
       }
     } catch { /* malformed header — ignore */ }
@@ -353,7 +354,7 @@ router.post(
 /**
  * PATCH /api/v1/groups/:id — Update group info.
  */
-router.patch('/:id', requireGroupMember, requireGroupPermission('can_edit_group_info'), async (req, res, next) => {
+router.patch('/:id', requireGroupMember, requireAnonCreator, requireGroupPermission('can_edit_group_info'), async (req, res, next) => {
   try {
     const group = await groupService.updateGroup(req.params.id, req.body);
     return success(res, group);
@@ -365,7 +366,7 @@ router.patch('/:id', requireGroupMember, requireGroupPermission('can_edit_group_
 /**
  * POST /api/v1/groups/:id/avatar — Upload group avatar.
  */
-router.post('/:id/avatar', requireGroupMember, requireGroupPermission('can_edit_group_info'), upload.single('avatar'), async (req, res, next) => {
+router.post('/:id/avatar', requireGroupMember, requireAnonCreator, requireGroupPermission('can_edit_group_info'), upload.single('avatar'), async (req, res, next) => {
   try {
     if (!req.file) {
       return error(res, 'NO_FILE', 'No avatar file uploaded.', 400);
@@ -385,15 +386,31 @@ router.post('/:id/avatar', requireGroupMember, requireGroupPermission('can_edit_
 });
 
 /**
- * DELETE /api/v1/groups/:id — Delete group (Admin or group creator only).
+ * DELETE /api/v1/groups/:id — Delete group (Platform Admin, Group Creator, or Highest Ring Level 0).
  */
 router.delete('/:id', async (req, res, next) => {
   try {
-    // Allow Ring 0 admin or group creator
-    const group = await groupService.getGroup(req.params.id);
-    if (req.user.globalRing !== 0 && group.creatorId !== req.user.id) {
-      return error(res, 'PERMISSION_DENIED', 'Only the group creator or platform admin can delete this group.', 403);
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, creatorId: true, isAnonymous: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+
+    let canDelete = req.user.globalRing === 0 || group.creatorId === req.user.id;
+    if (!canDelete && !group.isAnonymous) {
+      const membership = await prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId: req.user.id, groupId: req.params.id } },
+        select: { ring: true },
+      });
+      if (membership && membership.ring === 0) {
+        canDelete = true;
+      }
     }
+
+    if (!canDelete) {
+      return error(res, 'PERMISSION_DENIED', 'Only the group creator, group admin (Ring 0), or platform admin can delete this group.', 403);
+    }
+
     await groupService.deleteGroup(req.params.id);
     return success(res, { message: 'Group deleted.' });
   } catch (err) {
@@ -407,10 +424,24 @@ router.delete('/:id', async (req, res, next) => {
  */
 router.delete('/:id/leave', requireGroupMember, async (req, res, next) => {
   try {
-    const group = await groupService.getGroup(req.params.id);
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, creatorId: true, isAnonymous: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+
     if (group.creatorId === req.user.id) {
       return error(res, 'CREATOR_CANNOT_LEAVE', 'The group creator cannot leave. Transfer ownership or delete the group.', 400);
     }
+
+    if (group.isAnonymous) {
+      if (req.anonIdentity?.identityId) {
+        await prisma.anonymousIdentity.delete({ where: { id: req.anonIdentity.identityId } }).catch(() => {});
+      }
+      await prisma.anonGroupJoin.deleteMany({ where: { groupId: req.params.id, userId: req.user.id } });
+      return success(res, { message: 'You have left the anonymous group.' });
+    }
+
     await groupService.removeMember(req.params.id, req.user.id);
     return success(res, { message: 'You have left the group.' });
   } catch (err) {
@@ -631,15 +662,18 @@ router.post('/:id/invites/:inviteId/reject', async (req, res, next) => {
  */
 async function requireAnonCreator(req, res, next) {
   try {
-    if (req.anonIdentity) {
-      const group = await prisma.cohortGroup.findUnique({
-        where: { id: req.params.id },
-        select: { creatorId: true },
-      });
-      if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
-      if (group.creatorId !== req.user.id && req.user.globalRing !== 0) {
-        return error(res, 'PERMISSION_DENIED', 'Only the group creator can do that.', 403);
-      }
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { creatorId: true, isAnonymous: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+    if (!group.isAnonymous) return next();
+
+    const isCreator = group.creatorId === req.user.id;
+    const isGlobalAdmin = req.user.globalRing === 0;
+
+    if (!isCreator && !isGlobalAdmin) {
+      return error(res, 'PERMISSION_DENIED', 'Only the group creator or platform admin can perform this action.', 403);
     }
     next();
   } catch (err) {

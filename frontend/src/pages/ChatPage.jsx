@@ -273,10 +273,16 @@ export default function ChatPage() {
       onEvent('message:unpinned', ({ messageId }) => {
         setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, isPinned: false } : m));
       }),
+      onEvent('group:deleted', ({ groupId: gid }) => {
+        if (gid === groupId) {
+          alert('This group has been deleted.');
+          navigate('/groups');
+        }
+      }),
     ];
 
     return () => cleanups.forEach((fn) => fn?.());
-  }, [connected, onEvent, groupId, user?.id, markRead]);
+  }, [connected, onEvent, groupId, user?.id, markRead, navigate]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {

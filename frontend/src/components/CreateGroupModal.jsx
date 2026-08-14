@@ -80,6 +80,13 @@ export default function CreateGroupModal({ onClose, onCreated }) {
       if (isAnonymous && group?.id) {
         const claimRes = await groupApi.claimAnonIdentity(group.id, alias.trim());
         const idn = claimRes.data.data;
+        setAnonSession(group.id, {
+          identityId: idn.identityId,
+          secret: idn.secret,
+          alias: idn.alias,
+          aliasTag: idn.aliasTag,
+          avatarUrl: idn.avatarUrl,
+        });
         setPendingAnonGroup({ group, identity: idn });
         return; // wait for ack before finishing
       }

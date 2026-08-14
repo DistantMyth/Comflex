@@ -36,7 +36,14 @@ export default function JoinGroupPage() {
   const handleJoinSuccess = (data) => {
     const payload = data.data;
     if (payload?.identityId && payload?.secret) {
-      // Anonymous group: hold until the user backs up their key.
+      // Anonymous group: save session immediately and prompt for key backup
+      setAnonSession(payload.groupId, {
+        identityId: payload.identityId,
+        secret: payload.secret,
+        alias: payload.alias,
+        aliasTag: payload.aliasTag,
+        avatarUrl: payload.avatarUrl,
+      });
       setAnonResult({ groupId: payload.groupId, identity: payload });
       setStatus('backup');
       return;

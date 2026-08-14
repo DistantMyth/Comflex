@@ -159,9 +159,9 @@ function writeCookieSessions(all) {
 // Group ids come from the server, but a malicious/buggy caller could still
 // pass "__proto__"/"constructor"/"prototype" and turn the sessions map into a
 // prototype pollution primitive. Reject those keys outright.
-const FORBIDDEN_SESSION_KEYS = ['__proto__', 'constructor', 'prototype'];
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
 function safeGroupKey(groupId) {
-  return typeof groupId === 'string' && !FORBIDDEN_SESSION_KEYS.includes(groupId) && groupId.length > 0 ? groupId : null;
+  return typeof groupId === 'string' && OBJECT_ID_RE.test(groupId) ? groupId : null;
 }
 
 export function getAnonSessions() {
@@ -176,7 +176,7 @@ export function getAnonSessions() {
         if (!safeGroupKey(key)) continue;
         if (!local[key] || typeof local[key] !== 'object') continue;
         const session = {
-          identityId: typeof local[key].identityId === 'string' ? local[key].identityId : '',
+          identityId: typeof local[key].identityId === 'string' && OBJECT_ID_RE.test(local[key].identityId) ? local[key].identityId : '',
           secret: typeof local[key].secret === 'string' ? local[key].secret : '',
           alias: typeof local[key].alias === 'string' ? local[key].alias : null,
           aliasTag: typeof local[key].aliasTag === 'string' ? local[key].aliasTag : null,
@@ -193,7 +193,7 @@ export function getAnonSessions() {
 
 export function setAnonSession(groupId, session) {
   const key = safeGroupKey(groupId);
-  if (!key || !session?.identityId || !session?.secret) return;
+  if (!key || !session?.identityId || !session?.secret || !OBJECT_ID_RE.test(session.identityId)) return;
   const all = getAnonSessions();
   all[key] = {
     identityId: String(session.identityId),
@@ -244,7 +244,7 @@ export function withAnonIdentity(config, groupId) {
 export function anonSessionsHeaderValue() {
   const all = getAnonSessions();
   const arr = Object.entries(all)
-    .filter(([, s]) => s?.identityId && s?.secret)
+    .filter(([groupId, s]) => safeGroupKey(groupId) && s?.identityId && OBJECT_ID_RE.test(s.identityId) && s?.secret)
     .map(([groupId, s]) => ({ groupId, identityId: s.identityId, secret: s.secret }));
   return arr.length ? JSON.stringify(arr) : undefined;
 }

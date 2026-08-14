@@ -86,7 +86,8 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
   }, [groupId]);
 
   const currentMember = members.find(m => m.id === currentUserId);
-  const isGroupAdmin = currentMember?.groupRing === 0 || currentMember?.isCreator;
+  const isHighestLevel = currentMember?.groupRing === 0 || currentMember?.isCreator || group?.creatorId === currentUserId;
+  const isGroupAdmin = isHighestLevel;
   const canManageRoles = currentMember?.permissions?.can_manage_roles || isGroupAdmin;
   const canAddMembers = currentMember?.permissions?.can_add_members || isGroupAdmin;
 
@@ -345,10 +346,10 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
               )}
 
               <div className="pt-3 flex gap-3">
-                {(!currentMember?.isCreator) && (
+                {(!currentMember?.isCreator && group?.creatorId !== currentUserId) && (
                   <button onClick={handleLeaveGroup} className="btn btn-secondary text-[var(--color-warning)] hover:border-[var(--color-warning)] w-full">Leave Group</button>
                 )}
-                {currentMember?.isCreator && (
+                {isHighestLevel && (
                   <button onClick={handleDeleteGroup} className="btn bg-[var(--color-danger)] text-white w-full">Delete Group</button>
                 )}
               </div>

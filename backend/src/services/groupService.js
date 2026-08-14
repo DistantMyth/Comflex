@@ -105,56 +105,61 @@ async function listUserGroups(userId, anonSessions = []) {
 
   const groups = memberships.map((m) => ({
     ...sanitizeGroup(m.group),
-    memberCount: m.group._count.members,
+    memberCount: m.group?._count?.members || 0,
     userRing: m.ring,
     userPermissions: m.permissions,
     unreadCount: unreadCounts[m.groupId] || 0,
   }));
 
   // Identify-only sessions for anonymous groups
-  if (anonSessions.length > 0) {
-    const identities = await prisma.anonymousIdentity.findMany({
-      where: {
-        id: { in: anonSessions.map(s => s.identityId) },
-        ...NOT_BANNED,
-      },
-    });
-    const anonGroupIds = [...new Set(identities.map(i => i.groupId))];
-    if (anonGroupIds.length > 0) {
-      const anonGroups = await prisma.cohortGroup.findMany({
-        where: { id: { in: anonGroupIds }, isAnonymous: true },
-        include: { _count: { select: { anonIdentities: true } } },
-      });
-      const counts = await prisma.anonymousIdentity.groupBy({
-        by: ['groupId'],
-        _count: { _all: true },
-        where: { groupId: { in: anonGroupIds }, ...NOT_BANNED },
-      });
-      const countMap = Object.fromEntries(counts.map(c => [c.groupId, c._count._all]));
+  if (Array.isArray(anonSessions) && anonSessions.length > 0) {
+    const validIdentityIds = anonSessions
+      .map(s => s && typeof s === 'object' ? s.identityId : null)
+      .filter(id => typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id));
 
-      for (const session of anonSessions) {
-        const identity = identities.find(i => i.id === session.identityId);
-        if (!identity || !verifySecret(session.secret, identity.secretHash)) continue;
-        const group = anonGroups.find(g => g.id === identity.groupId);
-        if (!group) continue;
-        if (groups.some(g => g.id === group.id)) continue; // dedupe
-        groups.push({
-          ...sanitizeGroup(group),
-          memberCount: countMap[group.id] || 0,
-          isAnonymous: true,
-          userRing: null,
-          userPermissions: null,
-          unreadCount: 0,
-          myIdentity: {
-            identityId: identity.id,
-            alias: identity.alias,
-            aliasTag: identity.aliasTag,
-            avatarUrl: identity.avatarUrl,
-          },
+    if (validIdentityIds.length > 0) {
+      const identities = await prisma.anonymousIdentity.findMany({
+        where: {
+          id: { in: validIdentityIds },
+          ...NOT_BANNED,
+        },
+      });
+      const anonGroupIds = [...new Set(identities.map(i => i.groupId))];
+      if (anonGroupIds.length > 0) {
+        const anonGroups = await prisma.cohortGroup.findMany({
+          where: { id: { in: anonGroupIds }, isAnonymous: true },
+          include: { _count: { select: { anonIdentities: true } } },
         });
+        const counts = await prisma.anonymousIdentity.groupBy({
+          by: ['groupId'],
+          _count: { _all: true },
+          where: { groupId: { in: anonGroupIds }, ...NOT_BANNED },
+        }).catch(() => []);
+        const countMap = Object.fromEntries(counts.map(c => [c.groupId, c._count._all]));
+
+        for (const session of anonSessions) {
+          if (!session || !session.identityId || !session.secret) continue;
+          const identity = identities.find(i => i.id === session.identityId);
+          if (!identity || !verifySecret(session.secret, identity.secretHash)) continue;
+          const group = anonGroups.find(g => g.id === identity.groupId);
+          if (!group) continue;
+          if (groups.some(g => g.id === group.id)) continue; // dedupe
+          groups.push({
+            ...sanitizeGroup(group),
+            memberCount: countMap[group.id] ?? group._count?.anonIdentities ?? 0,
+            isAnonymous: true,
+            userRing: null,
+            userPermissions: null,
+            unreadCount: 0,
+            myIdentity: {
+              identityId: identity.id,
+              alias: identity.alias,
+              aliasTag: identity.aliasTag,
+              avatarUrl: identity.avatarUrl,
+            },
+          });
+        }
       }
-      // Re-sort merged list newest-first by join time is impossible for anon;
-      // keep stable order (memberships first, then anon groups).
     }
   }
 
@@ -171,16 +176,16 @@ async function listUserGroups(userId, anonSessions = []) {
     orderBy: { joinedAt: 'desc' },
   });
   for (const join of anonJoins) {
-    if (!join.group.isAnonymous) continue;
+    if (!join.group || !join.group.isAnonymous) continue;
     if (groups.some(g => g.id === join.groupId)) continue; // dedupe (active session)
     groups.push({
       ...sanitizeGroup(join.group),
-      memberCount: join.group._count.anonIdentities || 0,
+      memberCount: join.group._count?.anonIdentities || 0,
       isAnonymous: true,
       userRing: null,
       userPermissions: null,
       unreadCount: 0,
-      myIdentity: null,   // no session — restore via key
+      myIdentity: null,   // no session on this device — restore via key
       needsKeyRestore: true,
     });
   }
@@ -199,7 +204,7 @@ async function listUserGroups(userId, anonSessions = []) {
     if (groups.some(g => g.id === group.id)) continue;
     groups.push({
       ...sanitizeGroup(group),
-      memberCount: group._count.anonIdentities || 0,
+      memberCount: group._count?.anonIdentities || 0,
       isAnonymous: true,
       userRing: null,
       userPermissions: null,
@@ -317,6 +322,10 @@ async function updateGroup(groupId, updates) {
  * Delete a group and all associated data.
  */
 async function deleteGroup(groupId) {
+  try {
+    const { emitToGroup } = require('./chatSocketService');
+    emitToGroup(groupId, 'group:deleted', { groupId });
+  } catch { /* socket emission is best effort */ }
   await prisma.cohortGroup.delete({ where: { id: groupId } });
 }
 

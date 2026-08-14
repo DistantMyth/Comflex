@@ -37,18 +37,15 @@ export default function GroupsPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const groupsFetch = isAdmin
-        ? adminApi.listAllGroups().then((res) => res.data.data)
-        : groupApi.listGroups().then((res) => res.data.data);
-      const [groupsData, invitesRes] = await Promise.all([
-        groupsFetch,
+      const [groupsRes, invitesRes] = await Promise.all([
+        groupApi.listGroups().catch(() => ({ data: { data: [] } })),
         groupApi.listMyInvites().catch(() => ({ data: { data: [] } })),
       ]);
-      setGroups(groupsData || []);
-      setInvites(invitesRes?.data?.data || invitesRes || []);
+      setGroups(groupsRes?.data?.data || groupsRes?.data || []);
+      setInvites(invitesRes?.data?.data || invitesRes?.data || []);
     } catch { /* ignore list errors */ }
     setLoading(false);
-  }, [isAdmin]);
+  }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -57,7 +54,14 @@ export default function GroupsPage() {
       const res = await groupApi.acceptInvite(groupId, inviteId);
       const payload = res.data.data;
       if (payload?.identityId && payload?.secret) {
-        // Anonymous group identity minted — require a key backup first.
+        // Save session immediately so it's not lost on modal close
+        setAnonSession(groupId, {
+          identityId: payload.identityId,
+          secret: payload.secret,
+          alias: payload.alias,
+          aliasTag: payload.aliasTag,
+          avatarUrl: payload.avatarUrl,
+        });
         setPendingAnon({ inviteId, groupId, identity: payload });
         return;
       }
@@ -89,6 +93,15 @@ export default function GroupsPage() {
       const payload = res.data.data;
       setAliasGroupId(null);
       setAliasInput('');
+      if (payload?.identityId && payload?.secret) {
+        setAnonSession(groupId, {
+          identityId: payload.identityId,
+          secret: payload.secret,
+          alias: payload.alias,
+          aliasTag: payload.aliasTag,
+          avatarUrl: payload.avatarUrl,
+        });
+      }
       setPendingAnon({ groupId, identity: payload });
     } catch (err) {
       setAliasGroupId(null);
@@ -113,7 +126,10 @@ export default function GroupsPage() {
     fetchData();
   };
 
-  const canDeleteGroup = (group) => isAdmin || group.creatorId === user?.id;
+  const canDeleteGroup = (group) =>
+    isAdmin ||
+    group.creatorId === user?.id ||
+    (!group.isAnonymous && group.userRing === 0);
 
   const handleDeleteGroup = async (e, group) => {
     e.preventDefault();
@@ -285,20 +301,20 @@ export default function GroupsPage() {
                   </span>
                 )}
 
-                {/* Ring badge */}
-                {isAdmin ? (
-                  <span className="px-2.5 py-1 rounded-full text-xs text-white bg-[var(--color-accent)]">
-                    Admin
-                  </span>
-                ) : group.isAnonymous ? (
+                {/* Ring / Anon badge */}
+                {group.isAnonymous ? (
                   <span className="px-2.5 py-1 rounded-full text-xs bg-[var(--color-bg-secondary)] border border-[var(--color-accent)] text-[var(--color-accent)]">
-                    {group.myIdentity?.alias ? `Anon · ${group.myIdentity.alias}` : 'Anonymous'}
+                    {group.myIdentity?.alias ? `Anon · ${group.myIdentity.alias}${group.myIdentity.aliasTag ? '#' + group.myIdentity.aliasTag : ''}` : 'Anonymous'}
                   </span>
-                ) : (
+                ) : group.userRing !== null && group.userRing !== undefined ? (
                   <span className={`px-2.5 py-1 rounded-full text-xs text-white ring-badge-${Math.min(group.userRing ?? 3, 3)}`}>
                     Ring {group.userRing}
                   </span>
-                )}
+                ) : isAdmin ? (
+                  <span className="px-2.5 py-1 rounded-full text-xs text-white bg-[var(--color-accent)]">
+                    Admin
+                  </span>
+                ) : null}
 
                 {/* Delete group (creator or admin) */}
                 {canDeleteGroup(group) && (
