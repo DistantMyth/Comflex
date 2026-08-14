@@ -8,8 +8,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail, Lock, LogIn, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { GoogleOAuthProvider } from '@react-oauth/google';
-import GoogleSignInButton from '../components/GoogleSignInButton';
+import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -22,7 +21,6 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [googleBlocked, setGoogleBlocked] = useState(false);
 
   if (!authLoading && isAuthenticated) {
     return <Navigate to="/profile" replace />;
@@ -42,11 +40,11 @@ export default function LoginPage() {
     }
   };
 
-  const handleGoogleSuccess = async (credential) => {
+  const handleGoogleSuccess = async (credentialResponse) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credential);
+      const result = await googleLogin(credentialResponse.credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
     } catch (err) {
       setError(err.response?.data?.message || 'Google login failed.');
@@ -76,20 +74,20 @@ export default function LoginPage() {
 
       {GOOGLE_CLIENT_ID && (
         <div className="mb-6">
-          <GoogleOAuthProvider
-            clientId={GOOGLE_CLIENT_ID}
-            onScriptLoadError={() => setGoogleBlocked(true)}
-          >
+          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
             <div className="flex justify-center">
-              <GoogleSignInButton onSuccess={handleGoogleSuccess} onError={(msg) => setError(msg)} />
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={() => setError('Google login failed.')}
+                useOneTap={false}
+                text="signin_with"
+                shape="pill"
+                size="large"
+                width={300}
+                theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
+              />
             </div>
           </GoogleOAuthProvider>
-          {googleBlocked && (
-            <div className="alert alert-warning text-center text-xs mt-3">
-              The Google Sign-In script was blocked (ad-blocker, VPN, or extension). Allow{' '}
-              <code>accounts.google.com</code> and reload.
-            </div>
-          )}
           <div className="flex items-center gap-3 my-6">
             <div className="flex-1 h-px bg-[var(--color-border)]" />
             <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">or sign in with email</span>

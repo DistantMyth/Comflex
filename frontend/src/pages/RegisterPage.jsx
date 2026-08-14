@@ -7,8 +7,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Loader2, GraduationCap } from 'lucide-react';
-import { GoogleOAuthProvider } from '@react-oauth/google';
-import GoogleSignInButton from '../components/GoogleSignInButton';
+import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/AuthShell';
 
@@ -19,13 +18,12 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [googleBlocked, setGoogleBlocked] = useState(false);
 
-  const handleGoogleSuccess = async (credential) => {
+  const handleGoogleSuccess = async (credentialResponse) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credential);
+      const result = await googleLogin(credentialResponse.credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Registration failed. Make sure you use your college email.');
@@ -70,26 +68,21 @@ export default function RegisterPage() {
 
       <div className="flex flex-col items-center gap-5 py-2">
         {GOOGLE_CLIENT_ID ? (
-          <GoogleOAuthProvider
-            clientId={GOOGLE_CLIENT_ID}
-            onScriptLoadError={() => setGoogleBlocked(true)}
-          >
-            <GoogleSignInButton
-              label="Sign up with Google"
+          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+            <GoogleLogin
               onSuccess={handleGoogleSuccess}
-              onError={(msg) => setError(msg)}
+              onError={() => setError('Google login failed. Please try again.')}
+              useOneTap={false}
+              text="signup_with"
+              shape="pill"
+              size="large"
+              width={300}
+              theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
             />
           </GoogleOAuthProvider>
         ) : (
           <div className="alert alert-warning text-center">
             Google OAuth is not configured. Set <code>VITE_GOOGLE_CLIENT_ID</code> in the frontend <code>.env</code>.
-          </div>
-        )}
-
-        {googleBlocked && (
-          <div className="alert alert-warning text-center text-xs">
-            The Google Sign-In script was blocked (ad-blocker, VPN, or extension). Allow{' '}
-            <code>accounts.google.com</code> and reload.
           </div>
         )}
 
