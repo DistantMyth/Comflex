@@ -7,11 +7,48 @@
  * `google.accounts.id.initialize({ callback })` + `prompt()`, so the
  * credential (ID token JWT) is delivered to the same callback the old
  * GoogleLogin component used — no backend changes.
+ *
+ * Prompt strategy (mirrors Google's recommended fallback):
+ *   1. Try with `use_fedcm_for_prompt: true` — FedCM works even where
+ *      third-party cookies are blocked (Chrome default) and shows a native
+ *      dialog instead of a popup.
+ *   2. If FedCM can't run (user opted out, browser without FedCM, ...),
+ *      retry once with the classic popup flow.
+ *   3. Both failing → surface an actionable message (browser/account
+ *      setting vs. OAuth client origin misconfiguration) instead of the
+ *      silent no-op this used to be.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useGoogleOAuth } from '@react-oauth/google';
 import { Loader2 } from 'lucide-react';
+
+// Reasons for which retrying without FedCM is worth it. Everything else
+// (invalid_client, unregistered_origin, ...) is an OAuth config problem
+// that a popup attempt won't fix either.
+const FEDCM_FALLBACK_REASONS = [
+  'opt_out_or_no_session',
+  'browser_not_supported',
+  'secure_http_required',
+  'suppressed_by_user',
+  'unknown_reason',
+];
+
+// Reasons where _we_ can't fix anything — the user dismissed the flow.
+const QUIET_REASONS = ['user_cancel', 'suppressed_by_user'];
+
+function guidanceFor(reason, origin) {
+  if (reason === 'opt_out_or_no_session') {
+    return "Google Sign-In couldn't open a window — your browser is set to not show it. Make sure you're signed in to Google in this browser, Chrome's \"Sign in with Google\" isn't turned off (Google Account \u2192 Security \u2192 Signing in to other sites), and third-party cookies are allowed for this site. Then try again.";
+  }
+  if (reason === 'secure_http_required') {
+    return 'Google Sign-In requires a secure origin. Open the site over HTTPS and try again.';
+  }
+  if (reason === 'browser_not_supported' || reason === 'unknown_reason') {
+    return `Google Sign-In couldn't open (${reason}). Try again, or use a different browser.`;
+  }
+  return `Google Sign-In couldn't open (${reason}). Make sure the origin "${origin}" is listed in the OAuth client's Authorized JavaScript origins (Google Cloud Console \u2192 APIs & Services \u2192 Credentials) — and the product origin (https://comflex.vercel.app) plus http://localhost:5173 for local dev — then try again.`;
+}
 
 const GoogleGLogo = ({ size = 18 }) => (
   <svg
@@ -62,6 +99,7 @@ export default function GoogleSignInButton({
   }, [scriptLoadedSuccessfully]);
 
   const notReady = !scriptLoadedSuccessfully || !window.google?.accounts?.id;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
   const fire = useMemo(() => (fn, arg) => {
     if (typeof fn === 'function') fn(arg);
@@ -76,7 +114,63 @@ export default function GoogleSignInButton({
     }
   };
 
-  const handleClick = () => {
+  /**
+   * One prompt attempt with the given FedCM setting. Resolves with
+   *   { kind: 'success', credential } | { kind: 'cancel' } | { kind: 'failed', reason }
+   * Does not throw.
+   */
+  const attemptPrompt = (useFedcm) =>
+    new Promise((resolve) => {
+      const gis = window.google.accounts.id;
+      let settled = false;
+      let displayed = false;
+      const settle = (value) => {
+        if (!settled) {
+          settled = true;
+          resolve(value);
+        }
+      };
+      const failAfter = (reason) => settle({ kind: 'failed', reason });
+
+      gis.cancel?.();
+      gis.initialize({
+        client_id: clientId,
+        auto_select: false,
+        cancel_on_tap_outside: true,
+        use_fedcm_for_prompt: useFedcm,
+        callback: (credentialResponse) => {
+          if (!credentialResponse?.credential) {
+            settle({ kind: 'cancel' });
+            return;
+          }
+          settle({ kind: 'success', credential: credentialResponse.credential });
+        },
+      });
+
+      gis.prompt((notification) => {
+        if (!notification) return;
+        if (notification.isDisplayed?.()) {
+          displayed = true;
+          return;
+        }
+        const reason =
+          notification.getNotDisplayedReason?.() ||
+          notification.getSkippedReason?.() ||
+          'unknown_reason';
+        // Some flows still resolve via the callback a moment later (e.g. a
+        // cancelled popup) — only treat it as failed once that window passes.
+        setTimeout(() => {
+          if (!settled) failAfter(reason);
+        }, 500);
+      });
+
+      // If the dialog neither opened nor failed within 30s, give up quietly.
+      setTimeout(() => {
+        if (!settled && !displayed) failAfter('unknown_reason');
+      }, 30 * 1000);
+    });
+
+  const handleClick = async () => {
     if (pendingRef.current) return;
     if (notReady) {
       fire(onError, 'Google sign-in is not ready yet. Please try again in a moment.');
@@ -87,45 +181,24 @@ export default function GoogleSignInButton({
     setPending(true);
     safetyTimer.current = setTimeout(stopPending, 90 * 1000);
 
-    const gis = window.google.accounts.id;
-
-    // Re-initialize on every click so a cancelled prompt can be retried.
-    gis.cancel?.();
-    gis.initialize({
-      client_id: clientId,
-      auto_select: false,
-      cancel_on_tap_outside: true,
-      callback: (credentialResponse) => {
-        if (!credentialResponse?.credential) {
-          stopPending();
-          fire(onError, 'Google sign-in was cancelled.');
-          return;
-        }
-        stopPending();
-        fire(onSuccess, credentialResponse.credential);
-      },
-    });
-
-    gis.prompt((notification) => {
-      // Leave pending active if the picker is being shown.
-      if (!notification) return;
-      if (notification.isDisplayed?.()) return;
-      if (notification.isNotDisplayed?.() || notification.isSkipped?.()) {
-        // Some "not displayed" notifications still resolve later via the
-        // callback; only fail fast once we know why it didn't show. A
-        // config problem (e.g. missing authorized JavaScript origin in
-        // Google Cloud Console) surfaces here instead of dead silence.
-        const reason = notification.getNotDisplayedReason?.() || notification.getSkippedReason?.() || '';
-        setTimeout(() => {
-          if (pendingRef.current) {
-            stopPending();
-            if (reason && reason !== 'user_cancel' && reason !== 'suppressed_by_user') {
-              fire(onError, `Google sign-in couldn't open (${reason}). Make sure "http://localhost:5173" is an authorized JavaScript origin for this OAuth client, then try again.`);
-            }
-          }
-        }, 500);
+    try {
+      // 1. FedCM first — shows a native dialog, works with 3P cookies blocked.
+      let result = await attemptPrompt(true);
+      // 2. Classic popup fallback when FedCM can't run.
+      if (result.kind === 'failed' && FEDCM_FALLBACK_REASONS.includes(result.reason)) {
+        result = await attemptPrompt(false);
       }
-    });
+
+      if (result.kind === 'success') {
+        fire(onSuccess, result.credential);
+      } else if (result.kind === 'cancel' || (result.kind === 'failed' && QUIET_REASONS.includes(result.reason))) {
+        fire(onError, 'Google sign-in was cancelled.');
+      } else {
+        fire(onError, guidanceFor(result.reason, origin));
+      }
+    } finally {
+      stopPending();
+    }
   };
 
   return (
