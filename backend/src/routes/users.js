@@ -165,6 +165,7 @@ router.post('/me/avatar', authMiddleware, upload.single('avatar'), async (req, r
     const user = await userService.updateAvatar(req.user.id, avatarUrl);
     return success(res, user);
   } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
     next(err);
   }
 });

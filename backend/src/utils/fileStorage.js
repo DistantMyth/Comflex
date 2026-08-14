@@ -1,16 +1,13 @@
 /**
  * fileStorage — Unified file storage layer.
  *
- * Why this exists:
- *   Render (free tier) uses an ephemeral filesystem at /tmp that is wiped on
- *   deploy and on inactivity. Any file saved locally is LOST.
+ * Cloud Storage (Cloudinary):
+ *   Supports both CLOUDINARY_URL (standard single connection string)
+ *   and individual CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET
+ *   environment variables.
  *
- * Solution:
- *   - If Cloudinary is configured (CLOUDINARY_CLOUD_NAME / API_KEY / API_SECRET),
- *     every upload is pushed to Cloudinary and we store the absolute https URL.
- *   - Otherwise (local dev), files stay on disk and we return a relative
- *     /uploads/... path — the frontend resolveAsset() helper prefixes the
- *     backend origin when rendering, so images work even cross-origin (Vercel → Render).
+ * Local fallback (dev only):
+ *   Files stay on disk and return relative /uploads/... path.
  */
 
 const fs = require('fs');
@@ -20,37 +17,59 @@ const env = require('../config/env');
 let cloudinary = null;
 let cloudinaryReady = false;
 
+/**
+ * Resolve Cloudinary credentials from any standard environment format.
+ */
+function getCloudinaryConfig() {
+  const url = process.env.CLOUDINARY_URL || env.CLOUDINARY_URL;
+  if (url && url.startsWith('cloudinary://')) {
+    try {
+      const parsed = new URL(url);
+      return {
+        cloud_name: parsed.hostname,
+        api_key: decodeURIComponent(parsed.username),
+        api_secret: decodeURIComponent(parsed.password),
+        secure: true,
+      };
+    } catch {
+      return { url, secure: true };
+    }
+  }
+
+  const cloud_name = env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME;
+  const api_key = env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY;
+  const api_secret = env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET;
+
+  if (cloud_name && api_key && api_secret) {
+    return { cloud_name, api_key, api_secret, secure: true };
+  }
+
+  return null;
+}
+
 function isCloudinaryConfigured() {
-  return Boolean(
-    env.CLOUDINARY_CLOUD_NAME &&
-    env.CLOUDINARY_API_KEY &&
-    env.CLOUDINARY_API_SECRET
-  );
+  return Boolean(getCloudinaryConfig());
 }
 
 function getCloudinary() {
   if (cloudinaryReady) return cloudinary;
-  if (!isCloudinaryConfigured()) return null;
-  // Lazy-require so local dev without the package still works.
+  const config = getCloudinaryConfig();
+  if (!config) return null;
+
   try {
     cloudinary = require('cloudinary').v2;
-    cloudinary.config({
-      cloud_name: env.CLOUDINARY_CLOUD_NAME,
-      api_key: env.CLOUDINARY_API_KEY,
-      api_secret: env.CLOUDINARY_API_SECRET,
-      secure: true,
-    });
+    cloudinary.config(config);
     cloudinaryReady = true;
-    console.log('[fileStorage] Cloudinary enabled — uploads go to the cloud. 🎉');
+    console.log(`[fileStorage] ✅ Cloudinary enabled for cloud "${config.cloud_name || 'custom'}" — uploads go to Cloudinary.`);
   } catch (err) {
-    console.error('[fileStorage] cloudinary package not installed:', err.message);
-    cloudinaryReady = true; // don't retry every upload
+    console.error('[fileStorage] ❌ Cloudinary initialization failed:', err.message);
+    cloudinaryReady = true;
   }
   return cloudinary;
 }
 
 /**
- * Persist a multer-uploaded file.
+ * Persist a multer-uploaded file to Cloudinary (or local disk in development).
  *
  * @param {object} file - req.file from multer (has .path, .filename, .originalname, .mimetype)
  * @param {object} opts
@@ -59,7 +78,7 @@ function getCloudinary() {
  * @param {string} [opts.publicId] - optional Cloudinary public id
  * @returns {Promise<string>} absolute Cloudinary URL or relative local path
  */
-async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads', publicId, allowDataUri = true } = {}) {
+async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads', publicId } = {}) {
   if (!file) return null;
 
   const cld = getCloudinary();
@@ -69,45 +88,35 @@ async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads'
         folder,
         resource_type: 'auto',
         ...(publicId ? { public_id: publicId } : {}),
-        // Keep filenames readable in the Cloudinary console
         use_filename: true,
         unique_filename: true,
       });
-      // Remove the local temp copy now that it's safe in the cloud
+      // Remove the local temp copy now that it's stored in Cloudinary
       try { fs.unlinkSync(file.path); } catch { /* ignore */ }
       return result.secure_url;
     } catch (err) {
-      console.error('[fileStorage] Cloudinary upload failed — falling back to persistent storage:', err.message);
-    }
-  }
-
-  // Render (free tier) wipes /tmp and local disk on restarts/deploys.
-  // For images under 2.5MB (avatars, badges, group icons), convert to a Data URI
-  // so it persists safely in MongoDB Atlas even if Cloudinary is not configured.
-  if (allowDataUri && file.path && fs.existsSync(file.path)) {
-    const isImage = file.mimetype?.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif)$/i.test(file.filename || file.originalname || '');
-    if (isImage && file.size <= 2.5 * 1024 * 1024) {
-      try {
-        const buffer = fs.readFileSync(file.path);
-        const mime = file.mimetype || 'image/jpeg';
-        const dataUri = `data:${mime};base64,${buffer.toString('base64')}`;
-        try { fs.unlinkSync(file.path); } catch { /* ignore */ }
-        return dataUri;
-      } catch (err) {
-        console.error('[fileStorage] Failed to create data URI fallback:', err.message);
+      console.error('[fileStorage] ❌ Cloudinary upload failed:', err.message);
+      if (env.NODE_ENV === 'production') {
+        throw Object.assign(new Error(`Failed to upload media to Cloudinary: ${err.message}`), {
+          statusCode: 502,
+          code: 'CLOUD_STORAGE_ERROR',
+        });
       }
     }
   }
 
-  // Local fallback (development / large files) — frontend resolveAsset() adds the origin.
+  if (env.NODE_ENV === 'production' && !isCloudinaryConfigured()) {
+    console.warn('[fileStorage] ⚠️ WARNING: Uploading to ephemeral disk in production. Set CLOUDINARY_URL or CLOUDINARY_CLOUD_NAME/KEY/SECRET on Render to persist uploads!');
+  }
+
+  // Local fallback (development) — frontend resolveAsset() adds the origin.
   return `${localUrlPrefix}/${file.filename}`;
 }
 
 /**
  * Delete a stored file.
  * - Local files are removed from disk.
- * - Cloudinary files are only deleted when a publicId is passed (we don't
- *   store publicIds in the DB, so this is best-effort by URL parse).
+ * - Cloudinary files are destroyed by public id.
  */
 async function deleteStoredFile(url) {
   if (!url) return;
@@ -120,13 +129,13 @@ async function deleteStoredFile(url) {
     return;
   }
 
-  // Cloudinary URL → try to destroy by public id derived from the URL
+  // Cloudinary URL → destroy by public id
   if (url.includes('res.cloudinary.com')) {
     try {
-      const match = url.match(/\/image\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z]+)?$/);
-      if (match) {
+      const match = url.match(/\/image\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i);
+      if (match && match[1]) {
         const cld = getCloudinary();
-        await cld?.uploader.destroy(match[1].replace(/\//g, ':'));
+        await cld?.uploader.destroy(match[1]);
       }
     } catch { /* ignore */ }
   }

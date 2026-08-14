@@ -51,11 +51,12 @@ const env = {
   // File Storage Path (local dev only — Render wipes /tmp)
   STORAGE_PATH: process.env.STORAGE_PATH || require('path').join(__dirname, '../../uploads'),
 
-  // Cloudinary (optional but REQUIRED for Render/Vercel production)
+  // Cloudinary (optional locally, required on Render/Vercel)
   // Files uploaded here survive restarts, unlike Render's ephemeral /tmp.
-  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
-  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
-  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
+  CLOUDINARY_URL: process.env.CLOUDINARY_URL || '',
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '',
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || '',
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || '',
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────

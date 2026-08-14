@@ -184,6 +184,7 @@ router.post('/admin/badges', upload.single('image'), [
     });
     return success(res, badge, 201);
   } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
     next(err);
   }
 });
