@@ -4,7 +4,7 @@
  */
 
 import { useState, useContext, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { AtSign, Lock, Check, X, Loader2, ArrowRight, UserPlus } from 'lucide-react';
 import { AuthContext } from '../context/AuthContext';
@@ -14,8 +14,15 @@ import AuthShell from '../components/AuthShell';
 export default function SetPasswordPage() {
   const { user, setPassword, setUsername, refreshProfile } = useContext(AuthContext);
   const navigate = useNavigate();
+  const location = useLocation();
+  // Set by Login/Register when the backend flagged the account as needing a
+  // real username (new accounts, or legacy auto-generated handles).
+  const needsUsername = Boolean(location.state?.needsUsername);
 
-  const [step, setStep] = useState(() => (user?.username ? 'password' : 'username'));
+  const [step, setStep] = useState(() => {
+    if (needsUsername) return 'username';
+    return user?.username ? 'password' : 'username';
+  });
   const [username, setUsernameValue] = useState('');
   const [usernameAvailable, setUsernameAvailable] = useState(null);
   const [usernameChecking, setUsernameChecking] = useState(false);
@@ -29,9 +36,9 @@ export default function SetPasswordPage() {
   // present on the login/googleLogin response — relying on it here caused
   // an infinite /set-password ⇄ /profile redirect loop (the "flicker").
   useEffect(() => {
-    if (user?.hasPassword && user?.username) navigate('/profile');
-    if (user?.username) setStep('password');
-  }, [user, navigate]);
+    if (user?.hasPassword && user?.username && !needsUsername) navigate('/profile');
+    if (user?.username && !needsUsername) setStep('password');
+  }, [user, navigate, needsUsername]);
 
   useEffect(() => {
     if (username.length < 3) {
@@ -58,9 +65,15 @@ export default function SetPasswordPage() {
     setLoading(true);
     try {
       await setUsername(username);
-      setStep('password');
+      // Password accounts are done once the username is set — only
+      // Google-only accounts (no password yet) continue to the password step.
+      if (user?.hasPassword) {
+        navigate('/profile');
+      } else {
+        setStep('password');
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to set username.');
+      setError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to set username.');
     } finally {
       setLoading(false);
     }

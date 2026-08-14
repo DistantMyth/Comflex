@@ -31,8 +31,8 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await login(email, password);
-      navigate('/profile');
+      const result = await login(email, password);
+      navigate(result?.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result?.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Login failed. Please try again.');
     } finally {
@@ -45,7 +45,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const result = await googleLogin(credentialResponse.credential);
-      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
+      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.message || 'Google login failed.');
     } finally {

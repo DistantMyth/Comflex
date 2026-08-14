@@ -25,6 +25,9 @@ export const userApi = {
   getPersonalEmailStatus: () =>
     client.get('/users/me/personal-email/status'),
 
+  checkUsername: (username) =>
+    client.get(`/auth/check-username/${encodeURIComponent(username)}`),
+
   searchUsers: (query) =>
     client.get(`/users/search?q=${encodeURIComponent(query)}`),
 

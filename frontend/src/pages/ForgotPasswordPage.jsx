@@ -72,7 +72,7 @@ export default function ForgotPasswordPage() {
     setLoading(true);
     try {
       const result = await googleLogin(credentialResponse.credential);
-      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
+      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.message || 'Google login failed.');
     } finally {

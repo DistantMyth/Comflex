@@ -61,10 +61,10 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     const res = await authApi.login(email, password);
-    const { accessToken, user: userData } = res.data.data;
+    const { accessToken, user: userData, needsUsername } = res.data.data;
     setAccessToken(accessToken);
     setUser(userData);
-    return userData;
+    return { user: userData, needsUsername };
   }, []);
 
   const register = useCallback(async (email, password, displayName) => {

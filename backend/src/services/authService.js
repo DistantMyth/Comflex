@@ -160,21 +160,14 @@ async function googleLogin(idToken) {
         data: { googleId: googleUser.googleId },
       });
     } else {
-      // Create brand new user — no password yet
+      // Create brand new user — no password yet, no username yet (chosen
+      // during onboarding so users pick their handle instead of an
+      // auto-generated one).
       isNewUser = true;
-      const baseUsername = googleEmail.split('@')[0];
-      let tempUsername = baseUsername;
-      let counter = 1;
-      while (await prisma.user.findUnique({ where: { username: tempUsername } })) {
-        tempUsername = `${baseUsername}${counter}`;
-        counter++;
-      }
 
       user = await prisma.user.create({
         data: {
           email: googleEmail,
-          username: tempUsername,
-          password: '', // No password — Google-only for now
           displayName: googleUser.name,
           avatarUrl: googleUser.picture,
           googleId: googleUser.googleId,
@@ -206,7 +199,12 @@ async function googleLogin(idToken) {
     refreshToken,
     user: sanitizeUser(user),
     needsPassword: !user.hasPassword,
-    needsUsername: !user.username || user.username.includes('@') || /^\d+$/.test(user.username.replace(/[a-zA-Z]/g, '')), // Assuming a generated name is likely to look like this
+    // New users have no username until they pick one in onboarding. Legacy
+    // accounts (auto-generated handle, never claimed via setUsername) are
+    // flagged too so the user can claim a real username. usernameChangedAt
+    // is only set by setUsername, so it cleanly separates claimed handles
+    // from auto-assigned ones.
+    needsUsername: !user.username || (!user.usernameChangedAt && /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))),
     isNewUser,
   };
 }
@@ -349,6 +347,9 @@ async function login(email, password) {
     accessToken,
     refreshToken,
     user: sanitizeUser(user),
+    // Same legacy-heuristic as googleLogin: auto-generated handles that were
+    // never claimed via setUsername get steered to /set-password.
+    needsUsername: !user.username || (!user.usernameChangedAt && /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))),
   };
 }
 
@@ -525,6 +526,18 @@ async function sendPersonalEmailVerification(userId, personalEmail) {
   // primary or personal email) — otherwise an attacker could claim+verify
   // a victim's address on their own account.
   const normalized = normalizeEmail(personalEmail);
+
+  // Adding your own account email as a "personal email" is meaningless —
+  // it's already verified by signing in. Reject it so the verification
+  // link doesn't bounce back into the account inbox confusingly.
+  const self = await prisma.user.findUnique({ where: { id: userId } });
+  if (self && normalizeEmail(self.email || '') === normalized) {
+    throw Object.assign(
+      new Error('This is already your account email — it is verified by signing in.'),
+      { statusCode: 400, code: 'SELF_EMAIL' }
+    );
+  }
+
   const clash = await prisma.user.findFirst({
     where: {
       id: { not: userId },
@@ -561,7 +574,14 @@ async function sendPersonalEmailVerification(userId, personalEmail) {
   } catch (err) {
     // Surface per-recipient backstop 429s (see forgotPassword note).
     if (err.code === 'RATE_LIMITED') throw err;
-    console.error('[AUTH] Failed to send email verification:', err.message);
+    // Never report a false success: if the provider rejected the send the
+    // user must know, or they'll wait forever for an email that never
+    // arrives (the classic "it said sent but nothing came" bug).
+    console.error('[AUTH] Failed to send email verification:', err);
+    throw Object.assign(
+      new Error('Failed to send the verification email. Please try again in a few minutes.'),
+      { statusCode: 502, code: 'EMAIL_SEND_FAILED' }
+    );
   }
 
   return { message: 'Verification email sent.' };

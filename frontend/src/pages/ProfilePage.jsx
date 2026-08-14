@@ -4,7 +4,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, Pencil, Save, X, CreditCard, Calendar, BookOpen, Code2, Loader2, Mail, MailCheck, ShieldCheck, Send, RotateCcw, Trash2 } from 'lucide-react';
+import { Camera, Pencil, Save, X, CreditCard, Calendar, BookOpen, Code2, Loader2, Mail, MailCheck, ShieldCheck, Send, RotateCcw, Trash2, AtSign, Check } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
@@ -20,7 +20,6 @@ const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}
 export default function ProfilePage() {
   const { user, refreshProfile } = useAuth();
   const fileInputRef = useRef(null);
-
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ displayName: '', bio: '', cfHandle: '' });
   const [saving, setSaving] = useState(false);
@@ -42,8 +41,62 @@ export default function ProfilePage() {
   const cooldownRef = useRef(null);
   const [peLimit, setPeLimit] = useState(null); // { remaining, retryAfterMs, maxSends } from backend
 
+  // Username editing
+  const { setUsername } = useAuth();
+  const [unEditing, setUnEditing] = useState(false);
+  const [unValue, setUnValue] = useState('');
+  const [unAvailable, setUnAvailable] = useState(null);
+  const [unChecking, setUnChecking] = useState(false);
+  const [unBusy, setUnBusy] = useState(false);
+  const [unMessage, setUnMessage] = useState('');
+  const [unError, setUnError] = useState('');
+
   const personalEmailVerified = Boolean(user?.personalEmailVerified);
   const hasPersonalEmail = Boolean(user?.personalEmail);
+
+  // Username availability check with debounce (mirrors SetPasswordPage)
+  useEffect(() => {
+    if (!unEditing || unValue.length < 3) {
+      setUnAvailable(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setUnChecking(true);
+      try {
+        const res = await userApi.checkUsername(unValue);
+        setUnAvailable(res.data.data.available);
+      } catch {
+        setUnAvailable(null);
+      } finally {
+        setUnChecking(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [unValue, unEditing]);
+
+  const startUsernameEdit = () => {
+    setUnValue(user?.username || '');
+    setUnEditing(true);
+    setUnMessage('');
+    setUnError('');
+  };
+
+  const saveUsername = async (e) => {
+    e.preventDefault();
+    setUnError('');
+    setUnMessage('');
+    setUnBusy(true);
+    try {
+      await setUsername(unValue);
+      await refreshProfile();
+      setUnEditing(false);
+      setUnMessage('Username updated.');
+    } catch (err) {
+      setUnError(err.response?.data?.error?.message || err.response?.data?.message || 'Failed to update username.');
+    } finally {
+      setUnBusy(false);
+    }
+  };
 
   // Start a cooldown countdown. Defaults to the client-side 60s guard; the
   // backend's accurate retryAfter overrides it when the per-user limit is hit.
@@ -265,7 +318,45 @@ export default function ProfilePage() {
             <div className="text-center sm:text-left flex-1 min-w-0">
               <h2 className="text-xl font-bold font-display truncate">{user.displayName}</h2>
               <p className="text-[var(--color-text-secondary)] text-sm break-all">{user.email}</p>
-              {user.username && <p className="text-xs text-[var(--color-text-muted)] mt-0.5">@{user.username}</p>}
+              {unEditing ? (
+                <div className="mt-2">
+                  <form onSubmit={saveUsername} className="flex items-center gap-2">
+                    <div className="relative flex-1 max-w-[220px]">
+                      <AtSign size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+                      <input
+                        type="text"
+                        value={unValue}
+                        onChange={(e) => setUnValue(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
+                        minLength={3}
+                        maxLength={30}
+                        required
+                        autoFocus
+                        className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg focus:outline-[var(--color-accent)]"
+                      />
+                    </div>
+                    <button type="submit" disabled={unBusy || !unAvailable} className="btn btn-primary text-xs px-3 py-1.5 shrink-0" title="Save username">
+                      {unBusy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                    </button>
+                    <button type="button" onClick={() => setUnEditing(false)} className="btn btn-secondary text-xs px-3 py-1.5 shrink-0" title="Cancel">
+                      <X size={13} />
+                    </button>
+                  </form>
+                  <div className="mt-1 text-xs h-4">
+                    {unChecking && <span className="text-[var(--color-text-muted)] animate-pulse inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Checking...</span>}
+                    {!unChecking && unAvailable === true && <span className="text-[var(--color-success)] inline-flex items-center gap-1"><Check size={11} /> Available</span>}
+                    {!unChecking && unAvailable === false && <span className="text-[var(--color-danger)] inline-flex items-center gap-1"><X size={11} /> Taken</span>}
+                    {unError && <span className="text-[var(--color-danger)]">{unError}</span>}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--color-text-muted)] mt-0.5 flex items-center justify-center sm:justify-start gap-1.5">
+                  {user.username ? `@${user.username}` : 'No username yet'}
+                  <button onClick={startUsernameEdit} className="text-[var(--color-accent)] hover:underline inline-flex items-center gap-0.5" title="Change username (once per month)">
+                    <Pencil size={11} /> Change
+                  </button>
+                </p>
+              )}
+              {unMessage && <p className="text-xs text-[var(--color-success)] mt-1">{unMessage}</p>}
 
               {user.displayBadges?.length > 0 && (
                 <div className="flex flex-wrap justify-center sm:justify-start gap-2 mt-3">

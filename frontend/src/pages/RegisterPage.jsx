@@ -24,7 +24,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const result = await googleLogin(credentialResponse.credential);
-      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile');
+      navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Registration failed. Make sure you use your college email.');
     } finally {
