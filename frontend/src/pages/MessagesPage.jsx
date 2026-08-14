@@ -43,9 +43,11 @@ export default function MessagesPage() {
   }, []);
 
   // Fetch messages for the active conversation
-  const fetchMessages = useCallback(async () => {
+  // `silent` skips the loading indicator — background refreshes (socket
+  // updates, polls) must not flicker a "Loading messages..." label.
+  const fetchMessages = useCallback(async (silent = false) => {
     if (!activeUserId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const res = await dmApi.getMessages(activeUserId);
       setMessages(res.data.data?.messages || []);
@@ -62,7 +64,7 @@ export default function MessagesPage() {
     } catch (err) {
       console.error('Failed to fetch messages:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [activeUserId, fetchConversations, connected, markDMRead]);
 
@@ -115,14 +117,16 @@ export default function MessagesPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Poll for new messages every 5 seconds when in an active chat
+  // Poll for new messages when disconnected from the socket (5s). While
+  // connected, real-time events already keep the conversation fresh.
   useEffect(() => {
     if (!activeUserId) return;
-    const interval = setInterval(fetchMessages, 5000);
+    if (connected) return;
+    const interval = setInterval(() => fetchMessages(true), 5000);
     // Auto-focus input when opening a conversation
     setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearInterval(interval);
-  }, [activeUserId, fetchMessages]);
+  }, [activeUserId, fetchMessages, connected]);
 
   const [replyingTo, setReplyingTo] = useState(null);
   const [forwardingMsg, setForwardingMsg] = useState(null);
@@ -156,7 +160,7 @@ export default function MessagesPage() {
       await dmApi.sendMessage(activeUserId, { content: newMessage.trim(), replyToId: replyingTo?.id });
       setNewMessage('');
       setReplyingTo(null);
-      await fetchMessages();
+      await fetchMessages(true);
     } catch (err) {
       console.error('Failed to send message:', err);
     } finally {
@@ -180,7 +184,7 @@ export default function MessagesPage() {
       setCreditAmount('');
       setShowCreditTransfer(false);
       setCreditMsg('');
-      await fetchMessages();
+      await fetchMessages(true);
     } catch (err) {
       setCreditMsg(err.response?.data?.error?.message || 'Transfer failed.');
     } finally {
@@ -204,7 +208,7 @@ export default function MessagesPage() {
 
   return (
     <>
-    <div className="flex h-[calc(100vh-4rem)] -m-8 relative">
+    <div className="flex h-[calc(100dvh-9rem)] lg:h-[calc(100dvh-6rem)] min-h-[440px] relative">
         {/* Conversations sidebar */}
         <div className="w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-secondary)]">
           <div className="p-4 border-b border-[var(--color-border)]">
@@ -286,8 +290,8 @@ export default function MessagesPage() {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {loading && <p className="text-center text-[var(--color-text-muted)] animate-pulse">Loading messages...</p>}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                {loading && messages.length === 0 && <p className="text-center text-[var(--color-text-muted)] animate-pulse">Loading messages...</p>}
                 {messages.map(msg => {
                   const isMine = msg.senderId === currentUser?.id;
 
@@ -455,7 +459,7 @@ export default function MessagesPage() {
                              replyToId: replyingTo?.id,
                              ...fileData
                            });
-                           await fetchMessages();
+                           await fetchMessages(true);
                            setReplyingTo(null);
                         } catch (err) {
                            alert('Failed to send attachment.');

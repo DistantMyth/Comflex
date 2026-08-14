@@ -69,6 +69,9 @@ model User {
   eventTeamInvites  EventTeamInvite[]
   evaluatedSubmissions EventSubmission[]
   pointAdjustments   TeamPointAdjustment[]
+  createdRewardRules   EventRewardRule[]       @relation("RewardRuleCreator")
+  rewardGrantsReceived EventRewardGrant[]      @relation("RewardGrantRecipient")
+  rewardGrantsGranted  EventRewardGrant[]      @relation("RewardGrantGranter")
 
   // Resources Relations
   resourcesUploaded Resource[]
@@ -362,8 +365,6 @@ model Event {
   // Timer configurations
   autoStart       Boolean  @default(true)
 
-  rewardTiers     Json?    // [{ rank: 1, credits: 500, badgeId: "optional-id" }]
-
   // Invite-only participation + shareable invite link (rotating, 7-day expiry)
   inviteMode          String?  @default("open") // "open" | "invite_only"
   inviteToken         String?  // unique token for event invite links (32-byte random, no index needed)
@@ -374,12 +375,6 @@ model Event {
   blockedCohorts      String[] @default([]) // cohort tags that may NOT join
   allowedUserIds      String[] @default([]) // users that MAY join (empty = no whitelist)
   blockedUserIds      String[] @default([]) // users that may NOT join
-
-  // Automatic reward distribution: budget consumed per correct auto-graded answer;
-  // the event completes when the budget runs out.
-  rewardBudget        Json?    // { creditsPerCorrect, maxCredits, badgeId, badgesPerCorrect, maxBadges }
-  rewardCreditsSpent  Int      @default(0)
-  rewardBadgesSpent   Int      @default(0)
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -394,6 +389,62 @@ model Event {
   tasks           EventTask[]
   submissions     EventSubmission[]
   pointAdjustments TeamPointAdjustment[]
+  rewardRules     EventRewardRule[]
+  rewardGrants    EventRewardGrant[]
+}
+
+// ============================================================
+// EVENT REWARDS — structured rules + immutable grant ledger
+// ============================================================
+//
+// A rule fires a payout to every member of a team when its trigger happens.
+// Funding model:
+//   - Rules created by a global admin (ring 0) MINT credits/badges.
+//   - Rules created by anyone else are funded from the creator's own
+//     creditBalance / badge inventory ("out of their own pocket").
+
+model EventRewardRule {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId        String   @db.ObjectId
+  name           String
+  trigger        String   // "submission" | "rank" | "manual"
+  rank           Int?     // for trigger = "rank": which placement (1 = first)
+  creditsPerUser Int      @default(0) // credits each eligible member receives
+  badgeIds       String[] // badges each eligible member receives
+  maxUses        Int?     // how many times this rule may fire; null = unlimited
+  uses           Int      @default(0)
+  enabled        Boolean  @default(true)
+  createdById    String   @db.ObjectId // the rule's funder
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  event          Event                @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  creator        User                 @relation("RewardRuleCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  grants         EventRewardGrant[]
+}
+
+// Immutable payout record. Every credit/badge granted through the event
+// system produces one row per recipient, so organizers and admins can audit
+// who got what, when, and from which rule / manual action.
+model EventRewardGrant {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId      String   @db.ObjectId
+  ruleId       String?  @db.ObjectId // null for ad-hoc manual grants
+  userId       String   @db.ObjectId
+  teamId       String?  @db.ObjectId
+  submissionId String?  @db.ObjectId
+  trigger      String   // "submission" | "rank" | "manual"
+  credits      Int      @default(0)
+  badgeIds     String[]
+  grantedById  String?  @db.ObjectId // who performed the grant (null = system)
+  grantedAt    DateTime @default(now())
+
+  event       Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  rule        EventRewardRule?  @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  user        User              @relation("RewardGrantRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  team        EventTeam?        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  submission  EventSubmission?  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  grantedBy   User?             @relation("RewardGrantGranter", fields: [grantedById], references: [id], onDelete: SetNull)
 }
 
 model EventOrganizer {
@@ -424,6 +475,7 @@ model EventTeam {
   invites     EventTeamInvite[]
   submissions EventSubmission[]
   pointAdjustments TeamPointAdjustment[]
+  rewardGrants     EventRewardGrant[]
 
   @@unique([eventId, name])
 }
@@ -494,6 +546,7 @@ model EventSubmission {
   team            EventTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
   task            EventTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   evaluator       User?     @relation(fields: [evaluatedById], references: [id])
+  rewardGrants    EventRewardGrant[]
 }
 
 // ============================================================

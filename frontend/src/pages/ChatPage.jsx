@@ -626,7 +626,7 @@ export default function ChatPage() {
 
   return (
     <>
-    <div className="max-w-5xl mx-auto flex flex-col h-[calc(100vh-120px)]">
+    <div className="max-w-5xl mx-auto flex flex-col h-[calc(100dvh-9rem)] lg:h-[calc(100dvh-6rem)] min-h-[440px]">
         {/* Header */}
         <div className="flex items-center gap-4 mb-4 flex-shrink-0">
           <Link to="/groups" className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors">
@@ -717,7 +717,7 @@ export default function ChatPage() {
             )}
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+            <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-[var(--color-text-muted)] text-sm">
                   No messages yet. Start the conversation!

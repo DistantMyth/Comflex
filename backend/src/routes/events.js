@@ -317,16 +317,84 @@ router.get('/:id/tasks/:taskId/submissions',
   eventController.listSubmissions
 );
 
-// Manual evaluation
+// Manual evaluation (grantReward defaults to true — rewards fire on "correct")
 router.post('/:id/submissions/:submissionId/evaluate',
   [
     param('id').isMongoId().withMessage('Invalid Event ID.'),
     param('submissionId').isMongoId().withMessage('Invalid Submission ID.'),
     body('status').isIn(['correct', 'wrong']).withMessage('Status must be correct or wrong.'),
-    body('scoreAwarded').isInt().withMessage('Score is required.')
+    body('scoreAwarded').isInt().withMessage('Score is required.'),
+    body('grantReward').optional().isBoolean().withMessage('grantReward must be a boolean.')
   ],
   validate,
   eventController.evaluateSubmission
+);
+
+// ==========================================
+// REWARD RULES + GRANT LEDGER
+// ==========================================
+
+/**
+ * GET /api/v1/events/:id/reward-rules
+ * Organizer: list this event's reward rules.
+ */
+router.get('/:id/reward-rules',
+  [param('id').isMongoId().withMessage('Invalid Event ID.')],
+  validate,
+  eventController.listRewardRules
+);
+
+/**
+ * POST /api/v1/events/:id/reward-rules
+ * Organizer: create a reward rule (submission or rank trigger).
+ */
+router.post('/:id/reward-rules',
+  [
+    param('id').isMongoId().withMessage('Invalid Event ID.'),
+    body('trigger').isIn(['submission', 'rank']).withMessage('Trigger must be submission or rank.'),
+    body('creditsPerUser').optional().isInt({ min: 0 }).withMessage('Credits per user must be a non-negative integer.'),
+    body('rank').optional().isInt({ min: 1 }).withMessage('Rank must be a positive integer.'),
+    body('badgeIds').optional().isArray().withMessage('badgeIds must be an array.'),
+    body('maxUses').optional({ nullable: true }).isInt({ min: 1 }).withMessage('maxUses must be a positive integer or null.')
+  ],
+  validate,
+  eventController.createRewardRule
+);
+
+/**
+ * PATCH /api/v1/events/:id/reward-rules/:ruleId
+ * Organizer: update a reward rule.
+ */
+router.patch('/:id/reward-rules/:ruleId',
+  [
+    param('id').isMongoId().withMessage('Invalid Event ID.'),
+    param('ruleId').isMongoId().withMessage('Invalid Rule ID.')
+  ],
+  validate,
+  eventController.updateRewardRule
+);
+
+/**
+ * DELETE /api/v1/events/:id/reward-rules/:ruleId
+ * Organizer: delete a reward rule.
+ */
+router.delete('/:id/reward-rules/:ruleId',
+  [
+    param('id').isMongoId().withMessage('Invalid Event ID.'),
+    param('ruleId').isMongoId().withMessage('Invalid Rule ID.')
+  ],
+  validate,
+  eventController.deleteRewardRule
+);
+
+/**
+ * GET /api/v1/events/:id/rewards
+ * Organizer: audit ledger of every credit/badge payout in this event.
+ */
+router.get('/:id/rewards',
+  [param('id').isMongoId().withMessage('Invalid Event ID.')],
+  validate,
+  eventController.listRewardGrants
 );
 
 // ==========================================
@@ -352,12 +420,13 @@ router.post('/:id/teams/:teamId/points',
 );
 
 // Admin / Organizer granting credits/badges to the entire team
+// (pocket-funded for non-admins — debited from the actor's own balance)
 router.post('/:id/teams/:teamId/rewards',
   [
     param('id').isMongoId().withMessage('Invalid Event ID.'),
     param('teamId').isMongoId().withMessage('Invalid Team ID.'),
     body('credits').optional().isInt({ min: 1 }),
-    body('badgeId').optional().isMongoId()
+    body('badgeIds').optional().isArray()
   ],
   validate,
   eventController.awardTeamRewards

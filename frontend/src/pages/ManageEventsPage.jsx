@@ -35,6 +35,9 @@ export default function ManageEventsPage() {
   const { user } = useAuth();
   const [managedEvents, setManagedEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const isAdminUser = user?.globalRing === 0;
+  const mayTargetGroups = isAdminUser || user?.canCreateEvents === true;
   
   // Creation Form State
   const [creating, setCreating] = useState(false);
@@ -56,12 +59,7 @@ export default function ManageEventsPage() {
     allowedCohorts: '',
     blockedCohorts: '',
     allowedUserIds: '',
-    blockedUserIds: '',
-    creditsPerCorrect: 0,
-    maxCredits: 0,
-    badgesPerCorrect: 0,
-    badgeId: '',
-    maxBadges: 0
+    blockedUserIds: ''
   });
   const [message, setMessage] = useState('');
 
@@ -89,19 +87,12 @@ export default function ManageEventsPage() {
     try {
       const payload = {
         ...form,
-        inviteMode: form.inviteOnly ? 'invite_only' : 'open',
+        inviteMode: mayTargetGroups && !form.inviteOnly ? 'open' : 'invite_only',
         targetTags: form.targetTags ? form.targetTags.split(',').map(t => t.trim()).filter(Boolean) : [],
         allowedCohorts: form.allowedCohorts ? form.allowedCohorts.split(',').map(t => t.trim()).filter(Boolean) : [],
         blockedCohorts: form.blockedCohorts ? form.blockedCohorts.split(',').map(t => t.trim()).filter(Boolean) : [],
         allowedUserIds: form.allowedUserIds ? form.allowedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
         blockedUserIds: form.blockedUserIds ? form.blockedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
-        rewardBudget: (form.creditsPerCorrect > 0 || form.badgesPerCorrect > 0) ? {
-          creditsPerCorrect: Number(form.creditsPerCorrect) || 0,
-          maxCredits: Number(form.maxCredits) || 0,
-          badgeId: form.badgeId || null,
-          badgesPerCorrect: Number(form.badgesPerCorrect) || 0,
-          maxBadges: Number(form.maxBadges) || 0
-        } : null,
         startDate: new Date(form.startDate).toISOString()
       };
       
@@ -113,8 +104,7 @@ export default function ManageEventsPage() {
       setForm({
         title: '', description: '', startDate: '', durationHours: 0, durationMinutes: 0, taskViewMode: 'all', category: '', targetTags: '', 
         isTeamEvent: false, minTeamSize: 1, maxTeamSize: 4, autoStart: true,
-        inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: '',
-        creditsPerCorrect: 0, maxCredits: 0, badgesPerCorrect: 0, badgeId: '', maxBadges: 0
+        inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: ''
       });
       
       fetchEvents();
@@ -181,7 +171,13 @@ export default function ManageEventsPage() {
               </div>
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Target Tags (Comma separated)</label>
-                <input type="text" value={form.targetTags} onChange={e => setForm({...form, targetTags: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
+                {mayTargetGroups ? (
+                  <input type="text" value={form.targetTags} onChange={e => setForm({...form, targetTags: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
+                ) : (
+                  <div className="text-xs text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-lg px-3 py-2">
+                    🔒 Cohort targeting requires admin permission. Your events are invite-only and spread via the invite link, team invitations and friends.
+                  </div>
+                )}
               </div>
             </div>
 
@@ -239,19 +235,29 @@ export default function ManageEventsPage() {
             {/* Participation policy */}
             <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl space-y-4">
               <h4 className="text-sm font-bold">Participation Policy</h4>
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input type="checkbox" checked={form.inviteOnly} onChange={e => setForm({...form, inviteOnly: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
-                Invite-only — no self-registration; participants join via invite link or team invitations
-              </label>
+              {mayTargetGroups ? (
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input type="checkbox" checked={form.inviteOnly} onChange={e => setForm({...form, inviteOnly: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
+                  Invite-only — no self-registration; participants join via invite link or team invitations
+                </label>
+              ) : (
+                <p className="text-xs text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-lg px-3 py-2">
+                  🔒 This event will be invite-only — no self-registration, no cohort targeting. Participants join via your invite link or team/friend invitations.
+                </p>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed Cohorts (whitelist)</label>
-                  <input type="text" value={form.allowedCohorts} onChange={e => setForm({...form, allowedCohorts: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked Cohorts (blacklist)</label>
-                  <input type="text" value={form.blockedCohorts} onChange={e => setForm({...form, blockedCohorts: e.target.value})} placeholder="e.g. cohort-26" className="w-full text-sm" />
-                </div>
+                {mayTargetGroups && (
+                  <>
+                    <div>
+                      <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed Cohorts (whitelist)</label>
+                      <input type="text" value={form.allowedCohorts} onChange={e => setForm({...form, allowedCohorts: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked Cohorts (blacklist)</label>
+                      <input type="text" value={form.blockedCohorts} onChange={e => setForm({...form, blockedCohorts: e.target.value})} placeholder="e.g. cohort-26" className="w-full text-sm" />
+                    </div>
+                  </>
+                )}
                 <div>
                   <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed User IDs (whitelist)</label>
                   <input type="text" value={form.allowedUserIds} onChange={e => setForm({...form, allowedUserIds: e.target.value})} placeholder="Comma separated user IDs" className="w-full text-sm" />
@@ -264,32 +270,13 @@ export default function ManageEventsPage() {
               <p className="text-xs text-[var(--color-text-muted)]">Whitelists and blacklists are enforced even when someone has the invite link.</p>
             </div>
 
-            {/* Auto reward budget */}
-            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl space-y-4">
-              <h4 className="text-sm font-bold">Auto-Reward Budget <span className="font-normal text-xs text-[var(--color-text-muted)]">(paid out on each correct auto-graded answer — event ends when the budget runs out)</span></h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Credits per correct answer</label>
-                  <input type="number" min="0" value={form.creditsPerCorrect} onChange={e => setForm({...form, creditsPerCorrect: e.target.value})} className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Max credits to give out</label>
-                  <input type="number" min="0" value={form.maxCredits} onChange={e => setForm({...form, maxCredits: e.target.value})} className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Badge ID to award</label>
-                  <input type="text" value={form.badgeId} onChange={e => setForm({...form, badgeId: e.target.value})} placeholder="Optional — store badge ID" className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Badges per correct answer</label>
-                  <input type="number" min="0" value={form.badgesPerCorrect} onChange={e => setForm({...form, badgesPerCorrect: e.target.value})} className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Max badges to give out</label>
-                  <input type="number" min="0" value={form.maxBadges} onChange={e => setForm({...form, maxBadges: e.target.value})} className="w-full text-sm" />
-                </div>
-              </div>
-              <p className="text-xs text-[var(--color-text-muted)]">The event is automatically marked completed when the credit or badge budget is exhausted.</p>
+            {/* Rewards are configured per event, on the event page */}
+            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
+              <h4 className="text-sm font-bold">Rewards</h4>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Reward rules (per correct answer, rank placements, manual grants) are configured inside the event page's <strong>Rewards</strong> panel after creation.
+                {!isAdminUser && ' Non-admin creators fund rewards from their own credit balance and badge inventory.'}
+              </p>
             </div>
 
             <button type="submit" disabled={creating || !form.title || !form.startDate || !form.category} className="btn btn-primary w-full md:w-auto">
@@ -321,7 +308,7 @@ export default function ManageEventsPage() {
                     Starts: {new Date(event.startDate).toLocaleString()} • Targets: {event.targetTags?.length ? event.targetTags.join(', ') : 'Public'}
                     {event.isTeamEvent ? ` • Team (${event.minTeamSize}-${event.maxTeamSize})` : ' • Solo'}
                     {event.inviteMode === 'invite_only' ? ' • Invite-only' : ''}
-                    {event.rewardBudget ? ` • Auto-reward: ${event.rewardBudget.creditsPerCorrect || 0}cr/${event.rewardBudget.badgesPerCorrect || 0}bd per correct` : ''}
+                    {event.rewardRules?.length > 0 ? ` • ${event.rewardRules.length} reward rule${event.rewardRules.length > 1 ? 's' : ''}` : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

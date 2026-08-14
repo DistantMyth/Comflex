@@ -18,7 +18,6 @@ import { useTheme } from '../context/ThemeContext';
 import { groupApi } from '../api/groupApi';
 import { dmApi } from '../api/dmApi';
 import Avatar from './Avatar';
-import NotificationBell from './NotificationBell';
 import resolveAsset from '../utils/resolveAsset';
 import { notificationsApi } from '../api/notificationsApi';
 
@@ -35,7 +34,7 @@ export default function Layout({ children }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { connected, onEvent } = useSocket();
-  const [totalUnread, setTotalUnread] = useState({ groups: 0, dms: 0 });
+  const [totalUnread, setTotalUnread] = useState({ groups: 0, dms: 0, friends: 0 });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const fetchTimeoutRef = useRef(null);
 
@@ -47,15 +46,23 @@ export default function Layout({ children }) {
   // Debounced fetch to avoid rapid re-fetching
   const fetchUnread = useCallback(async () => {
     try {
-      const [groupRes, dmRes] = await Promise.all([
+      const [groupRes, dmRes, notifRes] = await Promise.all([
         groupApi.listGroups().catch(() => ({ data: { data: [] } })),
         dmApi.listConversations().catch(() => ({ data: { data: [] } })),
+        notificationsApi.list(100).catch(() => ({ data: { data: { notifications: [] } } })),
       ]);
       const groups = groupRes.data?.data || [];
       const dms = dmRes.data?.data || [];
+      const notifications = notifRes.data?.data?.notifications || [];
+      // Friend requests surface as unread friendship notifications; the
+      // count is shown next to the Friends nav item.
+      const friendUnread = notifications.filter(
+        (n) => (n.type === 'friend_request' || n.type === 'friend_accept') && !n.isRead
+      ).length;
       setTotalUnread({
         groups: groups.reduce((s, g) => s + (g.unreadCount || 0), 0),
         dms: dms.reduce((s, c) => s + (c.unreadCount || 0), 0),
+        friends: friendUnread,
       });
     } catch {}
   }, []);
@@ -85,6 +92,7 @@ export default function Layout({ children }) {
       onEvent('message:delete', debouncedFetchUnread),
       onEvent('dm:new', debouncedFetchUnread),
       onEvent('dm:readUpdate', debouncedFetchUnread),
+      onEvent('notification:new', debouncedFetchUnread),
     ];
     return () => cleanups.forEach((fn) => fn?.());
   }, [connected, onEvent, debouncedFetchUnread]);
@@ -94,6 +102,15 @@ export default function Layout({ children }) {
     if (!user) return;
     const m = location.pathname.match(/^\/messages\/([^/]+)$/);
     if (m) notificationsApi.markReadByFilter({ type: 'dm', actorId: m[1] }).catch(() => {});
+  }, [location.pathname, user]);
+
+  // Visiting the Friends page clears friendship notifications so the
+  // badge doesn't linger after the request has been handled
+  useEffect(() => {
+    if (!user) return;
+    if (location.pathname === '/friends') {
+      notificationsApi.markReadByFilter({ type: 'friend_request' }).catch(() => {});
+    }
   }, [location.pathname, user]);
 
   // Reset scroll position on route change so content never appears mid-scroll
@@ -106,7 +123,7 @@ export default function Layout({ children }) {
   const navItems = [
     { path: '/profile', label: 'Profile', icon: User },
     { path: '/groups', label: 'Groups', icon: MessagesSquare, badge: totalUnread.groups },
-    { path: '/friends', label: 'Friends', icon: Users },
+    { path: '/friends', label: 'Friends', icon: Users, badge: totalUnread.friends },
     { path: '/messages', label: 'Messages', icon: Send, badge: totalUnread.dms },
     { path: '/resources', label: 'Resources', icon: BookOpen },
     { path: '/events', label: 'Events', icon: CalendarDays },
@@ -219,7 +236,6 @@ export default function Layout({ children }) {
       <header className="lg:hidden fixed top-0 inset-x-0 z-40 flex items-center justify-between px-4 py-3 glass-panel border-b border-[var(--color-border)]">
         <Logo />
         <div className="flex items-center gap-2">
-          <NotificationBell onEvent={onEvent} connected={connected} className="relative z-50" />
           <button
             onClick={() => setDrawerOpen(true)}
             className="p-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-primary)]"
@@ -264,9 +280,6 @@ export default function Layout({ children }) {
           </>
         )}
       </AnimatePresence>
-
-      {/* Desktop floating notification bell */}
-      <NotificationBell onEvent={onEvent} connected={connected} className="fixed top-6 right-8 z-40 hidden lg:block" />
 
       {/* Main content — animate only this area on route change so the
           sidebar/nav stays mounted and route switches never flash or remount */}

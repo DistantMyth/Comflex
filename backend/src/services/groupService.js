@@ -12,6 +12,11 @@ const { sanitizeUrl } = require('../utils/urlSafety');
 
 const ALIAS_MAX_LEN = 24;
 
+// Prisma 6 (Mongo) translates `bannedAt: null` into "field exists AND equals
+// null", which misses documents where the optional field was never written.
+// "Not banned" must match both a stored null and an absent field.
+const NOT_BANNED = { OR: [{ bannedAt: null }, { bannedAt: { isSet: false } }] };
+
 // All permission keys that may ever be granted — anything outside this set
 // is dropped, so a client-supplied permissions blob can't smuggle arbitrary
 // JSON into the membership document or future keys we don't know about yet.
@@ -111,7 +116,7 @@ async function listUserGroups(userId, anonSessions = []) {
     const identities = await prisma.anonymousIdentity.findMany({
       where: {
         id: { in: anonSessions.map(s => s.identityId) },
-        bannedAt: null,
+        ...NOT_BANNED,
       },
     });
     const anonGroupIds = [...new Set(identities.map(i => i.groupId))];
@@ -122,10 +127,10 @@ async function listUserGroups(userId, anonSessions = []) {
       });
       const counts = await prisma.anonymousIdentity.groupBy({
         by: ['groupId'],
-        _count: { _id: true },
-        where: { groupId: { in: anonGroupIds }, bannedAt: null },
+        _count: { _all: true },
+        where: { groupId: { in: anonGroupIds }, ...NOT_BANNED },
       });
-      const countMap = Object.fromEntries(counts.map(c => [c.groupId, c._count._id]));
+      const countMap = Object.fromEntries(counts.map(c => [c.groupId, c._count._all]));
 
       for (const session of anonSessions) {
         const identity = identities.find(i => i.id === session.identityId);
@@ -234,7 +239,7 @@ async function markGroupRead(groupId, userId) {
 async function getGroup(groupId) {
   const group = await prisma.cohortGroup.findUnique({
     where: { id: groupId },
-    include: { _count: { select: { members: true, anonIdentities: { where: { bannedAt: null } } } } },
+    include: { _count: { select: { members: true, anonIdentities: { where: { ...NOT_BANNED } } } } },
   });
   if (!group) throw Object.assign(new Error('Group not found.'), { statusCode: 404, code: 'GROUP_NOT_FOUND' });
   const memberCount = group.isAnonymous ? group._count.anonIdentities : group._count.members;
@@ -817,7 +822,7 @@ async function claimAnonIdentity(groupId, userId, alias, avatarUrl) {
   // Alias must be unique in the group case-insensitively (impersonation guard).
   const aliasKey = cleanAlias.toLowerCase();
   const clash = await prisma.anonymousIdentity.findFirst({
-    where: { groupId, aliasKey, bannedAt: null },
+    where: { groupId, aliasKey, ...NOT_BANNED },
     select: { id: true },
   });
   if (clash) {

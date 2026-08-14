@@ -35,7 +35,7 @@ const CountdownClock = ({ targetDate, label }) => {
 
 export default function EventDetailsPage() {
   const { id } = useParams();
-  const { user } = useAuth();
+  const { user, refreshProfile } = useAuth();
   const [event, setEvent] = useState(null);
   const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +61,7 @@ export default function EventDetailsPage() {
 
   // Task & Leaderboard Management
   const [tasks, setTasks] = useState([]);
-  const [taskForm, setTaskForm] = useState({ title: '', description: '', order: 1, basePoints: 100, submissionType: 'text', isAutoEvaluated: false, exactText: '', decayPercentage: 0, wrongSubmissionPenalty: 0 });
+  const [taskForm, setTaskForm] = useState({ title: '', description: '', order: 1, basePoints: 100, submissionType: 'text', isAutoEvaluated: false, exactText: '', options: '', correctOptions: [], decayPercentage: 0, wrongSubmissionPenalty: 0 });
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskSubmissions, setTaskSubmissions] = useState({});
   const [selectedTaskIdx, setSelectedTaskIdx] = useState(-1);
@@ -71,7 +71,18 @@ export default function EventDetailsPage() {
   const [gradingSubId, setGradingSubId] = useState(null);
   const [gradeScore, setGradeScore] = useState(0);
   const [eventBadges, setEventBadges] = useState([]);
-  const [rewardData, setRewardData] = useState({ teamId: '', credits: 0, badgeId: '' });
+  const [rewardData, setRewardData] = useState({ teamId: '', credits: 0, badgeIds: [] });
+
+  // Reward rules & grant ledger
+  const [rewardRules, setRewardRules] = useState([]);
+  const [rewardGrants, setRewardGrants] = useState([]);
+  const [showRuleForm, setShowRuleForm] = useState(false);
+  const [ruleForm, setRuleForm] = useState({ trigger: 'submission', rank: 1, creditsPerUser: 0, badgeIds: [], maxUses: '' });
+  const [ownedBadges, setOwnedBadges] = useState([]);
+
+  // Participant answers
+  const [submissionSelections, setSubmissionSelections] = useState({});
+  const [submitResults, setSubmitResults] = useState({});
 
   const fetchEventData = useCallback(async () => {
     setLoading(true);
@@ -86,8 +97,7 @@ export default function EventDetailsPage() {
         taskViewMode: ev.taskViewMode, scoreMode: ev.scoreMode, wrongSubmissionPenalty: ev.wrongSubmissionPenalty,
         targetTags: ev.targetTags?.join(', ') || '',
         isTeamEvent: ev.isTeamEvent || false,
-        minTeamSize: ev.minTeamSize || 1, maxTeamSize: ev.maxTeamSize || 1,
-        rewardTiers: ev.rewardTiers || []
+        minTeamSize: ev.minTeamSize || 1, maxTeamSize: ev.maxTeamSize || 1
       });
       
       const { data: teamsRes } = await eventApi.listTeams(id);
@@ -113,12 +123,28 @@ export default function EventDetailsPage() {
          const { data: bData } = await storeApi.getAllBadges();
          setEventBadges(bData.data.filter(b => b.isEventBadge));
       } catch(err) { console.error('Failed to fetch badges', err); }
+
+      if (ev.creatorId === user?.id || ev.organizers?.some(o => o.userId === user?.id) || user?.globalRing === 0) {
+        try {
+          const [rulesRes, grantsRes] = await Promise.all([
+            eventApi.listRewardRules(id),
+            eventApi.listRewardGrants(id)
+          ]);
+          setRewardRules(rulesRes.data);
+          setRewardGrants(grantsRes.data);
+        } catch(err) { console.error('Failed to fetch reward data', err); }
+      }
+
+      try {
+         const { data: invRes } = await storeApi.getInventory();
+         setOwnedBadges(invRes.data || []);
+      } catch(err) { console.error('Failed to fetch inventory', err); }
     } catch {
       console.error('Failed to fetch event data');
     } finally {
       setLoading(false);
     }
-  }, [id, user?.id]);
+  }, [id, user?.id, user?.globalRing]);
 
   useEffect(() => {
     fetchEventData();
@@ -249,19 +275,35 @@ export default function EventDetailsPage() {
     } finally { setActionLoading(false); }
   };
 
+  const buildTaskConfig = (tf) => {
+    if (!tf.isAutoEvaluated) return null;
+    if (tf.submissionType === 'text' || tf.submissionType === 'url') {
+      return { exactText: tf.exactText };
+    }
+    const options = String(tf.options || '').split('\n').map(s => s.trim()).filter(Boolean);
+    return { options, correctOptions: tf.correctOptions || [] };
+  };
+
   const handleCreateTask = async (e) => {
     e.preventDefault();
     setMessage('');
     setActionLoading(true);
     try {
        const payload = {
-         ...taskForm,
-         submissionConfig: taskForm.isAutoEvaluated ? { exactText: taskForm.exactText } : null
+         title: taskForm.title,
+         description: taskForm.description,
+         order: taskForm.order,
+         basePoints: taskForm.basePoints,
+         submissionType: taskForm.submissionType,
+         isAutoEvaluated: taskForm.isAutoEvaluated,
+         decayPercentage: taskForm.decayPercentage,
+         wrongSubmissionPenalty: taskForm.wrongSubmissionPenalty,
+         submissionConfig: buildTaskConfig(taskForm)
        };
        await eventApi.createTask(id, payload);
        setMessage('');
        setShowTaskForm(false);
-       setTaskForm({ title: '', description: '', order: tasks.length + 2, basePoints: 100, submissionType: 'text', isAutoEvaluated: false, exactText: '', decayPercentage: 0, wrongSubmissionPenalty: 0 });
+       setTaskForm({ title: '', description: '', order: tasks.length + 2, basePoints: 100, submissionType: 'text', isAutoEvaluated: false, exactText: '', options: '', correctOptions: [], decayPercentage: 0, wrongSubmissionPenalty: 0 });
        fetchEventData();
     } catch(err) {
        setMessage(err.response?.data?.error?.message || 'Failed to create task.');
@@ -286,14 +328,23 @@ export default function EventDetailsPage() {
     } catch(err) { console.error('Failed to load subs', err); }
   };
 
-  const handleSubmitTask = async (taskId) => {
-    const code = submissionCodes[taskId] || '';
-    if (!code.trim()) return;
+  const handleSubmitTask = async (taskId, task) => {
+    let content;
+    if (['mcq', 'true_false', 'checkboxes'].includes(task.submissionType)) {
+      const selected = submissionSelections[taskId] || [];
+      if (selected.length === 0) return;
+      content = { selectedOptions: selected };
+    } else {
+      const code = submissionCodes[taskId] || '';
+      if (!code.trim()) return;
+      content = { text: code.trim() };
+    }
     setActionLoading(true);
     try {
-      await eventApi.submitTask(id, taskId, { text: code });
-      setMessage('Task submitted!');
+      const { data } = await eventApi.submitTask(id, taskId, content);
+      setSubmitResults(prev => ({ ...prev, [taskId]: data.data }));
       setSubmissionCodes(prev => ({ ...prev, [taskId]: '' }));
+      setSubmissionSelections(prev => ({ ...prev, [taskId]: [] }));
       fetchEventData();
     } catch(err) {
       setMessage(err.response?.data?.error?.message || 'Submission failed.');
@@ -332,28 +383,89 @@ export default function EventDetailsPage() {
     setActionLoading(true);
     try {
       const credits = parseInt(rewardData.credits, 10) || 0;
-      if (!credits && !rewardData.badgeId) {
+      const badgeIds = rewardData.badgeIds || [];
+      if (!credits && badgeIds.length === 0) {
         throw new Error('Must award either credits or a badge.');
       }
-      await eventApi.awardTeamRewards(id, rewardData.teamId, { 
-        credits, 
-        badgeId: rewardData.badgeId || null 
-      });
-      setMessage('Rewards successfully awarded to team members!');
-      setRewardData({ teamId: '', credits: 0, badgeId: '' });
+      await eventApi.awardTeamRewards(id, rewardData.teamId, { credits, badgeIds });
+      setMessage('Rewards awarded to team members!');
+      setRewardData({ teamId: '', credits: 0, badgeIds: [] });
+      if (user?.globalRing !== 0) refreshProfile(); // pocket-funded — balance changed
       fetchEventData();
     } catch(err) {
       setMessage(err.response?.data?.error?.message || 'Failed to award rewards.');
     } finally { setActionLoading(false); }
   };
 
+  const toggleRewardBadge = (badgeId) => {
+    setRewardData(prev => {
+      const ids = prev.badgeIds || [];
+      return { ...prev, badgeIds: ids.includes(badgeId) ? ids.filter(x => x !== badgeId) : [...ids, badgeId] };
+    });
+  };
+
+  const resetRuleForm = () => setRuleForm({ trigger: 'submission', rank: 1, creditsPerUser: 0, badgeIds: [], maxUses: '' });
+
+  const toggleRuleBadge = (badgeId) => {
+    setRuleForm(prev => {
+      const has = prev.badgeIds.includes(badgeId);
+      return { ...prev, badgeIds: has ? prev.badgeIds.filter(b => b !== badgeId) : [...prev.badgeIds, badgeId] };
+    });
+  };
+
+  const handleCreateRule = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    setActionLoading(true);
+    try {
+      const maxUses = ruleForm.maxUses === '' || ruleForm.maxUses === null ? null : parseInt(ruleForm.maxUses, 10);
+      await eventApi.createRewardRule(id, {
+        trigger: ruleForm.trigger,
+        rank: ruleForm.trigger === 'rank' ? ruleForm.rank : undefined,
+        creditsPerUser: parseInt(ruleForm.creditsPerUser, 10) || 0,
+        badgeIds: ruleForm.badgeIds,
+        maxUses
+      });
+      setMessage('Reward rule created.');
+      setShowRuleForm(false);
+      resetRuleForm();
+      fetchEventData();
+    } catch (err) {
+      setMessage(err.response?.data?.error?.message || 'Failed to create reward rule.');
+    } finally { setActionLoading(false); }
+  };
+
+  const handleToggleRule = async (rule) => {
+    try {
+      await eventApi.updateRewardRule(id, rule.id, { enabled: !rule.enabled });
+      fetchEventData();
+    } catch (err) {
+      setMessage(err.response?.data?.error?.message || 'Failed to update rule.');
+    }
+  };
+
+  const handleDeleteRule = async (ruleId) => {
+    if (!window.confirm('Delete this reward rule? Past payouts stay in the grant ledger.')) return;
+    try {
+      await eventApi.deleteRewardRule(id, ruleId);
+      fetchEventData();
+    } catch (err) {
+      setMessage(err.response?.data?.error?.message || 'Failed to delete rule.');
+    }
+  };
+
   const handleDistributeRewards = async () => {
-    if (!confirm('Are you sure you want to distribute rewards according to the Reward Tiers configuration? This action will directly issue credits and badges to winning teams and cannot be easily undone.')) return;
+    if (!window.confirm('Distribute rewards to ranked teams now? Each rank rule fires once (admins may re-run).')) return;
     setActionLoading(true);
     setMessage('');
     try {
       const res = await eventApi.distributeRewards(id);
-      setMessage(res.data?.data?.message || 'Rewards distributed successfully!');
+      const list = res.data?.data?.distributed || [];
+      const granted = list.filter(r => !r.skipped).length;
+      const skipped = list.filter(r => r.skipped);
+      setMessage(granted > 0
+        ? `Rewards distributed — ${granted} rule(s) paid${skipped.length ? `, ${skipped.length} skipped.` : '.'}`
+        : (skipped.length ? `No rewards distributed: ${skipped.map(r => r.skipped).join('; ')}.` : 'No rules matched any team.'));
       fetchEventData();
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to distribute automated rewards.');
@@ -386,6 +498,71 @@ export default function EventDetailsPage() {
 
   const isCreator = event.creatorId === user.id;
   const isOrganizer = isCreator || event.organizers?.some(o => o.userId === user.id);
+  const isAdminUser = user?.globalRing === 0;
+  const mayTargetGroups = isAdminUser || user?.canCreateEvents === true;
+  const submissionRules = rewardRules.filter(r => r.trigger === 'submission');
+  const rankRules = rewardRules.filter(r => r.trigger === 'rank');
+  const badgeMap = Object.fromEntries(eventBadges.map(b => [b.id, b]));
+  const selectableBadges = isAdminUser ? eventBadges : eventBadges.filter(b => ownedBadges.some(o => o.badgeId === b.id));
+
+  const renderSubmitWidget = (task) => {
+    if (task.submissionType === 'mcq') {
+      const opts = task.submissionConfig?.options || [];
+      const sel = submissionSelections[task.id] || [];
+      return (
+        <div className="space-y-2">
+          {opts.map(opt => (
+            <label key={opt} className="flex items-center gap-2 text-sm bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-2 cursor-pointer">
+              <input type="radio" name={`q-${task.id}`} checked={sel[0] === opt} onChange={() => setSubmissionSelections({ ...submissionSelections, [task.id]: [opt] })} className="accent-[var(--color-accent)]" />
+              {opt}
+            </label>
+          ))}
+          <button onClick={() => handleSubmitTask(task.id, task)} disabled={actionLoading || sel.length === 0} className="btn btn-primary text-sm px-4">Submit</button>
+        </div>
+      );
+    }
+    if (task.submissionType === 'true_false') {
+      const sel = submissionSelections[task.id] || [];
+      return (
+        <div className="space-y-2">
+          {['True', 'False'].map(opt => (
+            <label key={opt} className="flex items-center gap-2 text-sm bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-2 cursor-pointer">
+              <input type="radio" name={`q-${task.id}`} checked={sel[0] === opt} onChange={() => setSubmissionSelections({ ...submissionSelections, [task.id]: [opt] })} className="accent-[var(--color-accent)]" />
+              {opt}
+            </label>
+          ))}
+          <button onClick={() => handleSubmitTask(task.id, task)} disabled={actionLoading || sel.length === 0} className="btn btn-primary text-sm px-4">Submit</button>
+        </div>
+      );
+    }
+    if (task.submissionType === 'checkboxes') {
+      const opts = task.submissionConfig?.options || [];
+      const sel = submissionSelections[task.id] || [];
+      return (
+        <div className="space-y-2">
+          {opts.map(opt => (
+            <label key={opt} className="flex items-center gap-2 text-sm bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-2 cursor-pointer">
+              <input type="checkbox" checked={sel.includes(opt)} onChange={() => setSubmissionSelections({ ...submissionSelections, [task.id]: sel.includes(opt) ? sel.filter(x => x !== opt) : [...sel, opt] })} className="accent-[var(--color-accent)]" />
+              {opt}
+            </label>
+          ))}
+          <button onClick={() => handleSubmitTask(task.id, task)} disabled={actionLoading || sel.length === 0} className="btn btn-primary text-sm px-4">Submit</button>
+        </div>
+      );
+    }
+    return (
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={submissionCodes[task.id] || ''}
+          onChange={e => setSubmissionCodes({ ...submissionCodes, [task.id]: e.target.value })}
+          placeholder={task.submissionType === 'file' ? 'Upload to Drive, then paste the shareable link...' : 'Type/paste your answer...'}
+          className="flex-1 text-sm bg-[var(--color-bg-primary)]"
+        />
+        <button onClick={() => handleSubmitTask(task.id, task)} disabled={actionLoading || !(submissionCodes[task.id] || '').trim()} className="btn btn-primary text-sm shrink-0 px-4">Submit</button>
+      </div>
+    );
+  };
   
   const now = new Date();
   const start = new Date(event.startDate);
@@ -448,7 +625,13 @@ export default function EventDetailsPage() {
                 </div>
                 <div>
                   <label className="block text-sm mb-1">Target Tags (Comma separated)</label>
-                  <input type="text" value={editForm.targetTags} onChange={e => setEditForm({...editForm, targetTags: e.target.value})} className="w-full text-sm" placeholder="e.g. cohort-2029" />
+                  {mayTargetGroups ? (
+                    <input type="text" value={editForm.targetTags} onChange={e => setEditForm({...editForm, targetTags: e.target.value})} className="w-full text-sm" placeholder="e.g. cohort-2029" />
+                  ) : (
+                    <div className="text-xs text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-lg px-3 py-2">
+                      🔒 Invite-only event — cohort targeting is restricted to admins. This event spreads via the invite link and team invitations only.
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 p-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
                   <label className="flex items-center gap-2 text-sm">
@@ -480,39 +663,6 @@ export default function EventDetailsPage() {
                 <div>
                   <label className="block text-sm mb-1">Description</label>
                   <textarea value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg" rows="4" />
-                </div>
-                
-                <div className="pt-4 border-t border-[var(--color-border)]">
-                  <h4 className="text-sm font-semibold mb-2 flex justify-between items-center">
-                    Reward Tiers
-                    <button type="button" onClick={() => setEditForm({ ...editForm, rewardTiers: [...editForm.rewardTiers, { rank: (editForm.rewardTiers?.length || 0) + 1, credits: 0, badgeId: '' }] })} className="btn btn-secondary text-xs py-1 px-2">+ Add Tier</button>
-                  </h4>
-                  {(!editForm.rewardTiers || editForm.rewardTiers.length === 0) ? (
-                    <div className="text-xs text-[var(--color-text-muted)] italic">No automated rewards configured.</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {editForm.rewardTiers.map((tier, idx) => (
-                        <div key={idx} className="flex flex-wrap items-end gap-3 p-3 bg-[var(--color-bg-card)] rounded-xl border border-[var(--color-border)] relative">
-                          <button type="button" onClick={() => setEditForm({...editForm, rewardTiers: editForm.rewardTiers.filter((_, i) => i !== idx)})} className="absolute top-2 right-2 text-xs text-[var(--color-danger)]">✕</button>
-                          <div>
-                            <label className="block text-[10px] text-[var(--color-text-muted)]">Rank Position</label>
-                            <input type="number" min="1" value={tier.rank} onChange={e => { const newTiers = [...editForm.rewardTiers]; newTiers[idx].rank = parseInt(e.target.value) || 1; setEditForm({...editForm, rewardTiers: newTiers}); }} className="w-16 text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-[var(--color-text-muted)]">Credits</label>
-                            <input type="number" min="0" value={tier.credits} onChange={e => { const newTiers = [...editForm.rewardTiers]; newTiers[idx].credits = parseInt(e.target.value) || 0; setEditForm({...editForm, rewardTiers: newTiers}); }} className="w-24 text-sm" />
-                          </div>
-                          <div className="flex-1 min-w-[120px]">
-                            <label className="block text-[10px] text-[var(--color-text-muted)]">Badge Award</label>
-                            <select value={tier.badgeId} onChange={e => { const newTiers = [...editForm.rewardTiers]; newTiers[idx].badgeId = e.target.value; setEditForm({...editForm, rewardTiers: newTiers}); }} className="w-full text-sm bg-[var(--color-bg-primary)] p-2 rounded-lg border border-[var(--color-border)]">
-                              <option value="">None</option>
-                              {eventBadges.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                            </select>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
                 <button type="submit" disabled={actionLoading} className="btn btn-primary w-full">Save Changes</button>
@@ -807,35 +957,98 @@ export default function EventDetailsPage() {
                        <input type="number" min="0" value={taskForm.basePoints} onChange={e => setTaskForm({...taskForm, basePoints: Number(e.target.value)})} className="w-full text-sm" required />
                      </div>
                      <div>
-                       <label className="block text-sm mb-1">Format</label>
-                       <select value={taskForm.submissionType} onChange={e => setTaskForm({...taskForm, submissionType: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg">
-                         <option value="text">Text</option>
-                         <option value="url">URL Link</option>
-                         <option value="file">File (Drive Link)</option>
-                       </select>
+                        <label className="block text-sm mb-1">Format</label>
+                        <select
+                          value={taskForm.submissionType}
+                          onChange={e => setTaskForm({ ...taskForm, submissionType: e.target.value, isAutoEvaluated: e.target.value === 'file' ? false : taskForm.isAutoEvaluated, exactText: '', options: '', correctOptions: [] })}
+                          className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg"
+                        >
+                          <option value="text">Text (exact match)</option>
+                          <option value="url">URL / Flag Link</option>
+                          <option value="mcq">Multiple Choice</option>
+                          <option value="true_false">True / False</option>
+                          <option value="checkboxes">Checkboxes (multi-select)</option>
+                          <option value="file">File (Drive Link)</option>
+                        </select>
                      </div>
                      <div>
-                       <label className="block text-sm mb-1">Order</label>
-                       <input type="number" min="1" value={taskForm.order} onChange={e => setTaskForm({...taskForm, order: Number(e.target.value)})} className="w-full text-sm" required />
+                        <label className="block text-sm mb-1">Order</label>
+                        <input type="number" min="1" value={taskForm.order} onChange={e => setTaskForm({...taskForm, order: Number(e.target.value)})} className="w-full text-sm" required />
                      </div>
-                   </div>
-                   <div className="flex items-center gap-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] p-3 rounded-xl">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input type="checkbox" checked={taskForm.isAutoEvaluated} onChange={e => setTaskForm({...taskForm, isAutoEvaluated: e.target.checked})} className="rounded text-[var(--color-accent)]" />
-                        Auto Evaluate (Specific Answer)
-                      </label>
-                      <span className="text-xs text-[var(--color-text-muted)] italic">
-                        {taskForm.isAutoEvaluated 
-                           ? "User will be automatically graded based on the specific answer below."
-                           : "Self Assess: Add only base points while grading. The answer can be self assessed by any organiser irrespective of the creator."}
-                      </span>
-                   </div>
-                   {taskForm.isAutoEvaluated && (
-                     <div>
-                       <label className="block text-sm mb-1">Specific Expected Answer (Exact Text)</label>
-                       <input type="text" value={taskForm.exactText} onChange={e => setTaskForm({...taskForm, exactText: e.target.value})} className="w-full text-sm font-mono text-[var(--color-accent)]" required />
-                     </div>
-                   )}
+                    </div>
+                    <div className="flex items-center gap-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] p-3 rounded-xl">
+                       <label className="flex items-center gap-2 text-sm">
+                         <input type="checkbox" disabled={taskForm.submissionType === 'file'} checked={taskForm.isAutoEvaluated} onChange={e => setTaskForm({...taskForm, isAutoEvaluated: e.target.checked})} className="rounded text-[var(--color-accent)]" />
+                         Auto Evaluate (specific answer key)
+                       </label>
+                       <span className="text-xs text-[var(--color-text-muted)] italic">
+                         {taskForm.isAutoEvaluated
+                            ? "Correct answers pay out automatically (and fire your automatic reward rules)."
+                            : "Manual grading by an organizer (correct answers can also fire reward rules)."}
+                       </span>
+                    </div>
+                    {taskForm.isAutoEvaluated && taskForm.submissionType === 'text' && (
+                      <div>
+                        <label className="block text-sm mb-1">Expected Answer (Exact Text)</label>
+                        <input type="text" value={taskForm.exactText} onChange={e => setTaskForm({...taskForm, exactText: e.target.value})} className="w-full text-sm font-mono text-[var(--color-accent)]" required />
+                      </div>
+                    )}
+                    {taskForm.isAutoEvaluated && taskForm.submissionType === 'url' && (
+                      <div>
+                        <label className="block text-sm mb-1">Expected Link / Flag (case-insensitive, protocol ignored)</label>
+                        <input type="text" value={taskForm.exactText} onChange={e => setTaskForm({...taskForm, exactText: e.target.value})} className="w-full text-sm font-mono text-[var(--color-accent)]" placeholder="e.g. example.com/flag or myflag123" required />
+                      </div>
+                    )}
+                    {(taskForm.isAutoEvaluated && (taskForm.submissionType === 'mcq' || taskForm.submissionType === 'checkboxes')) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm mb-1">Options (one per line)</label>
+                          <textarea value={taskForm.options} onChange={e => setTaskForm({...taskForm, options: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg font-mono" rows="5" placeholder={"Option A\nOption B\nOption C"} required />
+                        </div>
+                        <div>
+                          <label className="block text-sm mb-1">{taskForm.submissionType === 'mcq' ? 'Correct Option' : 'Correct Options (select all)'}</label>
+                          <div className="space-y-2 max-h-40 overflow-y-auto bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg">
+                            {taskForm.options.split('\n').map(s => s.trim()).filter(Boolean).map(opt => (
+                              <label key={opt} className="flex items-center gap-2 text-sm px-2 py-1 hover:bg-[var(--color-bg-primary)] rounded cursor-pointer">
+                                <input
+                                  type={taskForm.submissionType === 'mcq' ? 'radio' : 'checkbox'}
+                                  name="correct-key"
+                                  checked={taskForm.submissionType === 'mcq'
+                                    ? taskForm.correctOptions[0] === opt
+                                    : taskForm.correctOptions.includes(opt)}
+                                  onChange={() => setTaskForm(prev => ({
+                                    ...prev,
+                                    correctOptions: prev.submissionType === 'mcq'
+                                      ? [opt]
+                                      : prev.correctOptions.includes(opt)
+                                        ? prev.correctOptions.filter(x => x !== opt)
+                                        : [...prev.correctOptions, opt]
+                                  }))}
+                                  className="accent-[var(--color-accent)]"
+                                />
+                                {opt}
+                              </label>
+                            ))}
+                            {!taskForm.options.trim() && <p className="text-xs text-[var(--color-text-muted)] italic px-2">Add options on the left first.</p>}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {taskForm.isAutoEvaluated && taskForm.submissionType === 'true_false' && (
+                      <div>
+                        <label className="block text-sm mb-1">Correct Answer</label>
+                        <select
+                          value={taskForm.correctOptions[0] || ''}
+                          onChange={e => setTaskForm({...taskForm, correctOptions: [e.target.value]})}
+                          className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg"
+                          required
+                        >
+                          <option value="">Select...</option>
+                          <option value="True">True</option>
+                          <option value="False">False</option>
+                        </select>
+                      </div>
+                    )}
                    
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      <div>
@@ -882,11 +1095,33 @@ export default function EventDetailsPage() {
                       {userTeam && !isOrganizer && isOngoing && (
                         <div className="bg-[var(--color-bg-card)] p-3 rounded-lg border border-[var(--color-border)] mt-4">
                            <h5 className="text-xs font-bold uppercase mb-2">Submit Answer ({task.submissionType})</h5>
-                           {task.submissionType === 'file' && <p className="text-xs text-[var(--color-text-muted)] mb-2 italic">Please upload your file to Drive and paste the shareable link below.</p>}
-                           <div className="flex gap-2">
-                             <input type="text" value={submissionCodes[task.id] || ''} onChange={e => setSubmissionCodes({...submissionCodes, [task.id]: e.target.value})} placeholder="Type/paste your answer or link here..." className="flex-1 text-sm bg-[var(--color-bg-primary)]" />
-                             <button onClick={() => handleSubmitTask(task.id)} disabled={actionLoading || !(submissionCodes[task.id] || '').trim()} className="btn btn-primary text-sm shrink-0 px-4">Submit</button>
-                           </div>
+                           {submitResults[task.id] && (
+                             <div className={`mb-3 text-sm font-semibold rounded-lg px-3 py-2 ${
+                               submitResults[task.id].status === 'correct' ? 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
+                               : submitResults[task.id].status === 'wrong' ? 'bg-[var(--color-danger)]/10 text-[var(--color-danger)]'
+                               : 'bg-[var(--color-warning)]/10 text-[var(--color-warning)]'
+                             }`}>
+                               {submitResults[task.id].status === 'correct' ? '✓ Correct!' : submitResults[task.id].status === 'wrong' ? '✗ Incorrect — you can try again.' : '⏳ Pending manual grading.'}
+                               {submitResults[task.id].scoreAwarded > 0 && <span className="ml-2">+{submitResults[task.id].scoreAwarded} pts</span>}
+                               {submitResults[task.id].status === 'correct' && submitResults[task.id].rewards?.length > 0 && (
+                                 <div className="mt-2 text-xs font-normal flex flex-wrap gap-2">
+                                   {submitResults[task.id].rewards.map(r => (
+                                     <span key={r.ruleId} className="inline-flex items-center gap-1 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-full px-2 py-0.5">
+                                       🎁 {r.name}
+                                       {r.status === 'granted' && (
+                                         <>
+                                           {r.creditsPerUser > 0 && <span>+{r.creditsPerUser} cr</span>}
+                                           {r.badgeIds?.length > 0 && <span>+{r.badgeIds.length} badge{r.badgeIds.length > 1 ? 's' : ''}</span>}
+                                         </>
+                                       )}
+                                       {r.status === 'skipped' && <span className="text-[var(--color-warning)]">(reward skipped)</span>}
+                                     </span>
+                                   ))}
+                                 </div>
+                               )}
+                             </div>
+                           )}
+                           {renderSubmitWidget(task)}
                         </div>
                       )}
 
@@ -982,25 +1217,39 @@ export default function EventDetailsPage() {
                                )}
 
                                {rewardData.teamId === t.id ? (
-                                 <form onSubmit={handleAwardTeam} className="flex flex-col gap-2 items-end min-w-[200px] mt-2 border-t border-[var(--color-border)] pt-2">
+                                 <form onSubmit={handleAwardTeam} className="flex flex-col gap-2 items-end min-w-[220px] mt-2 border-t border-[var(--color-border)] pt-2">
                                     <div className="flex gap-2 items-center w-full justify-between">
                                       <span className="text-xs font-bold text-[var(--color-primary)]">🪙</span>
                                       <input type="number" min="0" value={rewardData.credits} onChange={e => setRewardData({...rewardData, credits: e.target.value})} className="w-20 text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-1.5 rounded-lg text-right text-[var(--color-text-primary)]" placeholder="0" />
                                     </div>
-                                    <div className="flex gap-2 items-center w-full justify-between">
-                                      <span className="text-xs font-bold text-[var(--color-accent)]">🎖️</span>
-                                      <select value={rewardData.badgeId} onChange={e => setRewardData({...rewardData, badgeId: e.target.value})} className="w-32 text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-1.5 rounded-lg">
-                                        <option value="">No Badge</option>
-                                        {eventBadges.map(b => <option key={b.id} value={b.id}>{b.name.substring(0, 15)}</option>)}
-                                      </select>
+                                    {!isAdminUser && <p className="text-[10px] text-[var(--color-warning)] italic w-full text-right">Debited from your balance</p>}
+                                    <div className="w-full">
+                                      <span className="text-[10px] text-[var(--color-text-muted)]">🎖️ Badges {!isAdminUser && '(you must own them)'}</span>
+                                      <div className="flex flex-wrap gap-1 mt-1 justify-end">
+                                        {selectableBadges.map(b => (
+                                          <button
+                                            type="button"
+                                            key={b.id}
+                                            onClick={() => toggleRewardBadge(b.id)}
+                                            className={`text-[10px] px-2 py-0.5 rounded-full border transition-colors ${
+                                              (rewardData.badgeIds || []).includes(b.id)
+                                                ? 'bg-[var(--color-accent)]/20 border-[var(--color-accent)] text-[var(--color-accent)]'
+                                                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]'
+                                            }`}
+                                          >
+                                            {b.name}
+                                          </button>
+                                        ))}
+                                        {selectableBadges.length === 0 && <span className="text-[10px] text-[var(--color-text-muted)] italic">No badges available.</span>}
+                                      </div>
                                     </div>
                                     <div className="flex gap-2 w-full justify-end mt-1">
                                       <button type="submit" disabled={actionLoading} className="text-xs btn btn-primary px-3 py-1.5 w-full bg-[var(--color-success)] border-[var(--color-success)] text-white">Award</button>
-                                      <button type="button" onClick={() => setRewardData({ teamId: '', credits: 0, badgeId: '' })} className="text-xs btn btn-secondary px-3 py-1.5 shrink-0">Cancel</button>
+                                      <button type="button" onClick={() => setRewardData({ teamId: '', credits: 0, badgeIds: [] })} className="text-xs btn btn-secondary px-3 py-1.5 shrink-0">Cancel</button>
                                     </div>
                                  </form>
                                ) : (
-                                 <button onClick={() => setRewardData({ teamId: t.id, credits: 0, badgeId: '' })} className="text-xs btn btn-secondary px-3 py-1.5 whitespace-nowrap w-full">🏆 Reward</button>
+                                 <button onClick={() => setRewardData({ teamId: t.id, credits: 0, badgeIds: [] })} className="text-xs btn btn-secondary px-3 py-1.5 whitespace-nowrap w-full">🏆 Reward</button>
                                )}
                              </td>
                           )}
@@ -1040,17 +1289,162 @@ export default function EventDetailsPage() {
               </div>
             )}
             
-            {isOrganizer && event.rewardTiers?.length > 0 && (
+            {isOrganizer && (
               <div className="mt-6 pt-4 border-t border-[var(--color-border)] flex justify-end">
-                <button 
-                  onClick={handleDistributeRewards} 
-                  disabled={actionLoading} 
-                  className="btn btn-primary"
+                <button
+                  onClick={() => { setShowRuleForm(!showRuleForm); setMessage(''); }}
+                  className="btn btn-secondary text-sm px-3 py-1.5"
                 >
-                  Distribute Automated Rewards
+                  {showRuleForm ? 'Cancel' : '+ Configure Rewards'}
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* REWARDS PANEL */}
+        {isOrganizer && (
+          <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm mt-6">
+            <h3 className="text-xl font-bold mb-3 gradient-text">Event Rewards</h3>
+            <div className={`text-xs rounded-lg px-3 py-2 mb-4 ${isAdminUser ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]' : 'bg-[var(--color-warning)]/10 text-[var(--color-warning)]'}`}>
+              {isAdminUser
+                ? 'Admin-minted rewards — unlimited credits, any badge, no caps.'
+                : `Rewards are funded from YOUR pocket: credits are debited from your balance (${user?.creditBalance ?? 0} available) and every badge you give must be in your inventory.`}
+            </div>
+
+            {showRuleForm && (
+              <form onSubmit={handleCreateRule} className="mb-5 p-4 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl space-y-4">
+                <div className="flex justify-between items-center">
+                  <h4 className="font-bold text-sm text-[var(--color-text-secondary)] uppercase">New Reward Rule</h4>
+                  <button type="button" onClick={() => { setShowRuleForm(false); resetRuleForm(); }} className="text-[var(--color-text-muted)] hover:text-white px-2">✕</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm mb-1">Fires when</label>
+                    <select value={ruleForm.trigger} onChange={e => setRuleForm({...ruleForm, trigger: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg">
+                      <option value="submission">Correct submission (auto or manual grade)</option>
+                      <option value="rank">Team finishes at rank</option>
+                    </select>
+                  </div>
+                  {ruleForm.trigger === 'rank' && (
+                    <div>
+                      <label className="block text-sm mb-1">Rank position</label>
+                      <input type="number" min="1" value={ruleForm.rank} onChange={e => setRuleForm({...ruleForm, rank: parseInt(e.target.value) || 1})} className="w-full text-sm" />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm mb-1">Credits per member</label>
+                    <input type="number" min="0" value={ruleForm.creditsPerUser} onChange={e => setRuleForm({...ruleForm, creditsPerUser: e.target.value})} className="w-full text-sm" placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1">Max payouts {isAdminUser ? '(blank = unlimited)' : `(max ${100})`}</label>
+                    <input type="number" min="1" value={ruleForm.maxUses} onChange={e => setRuleForm({...ruleForm, maxUses: e.target.value})} className="w-full text-sm" placeholder={isAdminUser ? 'Unlimited' : '100'} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">Badges per member {!isAdminUser && '(you must own them)'}</label>
+                  <div className="flex flex-wrap gap-2">
+                    {selectableBadges.map(b => (
+                      <button
+                        type="button"
+                        key={b.id}
+                        onClick={() => toggleRuleBadge(b.id)}
+                        className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                          ruleForm.badgeIds.includes(b.id)
+                            ? 'bg-[var(--color-accent)]/20 border-[var(--color-accent)] text-[var(--color-accent)]'
+                            : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]'
+                        }`}
+                      >
+                        {b.name}
+                      </button>
+                    ))}
+                    {selectableBadges.length === 0 && <span className="text-xs text-[var(--color-text-muted)] italic">No eligible badges. {isAdminUser ? 'Create one in the Store.' : 'Buy an event badge in the Store first.'}</span>}
+                  </div>
+                </div>
+                <button type="submit" disabled={actionLoading} className="btn btn-primary w-full text-sm">Create Rule</button>
+              </form>
+            )}
+
+            <h4 className="text-sm font-bold text-[var(--color-text-secondary)] uppercase mb-2">Automatic — per correct submission</h4>
+            {submissionRules.length === 0 ? (
+              <p className="text-xs italic text-[var(--color-text-muted)] mb-4">No submission rules yet. Add one to hand out rewards automatically on evaluated answers.</p>
+            ) : (
+              <div className="space-y-2 mb-4">
+                {submissionRules.map(rule => (
+                  <div key={rule.id} className={`flex items-center justify-between gap-3 text-sm bg-[var(--color-bg-primary)] border border-[var(--color-border)] px-3 py-2 rounded-lg ${!rule.enabled ? 'opacity-50' : ''}`}>
+                    <div className="min-w-0">
+                      <div className="font-bold truncate">{rule.name}</div>
+                      <div className="text-xs text-[var(--color-text-secondary)]">
+                        {rule.creditsPerUser > 0 && <span>+{rule.creditsPerUser} cr/member</span>}
+                        {rule.badgeIds?.length > 0 && <span> • {rule.badgeIds.map(b => badgeMap[b]?.name || '🎖️').join(', ')}</span>}
+                        <span> • {rule.uses}{rule.maxUses !== null ? `/${rule.maxUses}` : '/∞'} payouts</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button onClick={() => handleToggleRule(rule)} className="text-xs px-2 py-1 rounded bg-[var(--color-bg-card)] border border-[var(--color-border)] hover:border-[var(--color-accent)]">{rule.enabled ? 'Disable' : 'Enable'}</button>
+                      <button onClick={() => handleDeleteRule(rule.id)} className="text-xs px-2 py-1 rounded bg-[var(--color-danger)]/10 text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white">Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <h4 className="text-sm font-bold text-[var(--color-text-secondary)] uppercase mb-2">Ranked — end of event</h4>
+            {rankRules.length === 0 ? (
+              <p className="text-xs italic text-[var(--color-text-muted)] mb-4">No rank rules yet.</p>
+            ) : (
+              <div className="space-y-2 mb-4">
+                {rankRules.map(rule => (
+                  <div key={rule.id} className={`flex items-center justify-between gap-3 text-sm bg-[var(--color-bg-primary)] border border-[var(--color-border)] px-3 py-2 rounded-lg ${!rule.enabled ? 'opacity-50' : ''}`}>
+                    <div className="min-w-0">
+                      <div className="font-bold truncate">#{rule.rank} place — {rule.name}</div>
+                      <div className="text-xs text-[var(--color-text-secondary)]">
+                        {rule.creditsPerUser > 0 && <span>+{rule.creditsPerUser} cr/member</span>}
+                        {rule.badgeIds?.length > 0 && <span> • {rule.badgeIds.map(b => badgeMap[b]?.name || '🎖️').join(', ')}</span>}
+                        {rule.maxUses !== null && <span> • max {rule.maxUses} run(s)</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button onClick={() => handleToggleRule(rule)} className="text-xs px-2 py-1 rounded bg-[var(--color-bg-card)] border border-[var(--color-border)] hover:border-[var(--color-accent)]">{rule.enabled ? 'Disable' : 'Enable'}</button>
+                      <button onClick={() => handleDeleteRule(rule.id)} className="text-xs px-2 py-1 rounded bg-[var(--color-danger)]/10 text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white">Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {rankRules.length > 0 && (
+              <div className="flex justify-end mb-6">
+                <button onClick={handleDistributeRewards} disabled={actionLoading} className="btn btn-primary">
+                  Distribute Ranked Rewards
+                </button>
+              </div>
+            )}
+
+            <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
+              <h4 className="text-sm font-bold text-[var(--color-text-secondary)] uppercase mb-2">Grant Ledger ({rewardGrants.length})</h4>
+              {rewardGrants.length === 0 ? (
+                <p className="text-xs italic text-[var(--color-text-muted)]">No payouts yet.</p>
+              ) : (
+                <div className="max-h-64 overflow-y-auto space-y-2">
+                  {rewardGrants.map(g => (
+                    <div key={g.id} className="flex items-center justify-between gap-3 text-xs bg-[var(--color-bg-primary)] border border-[var(--color-border)] px-3 py-2 rounded-lg">
+                      <div className="min-w-0">
+                        <span className="font-bold">{g.user?.displayName || 'User'}</span>
+                        {g.team?.name && <span className="text-[var(--color-text-secondary)]"> • {g.team.name}</span>}
+                        <span className="text-[var(--color-text-muted)]"> • {g.rule?.name || 'manual grant'}</span>
+                        {g.grantedBy && <span className="text-[var(--color-text-muted)]"> by {g.grantedBy.displayName}</span>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        {g.credits > 0 && <span className="font-mono font-bold text-[var(--color-success)]">+{g.credits} cr</span>}
+                        {g.badgeIds?.length > 0 && <span className="font-mono font-bold text-[var(--color-accent)] ml-2">+{g.badgeIds.length} 🎖️</span>}
+                        <div className="text-[10px] text-[var(--color-text-muted)]">{new Date(g.grantedAt).toLocaleString()}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
