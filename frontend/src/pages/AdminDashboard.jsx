@@ -8,6 +8,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { adminApi } from '../api/adminApi';
 import resolveAsset from '../utils/resolveAsset';
+import {
+  Search, RefreshCw, Trash2, ShieldCheck, UserPlus,
+  CheckCircle2, XCircle, Users,
+} from 'lucide-react';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member', 'Restricted'];
 
@@ -705,157 +709,220 @@ function UsersTab() {
     }
   };
 
+  const ringBadge = (ring) => {
+    const styles = {
+      0: 'bg-[rgba(239,68,68,0.15)] text-red-400 border-[rgba(239,68,68,0.3)]',
+      1: 'bg-[rgba(249,115,22,0.15)] text-orange-400 border-[rgba(249,115,22,0.3)]',
+      2: 'bg-[rgba(168,85,247,0.15)] text-purple-400 border-[rgba(168,85,247,0.3)]',
+      3: 'bg-[rgba(16,185,129,0.15)] text-emerald-400 border-[rgba(16,185,129,0.3)]',
+      4: 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border-[var(--color-border)]',
+    };
+    return styles[ring] || styles[4];
+  };
+
+  const permissionToggles = (u) => [
+    {
+      key: 'groups',
+      label: 'Create Groups',
+      enabled: u.canCreateGroups,
+      onToggle: () => handleToggleCreateGroups(u.id, u.canCreateGroups),
+      hint: u.canCreateGroups ? 'Allowed to create groups' : 'Cannot create groups',
+    },
+    {
+      key: 'events',
+      label: 'Create Events',
+      enabled: u.canCreateEvents,
+      onToggle: () => handleToggleCreateEvents(u.id, u.canCreateEvents),
+      hint: u.canCreateEvents ? 'Allowed to create events' : 'Cannot create events',
+    },
+    {
+      key: 'resources',
+      label: 'Manage Resources',
+      enabled: u.canManageResources,
+      onToggle: () => handleToggleManageResources(u.id, u.canManageResources),
+      hint: u.canManageResources ? 'Allowed to manage resources' : 'Cannot manage resources',
+    },
+    {
+      key: 'store',
+      label: 'Manage Store',
+      enabled: u.canManageStore,
+      onToggle: () => handleToggleManageStore(u.id, u.canManageStore),
+      hint: u.canManageStore ? 'Allowed to manage the store' : 'Cannot manage the store',
+    },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Create Test User */}
       <CreateTestUserForm onCreated={() => fetchUsers(pagination.page)} />
 
       <div className="glass-card p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">User Management</h3>
-        <div className="flex items-center gap-3">
-          <button onClick={handleRetagAll} disabled={retagging}
-            className="btn btn-secondary text-xs px-3 py-1.5"
-            title="Apply current cohort + auto-join rules to all existing users">
-            {retagging ? '⏳ Retagging...' : '🔄 Retag All Users'}
-          </button>
-          <span className="text-sm text-[var(--color-text-muted)]">{pagination.total || 0} users</span>
-        </div>
-      </div>
-
-      {/* Search */}
-      <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by name or email..." className="mb-4" />
-
-      {loading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => <div key={i} className="skeleton h-16 w-full" />)}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {users.map((u) => (
-            <div key={u.id} className="flex items-center gap-3 p-3 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
-              {/* Avatar */}
-              {u.avatarUrl ? (
-                <img src={resolveAsset(u.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover" />
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-sm">
-                  {u.displayName?.charAt(0)?.toUpperCase()}
-                </div>
-              )}
-
-              {/* Info */}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold truncate">{u.displayName}</p>
-                <p className="text-xs text-[var(--color-text-muted)] truncate">{u.email}</p>
-              </div>
-
-              {/* Tags */}
-              <div className="hidden lg:flex gap-1 flex-shrink-0">
-                {u.cohortTags?.slice(0, 2).map((tag) => (
-                  <span key={tag} className="px-2 py-0.5 chip-accent rounded text-xs">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-
-              {/* Can create groups badge */}
-              <div className="flex gap-1 flex-shrink-0">
-                <button
-                  onClick={() => handleToggleCreateGroups(u.id, u.canCreateGroups)}
-                  className={`text-[10px] px-2 py-1 rounded-lg transition-colors flex-shrink-0 ${
-                    u.canCreateGroups
-                      ? 'chip-accent border border-[rgba(16,185,129,0.3)]'
-                      : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
-                  }`}
-                  title={u.canCreateGroups ? 'Click to revoke group creation' : 'Click to grant group creation'}
-                >
-                  {u.canCreateGroups ? '✅ Groups' : '🚫 Groups'}
-                </button>
-                <button
-                  onClick={() => handleToggleCreateEvents(u.id, u.canCreateEvents)}
-                  className={`text-[10px] px-2 py-1 rounded-lg transition-colors flex-shrink-0 ${
-                    u.canCreateEvents
-                      ? 'chip-accent border border-[rgba(16,185,129,0.3)]'
-                      : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
-                  }`}
-                  title={u.canCreateEvents ? 'Click to revoke event creation' : 'Click to grant event creation'}
-                >
-                  {u.canCreateEvents ? '✅ Events' : '🚫 Events'}
-                </button>
-                <button
-                  onClick={() => handleToggleManageResources(u.id, u.canManageResources)}
-                  className={`text-[10px] px-2 py-1 rounded-lg transition-colors flex-shrink-0 ${
-                    u.canManageResources
-                      ? 'chip-accent border border-[rgba(16,185,129,0.3)]'
-                      : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
-                  }`}
-                  title={u.canManageResources ? 'Click to revoke resource management' : 'Click to grant resource management'}
-                >
-                  {u.canManageResources ? '✅ Resources' : '🚫 Resources'}
-                </button>
-                <button
-                  onClick={() => handleToggleManageStore(u.id, u.canManageStore)}
-                  className={`text-[10px] px-2 py-1 rounded-lg transition-colors flex-shrink-0 ${
-                    u.canManageStore
-                      ? 'chip-accent border border-[rgba(16,185,129,0.3)]'
-                      : 'bg-[var(--color-bg-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
-                  }`}
-                  title={u.canManageStore ? 'Click to revoke store management' : 'Click to grant store management'}
-                >
-                  {u.canManageStore ? '✅ Store' : '🚫 Store'}
-                </button>
-              </div>
-
-              {/* Ring selector */}
-              <select
-                value={u.globalRing}
-                onChange={(e) => handleRingChange(u.id, parseInt(e.target.value))}
-                className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg text-sm px-2 py-1 text-[var(--color-text-primary)] flex-shrink-0"
-              >
-                {[0, 1, 2, 3, 4].map((r) => (
-                  <option key={r} value={r}>Ring {r} - {RING_LABELS[r] || 'Restricted'}</option>
-                ))}
-              </select>
-
-              {/* Retag button */}
-              <button onClick={() => handleRetag(u.id)} className="btn btn-secondary text-xs px-2 py-1"
-                title="Re-process cohort tags">
-                🔄
-              </button>
-
-              {/* Delete button */}
-              <button
-                onClick={() => handleDeleteUser(u.id, u.displayName)}
-                className="text-xs px-2 py-1 rounded-lg border border-[rgba(239,68,68,0.3)] text-red-400 hover:bg-[rgba(239,68,68,0.1)] transition-colors flex-shrink-0"
-                title="Delete user permanently"
-              >
-                🗑
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Pagination */}
-      {pagination.totalPages > 1 && (
-        <div className="flex justify-center gap-2 mt-4">
-          {Array.from({ length: pagination.totalPages }, (_, i) => (
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Users size={18} className="text-[var(--color-accent)]" /> User Management
+          </h3>
+          <div className="flex items-center gap-3">
             <button
-              key={i}
-              onClick={() => fetchUsers(i + 1)}
-              className={`w-8 h-8 rounded-lg text-sm ${
-                pagination.page === i + 1
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'bg-[var(--color-bg-card)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)]'
-              }`}
+              onClick={handleRetagAll}
+              disabled={retagging}
+              className="btn btn-secondary text-xs px-3 py-1.5"
+              title="Apply current cohort + auto-join rules to all existing users"
             >
-              {i + 1}
+              <RefreshCw size={12} className={retagging ? 'animate-spin' : ''} />
+              {retagging ? 'Retagging...' : 'Retag All Users'}
             </button>
-          ))}
+            <span className="text-sm text-[var(--color-text-muted)]">{pagination.total || 0} users</span>
+          </div>
         </div>
-      )}
-    </div>
+
+        {/* Search */}
+        <div className="relative mb-5">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or email..."
+            className="pl-10"
+          />
+        </div>
+
+        {loading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => <div key={i} className="skeleton h-32 w-full" />)}
+          </div>
+        ) : users.length === 0 ? (
+          <div className="text-center py-10 text-sm text-[var(--color-text-muted)]">
+            No users found.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {users.map((u) => (
+              <div key={u.id} className="rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)] overflow-hidden">
+                {/* Header: avatar, identity, actions */}
+                <div className="flex items-center gap-3 p-4">
+                  {u.avatarUrl ? (
+                    <img src={resolveAsset(u.avatarUrl)} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-11 h-11 rounded-full bg-[var(--color-accent)] flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                      {u.displayName?.charAt(0)?.toUpperCase()}
+                    </div>
+                  )}
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                      <span className={`flex-shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${ringBadge(u.globalRing)}`}>
+                        Ring {u.globalRing} · {RING_LABELS[u.globalRing] || 'Restricted'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">{u.email}</p>
+                    {u.cohortTags?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {u.cohortTags.slice(0, 3).map((tag) => (
+                          <span key={tag} className="px-2 py-0.5 rounded text-[10px] chip-accent">
+                            {tag}
+                          </span>
+                        ))}
+                        {u.cohortTags.length > 3 && (
+                          <span className="px-2 py-0.5 rounded text-[10px] bg-[var(--color-bg-card)] border border-[var(--color-border)] text-[var(--color-text-muted)]">
+                            +{u.cohortTags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => handleRetag(u.id)}
+                      className="p-2 rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+                      title="Re-process cohort tags"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteUser(u.id, u.displayName)}
+                      className="p-2 rounded-lg border border-[rgba(239,68,68,0.3)] text-red-400 hover:bg-[rgba(239,68,68,0.1)] transition-colors"
+                      title="Delete user permanently"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Permissions + ring */}
+                <div className="border-t border-[var(--color-border)] p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <ShieldCheck size={14} className="text-[var(--color-text-muted)]" />
+                    <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">Permissions</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {permissionToggles(u).map((p) => (
+                      <button
+                        key={p.key}
+                        onClick={p.onToggle}
+                        title={p.hint}
+                        className={`flex items-center justify-between gap-3 px-3 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                          p.enabled
+                            ? 'bg-[rgba(16,185,129,0.1)] border-[rgba(16,185,129,0.35)] text-[var(--color-text-primary)]'
+                            : 'bg-[var(--color-bg-card)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          {p.enabled
+                            ? <CheckCircle2 size={14} className="text-[var(--color-success)] flex-shrink-0" />
+                            : <XCircle size={14} className="flex-shrink-0" />}
+                          {p.label}
+                        </span>
+                        <span className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ${
+                          p.enabled ? 'bg-[var(--color-success)]' : 'bg-[var(--color-border)]'
+                        }`}>
+                          <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-all ${
+                            p.enabled ? 'left-[16px]' : 'left-[2px]'
+                          }`} />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-[var(--color-border)]">
+                    <span className="text-xs font-medium text-[var(--color-text-secondary)]">Role</span>
+                    <select
+                      value={u.globalRing}
+                      onChange={(e) => handleRingChange(u.id, parseInt(e.target.value))}
+                      className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg text-sm px-2 py-1 text-[var(--color-text-primary)]"
+                    >
+                      {[0, 1, 2, 3, 4].map((r) => (
+                        <option key={r} value={r}>Ring {r} - {RING_LABELS[r] || 'Restricted'}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {pagination.totalPages > 1 && (
+          <div className="flex justify-center gap-2 mt-4">
+            {Array.from({ length: pagination.totalPages }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => fetchUsers(i + 1)}
+                className={`w-8 h-8 rounded-lg text-sm ${
+                  pagination.page === i + 1
+                    ? 'bg-[var(--color-accent)] text-white'
+                    : 'bg-[var(--color-bg-card)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)]'
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -903,7 +970,7 @@ function CreateTestUserForm({ onCreated }) {
           messageType === 'success' ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'
         }`}>{message}</div>
       )}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Email *</label>
           <input type="email" value={form.email}
