@@ -11,7 +11,6 @@ export default function JoinGroupPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState('joining');
   const [errorMsg, setErrorMsg] = useState('');
-  const [needsAlias, setNeedsAlias] = useState(false);
   const [alias, setAlias] = useState('');
   const [anonResult, setAnonResult] = useState(null); // { group, identity } waiting on key ack
 
@@ -23,7 +22,6 @@ export default function JoinGroupPage() {
       } catch (err) {
         const apiErr = err.response?.data?.error;
         if (apiErr?.code === 'ALIAS_REQUIRED' || apiErr?.statusCode === 400) {
-          setNeedsAlias(true);
           setStatus('alias');
           return;
         }

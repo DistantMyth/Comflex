@@ -4,7 +4,7 @@
  * Shows pending group invites.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { groupApi } from '../api/groupApi';
 import { adminApi } from '../api/adminApi';
@@ -34,7 +34,7 @@ export default function GroupsPage() {
   const navigate = useNavigate();
   const isAdmin = user?.globalRing === 0;
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const groupsFetch = isAdmin
@@ -46,11 +46,11 @@ export default function GroupsPage() {
       ]);
       setGroups(groupsData || []);
       setInvites(invitesRes?.data?.data || invitesRes || []);
-    } catch {}
+    } catch { /* ignore list errors */ }
     setLoading(false);
-  };
+  }, [isAdmin]);
 
-  useEffect(() => { fetchData(); }, [isAdmin]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleAcceptInvite = async (groupId, inviteId) => {
     try {

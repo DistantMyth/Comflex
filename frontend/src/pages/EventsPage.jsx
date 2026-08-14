@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
 import { Link } from 'react-router-dom';
 
 export default function EventsPage() {
-  const { user } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 

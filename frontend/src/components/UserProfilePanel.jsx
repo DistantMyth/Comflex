@@ -9,7 +9,6 @@ import { userApi } from '../api/userApi';
 import { friendApi } from '../api/friendApi';
 import { storeApi } from '../api/storeApi';
 import Avatar from './Avatar';
-import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member'];
 

@@ -14,7 +14,6 @@ export const groupApi = {
   getGroup: (id) => client.get(`/groups/${id}`, withAnonIdentity({}, id)),
   createGroup: (data) => client.post('/groups', data),
   updateGroup: (id, data) => client.patch(`/groups/${id}`, data, withAnonIdentity({}, id)),
-  deleteGroup: (id) => client.delete(`/groups/${id}`, withAnonIdentity({}, id)),
 
   // Group Avatar
   uploadGroupAvatar: (groupId, file) => {

@@ -76,7 +76,11 @@ export default function ManageEventsPage() {
   };
 
   useEffect(() => {
-    fetchEvents();
+    setLoading(true);
+    eventApi.listManagedEvents()
+      .then(res => setManagedEvents(res.data.data))
+      .catch(err => console.error(err))
+      .finally(() => setLoading(false));
   }, []);
 
   const handleCreateEvent = async (e) => {

@@ -11,7 +11,7 @@
  * - Leave group option
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { groupApi } from '../api/groupApi';
 import resolveAsset from '../utils/resolveAsset';
 
@@ -51,10 +51,10 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
   const inviteTimeoutRef = useRef(null);
 
   // Get ring labels (custom or default)
-  const ringConfig = group?.ringConfig || {};
-  const ringLabels = ringConfig.ringLabels || {};
+  const ringConfig = useMemo(() => group?.ringConfig || {}, [group?.ringConfig]);
+  const ringLabels = useMemo(() => ringConfig.ringLabels || {}, [ringConfig]);
   const ringCount = ringConfig.ringCount || DEFAULT_RING_LABELS.length;
-  const ringPermissions = ringConfig.ringPermissions || {};
+  const ringPermissions = useMemo(() => ringConfig.ringPermissions || {}, [ringConfig]);
   const defaultRing = ringConfig.defaultRing !== undefined ? ringConfig.defaultRing : 3;
   const getRingLabel = (ring) => ringLabels[ring] || DEFAULT_RING_LABELS[ring] || `Ring ${ring}`;
 
@@ -74,7 +74,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
     setEditRingLabels({ ...ringLabels });
     setEditRingPermissions({ ...ringPermissions });
     setEditDefaultRing(defaultRing);
-  }, [ringCount, JSON.stringify(ringLabels), JSON.stringify(ringPermissions), defaultRing]);
+  }, [ringCount, ringLabels, ringPermissions, defaultRing]);
 
   useEffect(() => {
     if (!groupId) return;

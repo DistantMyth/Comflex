@@ -245,7 +245,7 @@ export default function MessageBubble({
                   document.body.appendChild(textArea);
                   textArea.focus();
                   textArea.select();
-                  try { document.execCommand('copy'); } catch (err) { /* ignore */ }
+                  try { document.execCommand('copy'); } catch { /* ignore */ }
                   textArea.remove();
                 }
               }}

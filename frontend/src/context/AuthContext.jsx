@@ -15,6 +15,7 @@ import { userApi } from '../api/userApi';
 import { adminApi } from '../api/adminApi';
 import { getAccessToken, setAccessToken, clearAccessToken } from '../api/client';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {

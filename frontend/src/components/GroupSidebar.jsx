@@ -45,15 +45,6 @@ export default function GroupSidebar({ groupId, userPermissions = {}, currentUse
     }
   };
 
-  const handleUnmute = async (userId) => {
-    try {
-      await groupApi.unmuteMember(groupId, userId);
-      alert('Member unmuted.');
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to unmute.');
-    }
-  };
-
   const filteredMembers = search.trim()
     ? members.filter(m =>
         m.displayName?.toLowerCase().includes(search.toLowerCase()) ||

@@ -4,7 +4,6 @@ import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
-import resolveAsset from '../utils/resolveAsset';
 import Avatar from '../components/Avatar';
 
 const CountdownClock = ({ targetDate, label }) => {

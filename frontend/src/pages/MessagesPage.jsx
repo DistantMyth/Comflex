@@ -58,7 +58,7 @@ export default function MessagesPage() {
         } else {
           await dmApi.markRead(activeUserId);
         }
-      } catch {}
+      } catch { /* ignore mark-read errors */ }
       // Refresh conversations to update unread counts
       await fetchConversations();
     } catch (err) {
@@ -461,7 +461,7 @@ export default function MessagesPage() {
                            });
                            await fetchMessages(true);
                            setReplyingTo(null);
-                        } catch (err) {
+                        } catch {
                            alert('Failed to send attachment.');
                         } finally {
                            setSending(false);

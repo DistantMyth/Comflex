@@ -228,7 +228,7 @@ export default function ProfilePage() {
     try {
       const res = await storeApi.getInventory();
       setInventory(res.data.data || []);
-    } catch {}
+    } catch { /* ignore inventory errors */ }
   };
 
   const handleSave = async () => {

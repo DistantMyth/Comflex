@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { storeApi } from '../api/storeApi';
 import { ethers } from 'ethers';
@@ -66,11 +66,7 @@ export default function StorePage() {
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [activeTab]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       if (activeTab === 'store') {
@@ -98,7 +94,11 @@ export default function StorePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const handlePurchase = async (listingId) => {
     try {

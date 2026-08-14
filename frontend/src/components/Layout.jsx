@@ -28,6 +28,94 @@ const RING_LABELS = {
   3: { label: 'Member', color: 'ring-badge-3' },
 };
 
+const Logo = () => (
+  <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
+    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--color-accent-light)] via-[var(--color-accent)] to-[#2563eb] flex items-center justify-center text-white shadow-[0_6px_20px_-4px_rgba(124,58,237,0.6)]">
+      <Zap size={18} strokeWidth={2.5} className="animate-pulse-glow" />
+    </div>
+    <div>
+      <h1 className="text-xl font-bold font-display gradient-text leading-none">Comflex</h1>
+      <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">College Community Platform</p>
+    </div>
+  </Link>
+);
+
+const NavList = ({ navItems, isActive, onNavigate }) => (
+  <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+    {navItems.map((item) => {
+      const Icon = item.icon;
+      const active = isActive(item.path);
+      return (
+        <Link
+          key={item.path}
+          to={item.path}
+          onClick={onNavigate}
+          className={`relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors duration-200 ${
+            active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)]'
+          }`}
+        >
+          {active && (
+            <motion.span
+              key="active-nav-pill"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-0 rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[#2563eb] shadow-[0_8px_24px_-6px_rgba(124,58,237,0.5)]"
+            />
+          )}
+          <Icon size={18} className="relative z-10 flex-shrink-0" strokeWidth={active ? 2.4 : 2} />
+          <span className="relative z-10 flex-1 truncate">{item.label}</span>
+          {item.badge > 0 && (
+            <span className="relative z-10 bg-[var(--color-danger)] text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
+              {item.badge > 99 ? '99+' : item.badge}
+            </span>
+          )}
+        </Link>
+      );
+    })}
+  </nav>
+);
+
+const UserCard = ({ user, ringInfo, connected, theme, onToggleTheme, onLogout }) => (
+  <div className="p-3 border-t border-[var(--color-border)]">
+    <div className="flex items-center gap-3 px-1 mb-3">
+      <Avatar
+        src={resolveAsset(user?.avatarUrl)}
+        name={user?.displayName}
+        className="w-10 h-10 rounded-full object-cover avatar-glow ring-2 ring-[var(--color-border)]"
+      />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold truncate">{user?.displayName}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] text-white ${ringInfo.color}`}>
+            {ringInfo.label}
+          </span>
+          {user?.globalRing !== 0 && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-warning)] font-semibold">
+              <Coins size={12} /> {user?.creditBalance ?? 0}
+            </span>
+          )}
+        </div>
+      </div>
+      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+        connected ? 'text-[var(--color-success)] bg-[var(--color-success)]/10' : 'text-[var(--color-warning)] bg-[var(--color-warning)]/10'
+      }`} title={connected ? 'Live' : 'Reconnecting'}>
+        <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${connected ? 'bg-[var(--color-success)] animate-pulse' : 'bg-[var(--color-warning)]'}`} />
+        {connected ? 'Live' : 'Off'}
+      </span>
+    </div>
+    <div className="flex gap-2">
+      <button onClick={onToggleTheme} className="btn btn-secondary flex-1 text-xs py-2" title="Toggle theme">
+        {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+        {theme === 'dark' ? 'Light' : 'Dark'}
+      </button>
+      <button onClick={onLogout} className="btn btn-secondary flex-1 text-xs py-2 text-[var(--color-danger)]" title="Log out">
+        <LogOut size={14} /> Logout
+      </button>
+    </div>
+  </div>
+);
+
 export default function Layout({ children }) {
   const { user, logout, isAdmin } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -64,7 +152,7 @@ export default function Layout({ children }) {
         dms: dms.reduce((s, c) => s + (c.unreadCount || 0), 0),
         friends: friendUnread,
       });
-    } catch {}
+    } catch { /* ignore unread refresh errors */ }
   }, []);
 
   const debouncedFetchUnread = useCallback(() => {
@@ -135,101 +223,22 @@ export default function Layout({ children }) {
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
-  const NavList = () => (
-    <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
-      {navItems.map((item) => {
-        const Icon = item.icon;
-        const active = isActive(item.path);
-        return (
-          <Link
-            key={item.path}
-            to={item.path}
-            onClick={() => setDrawerOpen(false)}
-            className={`relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors duration-200 ${
-              active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)]'
-            }`}
-          >
-            {active && (
-              <motion.span
-                key="active-nav-pill"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                className="absolute inset-0 rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[#2563eb] shadow-[0_8px_24px_-6px_rgba(124,58,237,0.5)]"
-              />
-            )}
-            <Icon size={18} className="relative z-10 flex-shrink-0" strokeWidth={active ? 2.4 : 2} />
-            <span className="relative z-10 flex-1 truncate">{item.label}</span>
-            {item.badge > 0 && (
-              <span className="relative z-10 bg-[var(--color-danger)] text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
-                {item.badge > 99 ? '99+' : item.badge}
-              </span>
-            )}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-
-  const UserCard = () => (
-    <div className="p-3 border-t border-[var(--color-border)]">
-      <div className="flex items-center gap-3 px-1 mb-3">
-        <Avatar
-          src={resolveAsset(user?.avatarUrl)}
-          name={user?.displayName}
-          className="w-10 h-10 rounded-full object-cover avatar-glow ring-2 ring-[var(--color-border)]"
-        />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate">{user?.displayName}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] text-white ${ringInfo.color}`}>
-              {ringInfo.label}
-            </span>
-            {user?.globalRing !== 0 && (
-              <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-warning)] font-semibold">
-                <Coins size={12} /> {user?.creditBalance ?? 0}
-              </span>
-            )}
-          </div>
-        </div>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-          connected ? 'text-[var(--color-success)] bg-[var(--color-success)]/10' : 'text-[var(--color-warning)] bg-[var(--color-warning)]/10'
-        }`} title={connected ? 'Live' : 'Reconnecting'}>
-          <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${connected ? 'bg-[var(--color-success)] animate-pulse' : 'bg-[var(--color-warning)]'}`} />
-          {connected ? 'Live' : 'Off'}
-        </span>
-      </div>
-      <div className="flex gap-2">
-        <button onClick={toggleTheme} className="btn btn-secondary flex-1 text-xs py-2" title="Toggle theme">
-          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-          {theme === 'dark' ? 'Light' : 'Dark'}
-        </button>
-        <button onClick={handleLogout} className="btn btn-secondary flex-1 text-xs py-2 text-[var(--color-danger)]" title="Log out">
-          <LogOut size={14} /> Logout
-        </button>
-      </div>
-    </div>
-  );
-
-  const Logo = () => (
-    <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
-      <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--color-accent-light)] via-[var(--color-accent)] to-[#2563eb] flex items-center justify-center text-white shadow-[0_6px_20px_-4px_rgba(124,58,237,0.6)]">
-        <Zap size={18} strokeWidth={2.5} className="animate-pulse-glow" />
-      </div>
-      <div>
-        <h1 className="text-xl font-bold font-display gradient-text leading-none">Comflex</h1>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">College Community Platform</p>
-      </div>
-    </Link>
-  );
+  const closeDrawer = () => setDrawerOpen(false);
 
   return (
     <div className="min-h-screen flex">
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-[264px] glass-panel flex-col fixed inset-y-0 left-0 z-30">
         <Logo />
-        <NavList />
-        <UserCard />
+        <NavList navItems={navItems} isActive={isActive} onNavigate={closeDrawer} />
+        <UserCard
+          user={user}
+          ringInfo={ringInfo}
+          connected={connected}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onLogout={handleLogout}
+        />
       </aside>
 
       {/* Mobile top bar */}
@@ -274,8 +283,15 @@ export default function Layout({ children }) {
                   <X size={20} />
                 </button>
               </div>
-              <NavList />
-              <UserCard />
+              <NavList navItems={navItems} isActive={isActive} onNavigate={closeDrawer} />
+              <UserCard
+                user={user}
+                ringInfo={ringInfo}
+                connected={connected}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+                onLogout={handleLogout}
+              />
             </motion.aside>
           </>
         )}

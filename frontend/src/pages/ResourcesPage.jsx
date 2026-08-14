@@ -71,12 +71,12 @@ export default function ResourcesPage() {
     return tree[node.name] || 'FILES';
   }, dynamicTree);
 
-  const getCurrentCategory = () => path[0]?.name;
-  const getCurrentSubCategory = () => {
+  const getCurrentCategory = useCallback(() => path[0]?.name, [path]);
+  const getCurrentSubCategory = useCallback(() => {
     if (path[0]?.name === 'Technical') return null;
     return path[1]?.name; // e.g. "Batch 29"
-  };
-  const getCurrentYearGroup = () => {
+  }, [path]);
+  const getCurrentYearGroup = useCallback(() => {
     if (path[0]?.name === 'Technical') return null;
     if (path[2]?.name === 'Notes') {
       return `Notes - ${path[3]?.name}`;
@@ -85,8 +85,8 @@ export default function ResourcesPage() {
       return 'Past Year Paper';
     }
     return null;
-  };
-  const getCurrentSubject = () => path.find(p => p.type === 'subject');
+  }, [path]);
+  const getCurrentSubject = useCallback(() => path.find(p => p.type === 'subject'), [path]);
 
   const fetchSubjects = useCallback(async () => {
     if (currentLevel !== 'SUBJECTS') return;
@@ -103,7 +103,7 @@ export default function ResourcesPage() {
     } finally {
       setLoading(false);
     }
-  }, [path, currentLevel]);
+  }, [currentLevel, getCurrentCategory, getCurrentSubCategory, getCurrentYearGroup]);
 
   const fetchResources = useCallback(async () => {
     const subj = getCurrentSubject();
@@ -117,7 +117,7 @@ export default function ResourcesPage() {
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [getCurrentSubject]);
 
   useEffect(() => {
     if (currentLevel === 'SUBJECTS') {

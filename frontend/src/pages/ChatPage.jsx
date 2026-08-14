@@ -12,7 +12,7 @@ import { Settings, Users } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { groupApi } from '../api/groupApi';
-import { getAnonSessions, setAnonSession, removeAnonSession } from '../api/client';
+import { getAnonSessions, setAnonSession } from '../api/client';
 import MessageBubble from '../components/MessageBubble';
 import GroupSidebar from '../components/GroupSidebar';
 import UserProfilePanel from '../components/UserProfilePanel';
@@ -159,7 +159,7 @@ export default function ChatPage() {
           } else {
             groupApi.markMessagesRead(groupId).catch(() => {});
           }
-        } catch {}
+        } catch { /* marking read is best-effort */ }
       } catch {
         // getGroup fails with 403 for anonymous groups when this device has
         // no session — the whole batch is rejected. Determine whether a
@@ -178,7 +178,7 @@ export default function ChatPage() {
     };
 
     loadData();
-  }, [groupId, user?.id]);
+  }, [groupId, user?.id, connected, markRead]);
 
   // Restore an anonymous identity with the user's saved key
   const handleRestoreKey = async () => {
@@ -259,7 +259,7 @@ export default function ChatPage() {
           setTypingUsers((prev) => prev.filter((u) => u.userId !== userId));
         }
       }),
-      onEvent('message:react', ({ messageId, reactions, groupId: gid }) => {
+      onEvent('message:react', ({ messageId, reactions }) => {
         // Technically message:react emission might not have groupId if we didn't send it, but we only subbed here so it's fine.
         setMessages((prev) => prev.map((m) => m.id === messageId ? { ...m, reactions } : m));
       }),
@@ -452,7 +452,7 @@ export default function ChatPage() {
       const res = await groupApi.reactToMessage(groupId, msgId, emoji);
       // Optimistically update the UI in case socket event is missed
       setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, reactions: res.data.data.reactions } : m));
-    } catch (err) {
+    } catch {
       // alert on error?
     }
   };

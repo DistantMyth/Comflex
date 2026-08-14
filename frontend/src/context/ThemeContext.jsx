@@ -8,6 +8,7 @@ import { createContext, useState, useEffect, useCallback, useContext } from 'rea
 
 const STORAGE_KEY = 'comflex-theme';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const ThemeContext = createContext(null);
 
 function getInitialTheme() {
@@ -44,6 +45,7 @@ export function ThemeProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTheme() {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
