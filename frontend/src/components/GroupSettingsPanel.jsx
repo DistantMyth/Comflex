@@ -429,8 +429,8 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                     <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
                       <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">🔗 Shareable Invite Link</p>
                       {!inviteLinkToken ? (
-                        <button 
-                          onClick={handleGetInviteLink} 
+                        <button
+                          onClick={handleGetInviteLink}
                           disabled={fetchingLink}
                           className="btn btn-secondary text-xs px-4 py-2 w-full"
                         >
@@ -438,17 +438,17 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
                         </button>
                       ) : (
                         <div className="flex gap-2 items-center">
-                          <input 
-                            type="text" 
-                            className="input w-full text-xs font-mono bg-[var(--color-bg-secondary)]" 
-                            readOnly 
-                            value={currentInviteUrl} 
+                          <input
+                            type="text"
+                            className="input w-full text-xs font-mono bg-[var(--color-bg-secondary)]"
+                            readOnly
+                            value={currentInviteUrl}
                           />
-                          <button 
+                          <button
                             onClick={() => {
                               navigator.clipboard.writeText(currentInviteUrl);
                               alert('Link copied to clipboard!');
-                            }} 
+                            }}
                             className="btn btn-primary text-xs px-3 py-2 flex-shrink-0"
                           >
                             Copy
@@ -602,7 +602,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
               <div className="p-4 bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)]">
                 <h3 className="text-sm font-bold mb-1">Role Architecture</h3>
                 <p className="text-xs text-[var(--color-text-muted)] mb-4">
-                  Groups are structured into "Rings". Ring 0 is the highest (usually Admin). 
+                  Groups are structured into "Rings". Ring 0 is the highest (usually Admin).
                   Members with a higher ring number have lower privileges.
                 </p>
                 <div className="space-y-4">

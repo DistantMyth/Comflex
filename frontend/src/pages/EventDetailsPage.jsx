@@ -8,7 +8,7 @@ import Avatar from '../components/Avatar';
 
 const CountdownClock = ({ targetDate, label }) => {
   const [timeLeft, setTimeLeft] = useState(0);
-  
+
   useEffect(() => {
     const calc = () => Math.max(0, new Date(targetDate).getTime() - new Date().getTime());
     setTimeLeft(calc());
@@ -21,7 +21,7 @@ const CountdownClock = ({ targetDate, label }) => {
   const s = Math.floor((timeLeft % 60000) / 1000);
 
   if (timeLeft === 0) return <div className="text-[var(--color-accent)] font-bold">{label} Reached!</div>;
-  
+
   return (
     <div className="flex flex-col items-center p-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl w-48 text-center shrinkage-0">
       <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase mb-1">{label}</span>
@@ -50,7 +50,7 @@ export default function EventDetailsPage() {
   // Editing and Organizers
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
-  
+
   const [searchOrgQuery, setSearchOrgQuery] = useState('');
   const [searchOrgResults, setSearchOrgResults] = useState([]);
   const [selectedOrgId, setSelectedOrgId] = useState('');
@@ -98,14 +98,14 @@ export default function EventDetailsPage() {
         isTeamEvent: ev.isTeamEvent || false,
         minTeamSize: ev.minTeamSize || 1, maxTeamSize: ev.maxTeamSize || 1
       });
-      
+
       const { data: teamsRes } = await eventApi.listTeams(id);
       const fetchedTeams = teamsRes.data;
       setTeams(fetchedTeams);
-      
+
       const isOrg = ev.creatorId === user?.id || ev.organizers?.some(o => o.userId === user?.id);
       const inTeam = fetchedTeams.some(t => t.members.some(m => m.userId === user?.id));
-      
+
       if (isOrg || inTeam) {
           try {
              const { data: tasksRes } = await eventApi.listTasks(id);
@@ -562,11 +562,11 @@ export default function EventDetailsPage() {
       </div>
     );
   };
-  
+
   const now = new Date();
   const start = new Date(event.startDate);
   const end = new Date(start.getTime() + (event.durationHours * 3600000) + (event.durationMinutes * 60000));
-  
+
   const isOngoing = event.status === 'ongoing' || (event.status !== 'completed' && event.autoStart && now >= start && now < end);
   const isCompleted = event.status === 'completed' || (event.status !== 'ongoing' && event.autoStart && now >= end);
   const isUpcoming = !isOngoing && !isCompleted;
@@ -601,7 +601,7 @@ export default function EventDetailsPage() {
                </div>
              )}
            </div>
-           
+
            {isEditing ? (
              <form onSubmit={handleUpdateEvent} className="p-4 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl space-y-4">
                 {message && <div className="text-[var(--color-accent)] text-sm font-bold">{message}</div>}
@@ -687,7 +687,7 @@ export default function EventDetailsPage() {
                      {searchOrgResults.length > 0 && (
                        <div className="mt-2 text-sm bg-[var(--color-bg-card)] rounded-lg border border-[var(--color-border)] max-h-32 overflow-y-auto">
                          {searchOrgResults.map(u => (
-                           <div key={u.id} onClick={() => { setSelectedOrgId(u.id); setSearchOrgQuery(u.displayName); setSearchOrgResults([]); }} 
+                           <div key={u.id} onClick={() => { setSelectedOrgId(u.id); setSearchOrgQuery(u.displayName); setSearchOrgResults([]); }}
                                 className="p-2 hover:bg-[var(--color-bg-secondary)] cursor-pointer break-all">
                              {u.displayName} ({u.email})
                            </div>
@@ -705,7 +705,7 @@ export default function EventDetailsPage() {
                    <button type="submit" disabled={!selectedOrgId || actionLoading} className="btn btn-primary w-full text-sm">Update Permissions</button>
                  </form>
                </div>
-               
+
                <div>
                   <h4 className="text-sm font-bold text-[var(--color-text-secondary)] uppercase mb-4">Current Organizers</h4>
                   {event.organizers?.length > 0 ? (
@@ -741,7 +741,7 @@ export default function EventDetailsPage() {
           <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
             <h3 className="text-xl font-bold mb-4">Team Details</h3>
             {!isUpcoming && <div className="mb-4 text-sm font-semibold text-[var(--color-warning)]">Team formation is closed. The event has started.</div>}
-            
+
             {message && <div className="text-sm font-semibold mb-4 text-[var(--color-accent)]">{message}</div>}
 
             {userTeam ? (
@@ -755,7 +755,7 @@ export default function EventDetailsPage() {
                       </p>
                     </div>
                   </div>
-                  
+
                   <h5 className="font-semibold text-sm mb-3">
                     Members <span className="font-normal text-[var(--color-text-secondary)]">({userTeam.members.length} enrolled — Min {event.minTeamSize} / Max {event.maxTeamSize})</span>:
                   </h5>
@@ -788,12 +788,12 @@ export default function EventDetailsPage() {
                   {isUpcoming && userTeam.leaderId === user.id && userTeam.members.length < event.maxTeamSize && (
                     <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
                       <h5 className="font-semibold text-sm mb-3">Invite New Members</h5>
-                      <input 
-                        type="text" 
-                        value={searchQuery} 
-                        onChange={handleSearchUsers} 
-                        placeholder="Search users to invite by name or email..." 
-                        className="w-full text-sm mb-3 bg-[var(--color-bg-card)]" 
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={handleSearchUsers}
+                        placeholder="Search users to invite by name or email..."
+                        className="w-full text-sm mb-3 bg-[var(--color-bg-card)]"
                       />
                       {searchResults.length > 0 ? (
                         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl p-2 max-h-48 overflow-y-auto">
@@ -810,8 +810,8 @@ export default function EventDetailsPage() {
                                   <div className="text-xs text-[var(--color-text-muted)]">{u.username || u.email}</div>
                                 </div>
                               </div>
-                              <button 
-                                onClick={() => handleInvite(userTeam.id, u.id)} 
+                              <button
+                                onClick={() => handleInvite(userTeam.id, u.id)}
                                 disabled={actionLoading}
                                 className="text-xs btn btn-secondary px-3 py-1.5"
                               >
@@ -861,14 +861,14 @@ export default function EventDetailsPage() {
                                )}
                              </div>
                              <div className="flex gap-2 shrink-0">
-                               <button 
+                               <button
                                  onClick={() => handleInviteAction(invite.id, 'accept')}
                                  disabled={actionLoading}
                                  className="btn btn-primary text-sm px-4 py-2"
                                >
                                  Accept Invite
                                </button>
-                               <button 
+                               <button
                                  onClick={() => handleInviteAction(invite.id, 'reject')}
                                  disabled={actionLoading}
                                  className="btn btn-secondary text-[var(--color-danger)] text-sm px-4 py-2"
@@ -882,7 +882,7 @@ export default function EventDetailsPage() {
                     </div>
                   </div>
                 )}
-                
+
                 {event.inviteMode === 'invite_only' ? (
                   <div className="p-6 border border-[var(--color-border)] rounded-xl bg-[var(--color-bg-primary)] shadow-sm">
                     <h4 className="font-bold text-lg mb-2">🔒 Invite-Only Event</h4>
@@ -893,8 +893,8 @@ export default function EventDetailsPage() {
                     <h4 className="font-bold text-lg mb-1">Create a New Team</h4>
                     <p className="text-sm text-[var(--color-text-secondary)] mb-4">Start your own team to compete in this event and invite up to {event.maxTeamSize - 1} other members.</p>
                     <form onSubmit={handleCreateTeam} className="flex gap-3">
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         value={teamName}
                         onChange={(e) => setTeamName(e.target.value)}
                         placeholder="Enter a unique team name..."
@@ -938,7 +938,7 @@ export default function EventDetailsPage() {
                 </button>
               )}
             </div>
-            
+
             {isOrganizer && showTaskForm && (
                 <form onSubmit={handleCreateTask} className="mb-6 p-4 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl space-y-4">
                    <div className="flex justify-between items-center">
@@ -1048,7 +1048,7 @@ export default function EventDetailsPage() {
                         </select>
                       </div>
                     )}
-                   
+
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      <div>
                        <label className="block text-sm mb-1">Time Degradation (% / minute)</label>
@@ -1060,7 +1060,7 @@ export default function EventDetailsPage() {
                        <input type="number" min="0" value={taskForm.wrongSubmissionPenalty} onChange={e => setTaskForm({...taskForm, wrongSubmissionPenalty: Number(e.target.value)})} className="w-full text-sm" />
                      </div>
                    </div>
-                   
+
                    <div>
                      <label className="block text-sm mb-1">Task Description / Instructions</label>
                      <textarea value={taskForm.description} onChange={e => setTaskForm({...taskForm, description: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] p-2 rounded-lg" rows="4" required />
@@ -1080,8 +1080,8 @@ export default function EventDetailsPage() {
                         <div className="flex items-center gap-3">
                           <div className="text-sm font-mono font-bold text-[var(--color-accent)]">{task.basePoints} pts</div>
                           {isOrganizer && (
-                             <button 
-                                onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }} 
+                             <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                                 className="text-xs px-2 py-1 bg-[var(--color-danger)]/10 text-[var(--color-danger)] rounded hover:bg-[var(--color-danger)] hover:text-white transition-colors"
                              >
                                 Delete
@@ -1090,7 +1090,7 @@ export default function EventDetailsPage() {
                         </div>
                       </div>
                       <p className="text-sm text-[var(--color-text-primary)] whitespace-pre-wrap mb-4">{task.description}</p>
-                      
+
                       {userTeam && !isOrganizer && isOngoing && (
                         <div className="bg-[var(--color-bg-card)] p-3 rounded-lg border border-[var(--color-border)] mt-4">
                            <h5 className="text-xs font-bold uppercase mb-2">Submit Answer ({task.submissionType})</h5>
@@ -1143,7 +1143,7 @@ export default function EventDetailsPage() {
                                         </div>
                                         <div className="text-xs text-[var(--color-text-muted)] mt-1">Status: <span className="font-bold capitalize">{sub.status}</span></div>
                                       </div>
-                                      
+
                                       {!task.isAutoEvaluated && sub.status === 'pending' && (
                                         <div className="flex flex-col gap-2 w-full md:w-32 shrink-0">
                                           {gradingSubId !== sub.id ? (
@@ -1287,7 +1287,7 @@ export default function EventDetailsPage() {
                 </table>
               </div>
             )}
-            
+
             {isOrganizer && (
               <div className="mt-6 pt-4 border-t border-[var(--color-border)] flex justify-end">
                 <button

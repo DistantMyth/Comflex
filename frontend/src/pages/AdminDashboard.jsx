@@ -1028,7 +1028,7 @@ function DatabaseTab() {
 
   const handleClear = async () => {
     if (!window.confirm('⚠️ DANGER: Are you absolutely sure you want to clear the entire database?\n\nThis will permanently delete all users (except yourself), groups, messages, and events. This CANNOT BE UNDONE. Make sure you take a backup first!')) return;
-    
+
     setLoadingClear(true);
     setMessage('');
     try {
@@ -1047,7 +1047,7 @@ function DatabaseTab() {
       <div className="glass-card p-6 space-y-4">
         <h3 className="text-lg font-semibold">Database Management</h3>
         {message && <div className={`text-sm ${message.includes('Failed') ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>{message}</div>}
-        
+
         <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
           <h4 className="font-semibold mb-1">Backup Database</h4>
           <p className="text-sm text-[var(--color-text-muted)] mb-3">Download a full JSON dump of all records (users, groups, messages, events, etc) in the Prisma schema.</p>

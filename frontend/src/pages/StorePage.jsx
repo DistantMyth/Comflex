@@ -22,8 +22,8 @@ export default function StorePage() {
 
   // Admin form specific
   const [badgeForm, setBadgeForm] = useState({ name: '', description: '', imageUrl: '', isEventBadge: false });
-  const [adminApi, setAdminApi] = useState(null); 
-  
+  const [adminApi, setAdminApi] = useState(null);
+
   useEffect(() => {
     import('../api/adminApi').then(m => setAdminApi(m.adminApi));
   }, []);
@@ -42,7 +42,7 @@ export default function StorePage() {
       const provider = new ethers.BrowserProvider(window.ethereum);
       await provider.send("eth_requestAccounts", []);
       const signer = await provider.getSigner();
-      
+
       const treasury = import.meta.env.VITE_TREASURY_ADDRESS;
       if (!treasury) throw new Error("Treasury not configured");
 
@@ -50,10 +50,10 @@ export default function StorePage() {
         to: treasury,
         value: ethers.parseEther(priceEth.toString())
       });
-      
+
       showPopup(`Transaction sent! Please wait... Hash: ${tx.hash}`);
-      await tx.wait(); 
-      
+      await tx.wait();
+
       await storeApi.buyCredits({ txHash: tx.hash, amount });
       showPopup(`Successfully purchased ${amount} credits!`);
       refreshProfile();
@@ -84,7 +84,7 @@ export default function StorePage() {
         const res = await storeApi.getLedger();
         setLedger(res.data.data);
       }
-      
+
       if (activeTab === 'store' || activeTab === 'admin') {
         const cRes = await storeApi.getStoreConfig();
         setPricingConfig(cRes.data.data);
@@ -181,8 +181,8 @@ export default function StorePage() {
             <div className="text-5xl mb-6">{popup.isError ? '❌' : '🎉'}</div>
             <h3 className="text-xl font-extrabold mb-3">{popup.isError ? 'Transaction Failed' : 'Success!'}</h3>
             <p className="text-[var(--color-text-secondary)] mb-8 leading-relaxed font-medium">{popup.message}</p>
-            <button 
-              onClick={() => setPopup({ show: false, message: '', isError: false })} 
+            <button
+              onClick={() => setPopup({ show: false, message: '', isError: false })}
               className={`btn w-full text-white font-bold py-3 rounded-xl shadow-lg transition-transform hover:-translate-y-1 ${popup.isError ? 'bg-[var(--color-danger)] hover:bg-red-600 shadow-red-500/30' : 'bg-[var(--color-success)] hover:bg-green-600 shadow-green-500/30'}`}
             >
               Continue
@@ -239,8 +239,8 @@ export default function StorePage() {
                         <span className="font-bold text-[var(--color-primary)]">🪙 {l.price}</span>
                         <span className="text-xs text-[var(--color-text-muted)]">{l.quantity === -1 ? '∞' : `${l.quantity - l.sold} left`}</span>
                       </div>
-                      <button 
-                        onClick={() => handlePurchase(l.id)} 
+                      <button
+                        onClick={() => handlePurchase(l.id)}
                         disabled={(user?.globalRing !== 0 && user?.creditBalance < l.price) || (l.quantity !== -1 && l.sold >= l.quantity)}
                         className="btn btn-primary w-full mt-4"
                       >
@@ -294,10 +294,10 @@ export default function StorePage() {
                             </span>
                           </td>
                           <td className="p-4 text-[var(--color-text-secondary)]">
-                            {tx.type === 'purchase' ? 'Store' 
+                            {tx.type === 'purchase' ? 'Store'
                              : tx.type === 'download_reward' ? 'System Reward'
                              : tx.type === 'event_reward' ? 'Event Reward'
-                             : isSender ? `To ${tx.receiver?.displayName}` 
+                             : isSender ? `To ${tx.receiver?.displayName}`
                              : `From ${tx.sender?.displayName || 'System'}`}
                           </td>
                         </tr>
@@ -313,13 +313,13 @@ export default function StorePage() {
                 <div className="glass-card p-6">
                   <h2 className="text-xl font-bold mb-4">Create New Badge</h2>
                   <form onSubmit={handleCreateBadge} className="space-y-4 max-w-md">
-                    <input type="text" placeholder="Badge Name" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <input type="text" placeholder="Badge Name" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={badgeForm.name} onChange={e => setBadgeForm({...badgeForm, name: e.target.value})} />
                     <input type="file" accept="image/*" onChange={e => setBadgeImage(e.target.files[0])} className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" />
                     <p className="text-xs text-center text-[var(--color-text-muted)]">- OR -</p>
-                    <input type="text" placeholder="Upload via Image URL instead" className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <input type="text" placeholder="Upload via Image URL instead" className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={badgeForm.imageUrl} onChange={e => setBadgeForm({...badgeForm, imageUrl: e.target.value})} />
-                    <textarea placeholder="Description" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <textarea placeholder="Description" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={badgeForm.description} onChange={e => setBadgeForm({...badgeForm, description: e.target.value})} />
                     <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
                       <input type="checkbox" checked={badgeForm.isEventBadge} onChange={e => setBadgeForm({...badgeForm, isEventBadge: e.target.checked})} />
@@ -328,15 +328,15 @@ export default function StorePage() {
                     <button type="submit" className="btn btn-primary w-full">Create Badge</button>
                   </form>
                 </div>
-                
+
                 <div className="glass-card p-6">
                   <h2 className="text-xl font-bold mb-4">Create Store Listing</h2>
                   <form onSubmit={handleCreateListing} className="space-y-4 max-w-md">
-                    <input type="text" placeholder="Badge ID" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <input type="text" placeholder="Badge ID" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={listingForm.badgeId} onChange={e => setListingForm({...listingForm, badgeId: e.target.value})} />
-                    <input type="number" placeholder="Price (Credits)" min="0" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <input type="number" placeholder="Price (Credits)" min="0" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={listingForm.price} onChange={e => setListingForm({...listingForm, price: e.target.value})} />
-                    <input type="number" placeholder="Quantity (-1 for infinite)" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                    <input type="number" placeholder="Quantity (-1 for infinite)" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                       value={listingForm.quantity} onChange={e => setListingForm({...listingForm, quantity: e.target.value})} />
                     <button type="submit" className="btn btn-primary w-full">List on Store</button>
                   </form>
@@ -346,28 +346,28 @@ export default function StorePage() {
                   <div className="glass-card p-6">
                     <h2 className="text-xl font-bold mb-4">Mint Credits to User</h2>
                     <form onSubmit={handleMintCredits} className="space-y-4 max-w-md mb-8">
-                      <input type="text" placeholder="User ID" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                      <input type="text" placeholder="User ID" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                         value={mintForm.userId} onChange={e => setMintForm({...mintForm, userId: e.target.value})} />
-                      <input type="number" placeholder="Amount" min="1" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]" 
+                      <input type="number" placeholder="Amount" min="1" required className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-accent)]"
                         value={mintForm.amount} onChange={e => setMintForm({...mintForm, amount: e.target.value})} />
                       <button type="submit" className="btn btn-primary w-full text-white bg-[var(--color-success)]">Mint Credits</button>
                     </form>
-                    
+
                     <h2 className="text-xl font-bold mb-4 border-t pt-4">Dynamic Store Pricing</h2>
                     {pricingConfig && (
                       <form onSubmit={handleUpdateConfig} className="grid grid-cols-2 gap-4 text-sm">
-                        
+
                         <div className="col-span-2 font-bold mt-2 border-b">Credit Currency Rates (ETH)</div>
                         <label className="flex flex-col">100 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['100'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '100': parseFloat(e.target.value)}})} /></label>
                         <label className="flex flex-col">500 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['500'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '500': parseFloat(e.target.value)}})} /></label>
                         <label className="flex flex-col">2000 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['2000'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '2000': parseFloat(e.target.value)}})} /></label>
-                        
+
                         <button type="submit" className="col-span-2 btn btn-primary mt-2 flex items-center justify-center">💾 Save Dynamic Configuration</button>
                       </form>
                     )}
                   </div>
                 )}
-                
+
                 <div className="glass-card p-6 border-t border-[var(--color-border)] mt-8">
                   <h2 className="text-xl font-bold mb-4">Badge Database (All Created Badges)</h2>
                   {allBadges.length === 0 ? (

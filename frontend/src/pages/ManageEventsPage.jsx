@@ -38,7 +38,7 @@ export default function ManageEventsPage() {
 
   const isAdminUser = user?.globalRing === 0;
   const mayTargetGroups = isAdminUser || user?.canCreateEvents === true;
-  
+
   // Creation Form State
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -70,7 +70,7 @@ export default function ManageEventsPage() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
   };
-  
+
   const setEvents = (data) => {
     setManagedEvents(data);
   };
@@ -87,7 +87,7 @@ export default function ManageEventsPage() {
     e.preventDefault();
     setCreating(true);
     setMessage('');
-    
+
     try {
       const payload = {
         ...form,
@@ -99,18 +99,18 @@ export default function ManageEventsPage() {
         blockedUserIds: form.blockedUserIds ? form.blockedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
         startDate: new Date(form.startDate).toISOString()
       };
-      
+
       await eventApi.createEvent(payload);
       setMessage('Event successfully created!');
       setShowForm(false);
-      
+
       // Reset form
       setForm({
-        title: '', description: '', startDate: '', durationHours: 0, durationMinutes: 0, taskViewMode: 'all', category: '', targetTags: '', 
+        title: '', description: '', startDate: '', durationHours: 0, durationMinutes: 0, taskViewMode: 'all', category: '', targetTags: '',
         isTeamEvent: false, minTeamSize: 1, maxTeamSize: 4, autoStart: true,
         inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: ''
       });
-      
+
       fetchEvents();
     } catch (err) {
       setMessage(err.response?.data?.error?.message || 'Failed to create event.');
@@ -138,8 +138,8 @@ export default function ManageEventsPage() {
               Create, oversee, and manage permissions for events.
             </p>
           </div>
-          <button 
-            onClick={() => setShowForm(!showForm)} 
+          <button
+            onClick={() => setShowForm(!showForm)}
             className="btn btn-primary"
           >
             {showForm ? 'Cancel' : '+ Create Event'}
@@ -151,7 +151,7 @@ export default function ManageEventsPage() {
           <form onSubmit={handleCreateEvent} className="bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-lg">
             <h3 className="text-lg font-bold mb-4">Create New Event</h3>
             {message && <div className="text-sm text-[var(--color-warning)] mb-4">{message}</div>}
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Title *</label>
@@ -213,7 +213,7 @@ export default function ManageEventsPage() {
                   <input type="checkbox" checked={form.isTeamEvent} onChange={e => setForm({...form, isTeamEvent: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
                   Is Team Event?
                </label>
-               
+
                {form.isTeamEvent && (
                  <>
                    <div className="flex items-center gap-2">

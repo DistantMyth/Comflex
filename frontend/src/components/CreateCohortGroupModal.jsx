@@ -58,7 +58,7 @@ export default function CreateCohortGroupModal({ onClose, onCreated }) {
     try {
       const slug = displayName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       const uniqueSlug = `${slug}-${Date.now().toString().slice(-4)}`;
-      
+
       const data = {
         name: uniqueSlug,
         displayName: displayName.trim(),
@@ -66,7 +66,7 @@ export default function CreateCohortGroupModal({ onClose, onCreated }) {
         type: 'primary',
         autoAdd: 'cohort',
       };
-      
+
       if (targetYears.length > 0) data.targetYears = targetYears;
       if (targetBranches.length > 0) data.targetBranches = targetBranches;
 
@@ -149,9 +149,9 @@ export default function CreateCohortGroupModal({ onClose, onCreated }) {
               <div className="max-h-32 overflow-y-auto space-y-1 bg-[var(--color-bg-primary)] p-2 rounded-lg border border-[var(--color-border)]">
                 {yearOptions.map(y => (
                   <label key={y} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-[var(--color-bg-secondary)] p-1 rounded">
-                    <input 
-                      type="checkbox" 
-                      onChange={() => handleYearToggle(y)} 
+                    <input
+                      type="checkbox"
+                      onChange={() => handleYearToggle(y)}
                       checked={targetYears.includes(y)}
                       className="rounded border-[var(--color-border)] text-[var(--color-accent)] focus:ring-[var(--color-accent)]"
                     />
@@ -169,9 +169,9 @@ export default function CreateCohortGroupModal({ onClose, onCreated }) {
                 )}
                 {Object.entries(availableBranches).map(([code, name]) => (
                   <label key={code} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-[var(--color-bg-secondary)] p-1 rounded">
-                    <input 
-                      type="checkbox" 
-                      onChange={() => handleBranchToggle(code)} 
+                    <input
+                      type="checkbox"
+                      onChange={() => handleBranchToggle(code)}
                       checked={targetBranches.includes(code)}
                       className="rounded border-[var(--color-border)] text-[var(--color-accent)] focus:ring-[var(--color-accent)]"
                     />
@@ -181,7 +181,7 @@ export default function CreateCohortGroupModal({ onClose, onCreated }) {
               </div>
             </div>
           </div>
-          
+
           <div className="text-xs text-[var(--color-text-muted)] bg-[rgba(108,99,255,0.1)] p-3 rounded-lg border border-[var(--color-accent)]">
             <strong>Note:</strong> Seniors who are not your friends will receive a private message with a link to join, instead of being added directly. Juniors, batchmates, and senior friends will be added instantly.
           </div>

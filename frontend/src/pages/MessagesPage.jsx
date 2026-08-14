@@ -213,12 +213,12 @@ export default function MessagesPage() {
         <div className="w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-secondary)]">
           <div className="p-4 border-b border-[var(--color-border)]">
             <h2 className="text-lg font-bold">Messages</h2>
-            <input 
-              type="text" 
-              placeholder="Search conversations..." 
-              value={search} 
-              onChange={(e) => setSearch(e.target.value)} 
-              className="w-full mt-3 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]" 
+            <input
+              type="text"
+              placeholder="Search conversations..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full mt-3 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
           <div className="flex-1 overflow-y-auto">
@@ -443,9 +443,9 @@ export default function MessagesPage() {
               <form onSubmit={handleSend} className="p-4 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)] relative pb-24 lg:pb-4">
                 <div className="flex gap-2 items-center">
                   <label className={`cursor-pointer p-2 rounded-full hover:bg-[var(--color-bg-primary)] transition-colors ${sending ? 'opacity-50 pointer-events-none' : ''}`} title="Attach file (Up to 5MB)">
-                    <input 
-                      type="file" 
-                      className="hidden" 
+                    <input
+                      type="file"
+                      className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
@@ -517,12 +517,12 @@ export default function MessagesPage() {
             <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-3 text-sm text-[var(--color-text-secondary)] mb-4 saturate-50">
                {forwardingMsg.content || '[Media message]'}
             </div>
-            <input 
-              type="text" 
-              placeholder="Search friends..." 
-              value={forwardSearch} 
-              onChange={(e) => setForwardSearch(e.target.value)} 
-              className="w-full mb-3 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]" 
+            <input
+              type="text"
+              placeholder="Search friends..."
+              value={forwardSearch}
+              onChange={(e) => setForwardSearch(e.target.value)}
+              className="w-full mb-3 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
             />
             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
               {conversations.filter(c => c.partner?.id !== activeUserId && (c.partner?.displayName || c.partner?.username || '').toLowerCase().includes(forwardSearch.toLowerCase())).length === 0 && (

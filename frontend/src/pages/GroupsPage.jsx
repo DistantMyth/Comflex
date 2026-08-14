@@ -151,12 +151,12 @@ export default function GroupsPage() {
           </div>
         </div>
 
-        <input 
-          type="text" 
-          placeholder="Search groups by name..." 
-          value={search} 
-          onChange={(e) => setSearch(e.target.value)} 
-          className="w-full mb-6 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)]" 
+        <input
+          type="text"
+          placeholder="Search groups by name..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full mb-6 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
         />
 
         {/* Pending Invites */}

@@ -161,8 +161,8 @@ export default function FriendsPage() {
               <UserCard key={f.friendshipId} user={f} actions={
                 <>
                   <a href={`/messages/${f.id}`} className="btn btn-primary text-xs py-1.5 px-3">Message</a>
-                  <button 
-                    onClick={() => handleAction('remove', f.friendshipId)} 
+                  <button
+                    onClick={() => handleAction('remove', f.friendshipId)}
                     className="btn btn-secondary text-xs py-1.5 px-3"
                     disabled={actionLoading === f.friendshipId}
                   >
@@ -201,8 +201,8 @@ export default function FriendsPage() {
               <UserCard key={s.friendshipId} user={s} actions={
                 <>
                   <span className="text-xs text-[var(--color-warning)] bg-[var(--color-bg-card)] px-3 py-1.5 rounded-lg flex items-center">Pending</span>
-                  <button 
-                    onClick={() => handleAction('remove', s.friendshipId)} 
+                  <button
+                    onClick={() => handleAction('remove', s.friendshipId)}
                     className="btn btn-secondary text-xs py-1.5 px-3"
                     disabled={actionLoading === s.friendshipId}
                   >
@@ -243,8 +243,8 @@ export default function FriendsPage() {
                       Message
                     </a>
                     {u.friendshipStatus === 'accepted' ? (
-                      <button 
-                        onClick={() => handleAction('remove', u.friendshipId)} 
+                      <button
+                        onClick={() => handleAction('remove', u.friendshipId)}
                         className="btn btn-secondary text-[var(--color-danger)] text-xs py-1.5 px-3"
                         disabled={actionLoading === u.friendshipId}
                       >
@@ -252,8 +252,8 @@ export default function FriendsPage() {
                       </button>
                     ) : u.friendshipStatus === 'pending' ? (
                       u.isRequester ? (
-                        <button 
-                          onClick={() => handleAction('remove', u.friendshipId)} 
+                        <button
+                          onClick={() => handleAction('remove', u.friendshipId)}
                           className="btn btn-secondary text-xs py-1.5 px-3"
                           disabled={actionLoading === u.friendshipId}
                         >
@@ -266,8 +266,8 @@ export default function FriendsPage() {
                         </div>
                       )
                     ) : (
-                      <button 
-                        onClick={() => handleAction('send', u.id)} 
+                      <button
+                        onClick={() => handleAction('send', u.id)}
                         className="btn btn-primary text-xs py-1.5 px-3"
                         disabled={actionLoading === u.id}
                       >

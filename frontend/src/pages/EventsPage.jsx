@@ -26,7 +26,7 @@ export default function EventsPage() {
     if (e.status === 'completed') return false;
     return e.autoStart && now >= start && now < end;
   });
-  
+
   const pastEvents = events.filter(e => {
     const start = new Date(e.startDate);
     const end = new Date(start.getTime() + (e.durationHours * 3600000) + (e.durationMinutes * 60000));
@@ -49,7 +49,7 @@ export default function EventsPage() {
           </span>
         </div>
         <p className="text-sm text-[var(--color-text-secondary)] mb-4">{new Date(event.startDate).toLocaleString()}</p>
-        
+
         {event.isTeamEvent && (
           <span className="inline-block text-xs font-semibold text-[var(--color-accent)] bg-[var(--color-bg-primary)] border border-[var(--color-border)] px-2 py-1 rounded">
             Team Event ({event.minTeamSize}-{event.maxTeamSize} members)
@@ -62,7 +62,7 @@ export default function EventsPage() {
   return (
     <div className="max-w-4xl mx-auto">
         <h2 className="text-2xl font-bold mb-6 gradient-text">Events</h2>
-        
+
         {loading ? (
           <div className="space-y-4">
             {[1,2,3].map(i => <div key={i} className="h-24 bg-[var(--color-bg-secondary)] animate-pulse rounded-2xl" />)}
@@ -84,7 +84,7 @@ export default function EventsPage() {
                 </div>
               </div>
             )}
-            
+
             {upcomingEvents.length > 0 && (
               <div>
                 <h3 className="text-xl font-bold mb-4">Upcoming</h3>
@@ -93,7 +93,7 @@ export default function EventsPage() {
                 </div>
               </div>
             )}
-            
+
             {pastEvents.length > 0 && (
               <div>
                 <h3 className="text-xl font-bold mb-4 text-[var(--color-text-secondary)]">Past Events</h3>

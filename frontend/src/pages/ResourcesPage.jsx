@@ -16,7 +16,7 @@ const getDynamicFolderTree = (user, myYear) => {
 
   for (let i = 0; i < count; i++) {
     const year = startYear + i;
-    
+
     // Non-admins can only see "Last Year" for their junior's batch
     if (!isAdminId && year === myYear + 1) {
       tree['Academics'][`Batch ${year}`] = {
@@ -35,13 +35,13 @@ const getDynamicFolderTree = (user, myYear) => {
       };
     }
   }
-  
+
   return tree;
 };
 
 export default function ResourcesPage() {
   const { user } = useAuth();
-  
+
   const [path, setPath] = useState([]); // Array of path segments
   const [subjects, setSubjects] = useState([]);
   const [resources, setResources] = useState([]);
@@ -183,7 +183,7 @@ export default function ResourcesPage() {
         </div>
       );
     }
-    
+
     if (typeof currentLevel === 'object') {
       const keys = Object.keys(currentLevel);
       return (
@@ -216,7 +216,7 @@ export default function ResourcesPage() {
 
   const renderFiles = () => {
     if (currentLevel !== 'FILES') return null;
-    
+
     return (
       <div className="space-y-3">
         {loading && <div className="text-center py-4">Loading files...</div>}
@@ -230,7 +230,7 @@ export default function ResourcesPage() {
             <div key={res.id} className="glass-card p-4 flex items-center gap-4">
               <div className="text-3xl text-[var(--color-primary)]">📄</div>
               <div className="flex-1 min-w-0">
-                <a href={resolveAsset(res.fileUrl)} target="_blank" rel="noreferrer" 
+                <a href={resolveAsset(res.fileUrl)} target="_blank" rel="noreferrer"
                    className="font-medium hover:text-[var(--color-accent)] hover:underline block truncate">
                   {res.title}
                 </a>
@@ -263,7 +263,7 @@ export default function ResourcesPage() {
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-primary)]">
               Resources Library
             </h1>
-            
+
             {/* Breadcrumbs */}
             <div className="flex items-center gap-2 mt-3 text-sm overflow-x-auto pb-2 whitespace-nowrap">
               <button onClick={() => navigateTo(-1)} className={`hover:text-[var(--color-accent)] ${path.length === 0 ? 'text-[var(--color-accent)] font-semibold' : 'text-[var(--color-text-secondary)]'}`}>
@@ -272,7 +272,7 @@ export default function ResourcesPage() {
               {path.map((p, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <span className="text-[var(--color-text-muted)]">/</span>
-                  <button onClick={() => navigateTo(i)} 
+                  <button onClick={() => navigateTo(i)}
                     className={`hover:text-[var(--color-accent)] ${i === path.length - 1 ? 'text-[var(--color-accent)] font-semibold' : 'text-[var(--color-text-secondary)]'}`}>
                     {p.name}
                   </button>
@@ -302,8 +302,8 @@ export default function ResourcesPage() {
       </div>
 
       {showSubjectModal && (
-        <SubjectModal 
-          onClose={() => setShowSubjectModal(false)} 
+        <SubjectModal
+          onClose={() => setShowSubjectModal(false)}
           category={getCurrentCategory()}
           subCategory={getCurrentSubCategory()}
           yearGroup={getCurrentYearGroup()}
@@ -312,7 +312,7 @@ export default function ResourcesPage() {
       )}
 
       {showUploadModal && (
-        <UploadModal 
+        <UploadModal
           onClose={() => setShowUploadModal(false)}
           subjectId={getCurrentSubject()?.id}
           onSuccess={fetchResources}
@@ -348,7 +348,7 @@ function SubjectModal({ onClose, category, subCategory, yearGroup, onSuccess }) 
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
             <label className="block text-sm font-medium mb-1">Subject Name</label>
-            <input type="text" autoFocus value={name} onChange={e => setName(e.target.value)} 
+            <input type="text" autoFocus value={name} onChange={e => setName(e.target.value)}
               className="w-full bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 outline-none focus:border-[var(--color-accent)]" placeholder="e.g. Data Structures" />
           </div>
           <div className="flex justify-end gap-2">
@@ -414,7 +414,7 @@ function UploadModal({ onClose, subjectId, onSuccess }) {
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4 animate-fade-in">
       <div className="bg-[var(--color-bg-primary)] p-6 rounded-2xl max-w-md w-full border border-[var(--color-border)] shadow-2xl">
         <h3 className="text-lg font-bold mb-4">Upload File</h3>
-        
+
         {uploading ? (
           <div className="space-y-4 py-6">
             <div className="text-center font-medium">Uploading... {progress}%</div>
@@ -434,15 +434,15 @@ function UploadModal({ onClose, subjectId, onSuccess }) {
                 <input type="file" required onChange={handleFile} className="hidden" />
               </label>
             </div>
-            
+
             {file && (
               <div>
                 <label className="block text-sm font-medium mb-1">Display Title (optional)</label>
-                <input type="text" value={title} onChange={e => setTitle(e.target.value)} 
+                <input type="text" value={title} onChange={e => setTitle(e.target.value)}
                   className="w-full bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 outline-none focus:border-[var(--color-accent)]" />
               </div>
             )}
-            
+
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={!file} className="btn btn-primary shadow-md">Start Upload</button>

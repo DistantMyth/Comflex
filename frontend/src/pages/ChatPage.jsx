@@ -62,12 +62,12 @@ export default function ChatPage() {
   const [restoreKey, setRestoreKey] = useState('');
   const [restoring, setRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState('');
-  
+
   // Modals for forwarding
   const [forwardingMsg, setForwardingMsg] = useState(null);
   const [allGroups, setAllGroups] = useState([]);
   const [forwardSearch, setForwardSearch] = useState('');
-  
+
   // Pinned Messages state
   const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);
 
@@ -265,7 +265,7 @@ export default function ChatPage() {
       }),
       onEvent('message:pinnedUpdate', ({ pinnedMsg, unpinnedIds }) => {
         setMessages((prev) => prev.map((m) => {
-          if (m.id === pinnedMsg.id) return { ...m, ...pinnedMsg }; 
+          if (m.id === pinnedMsg.id) return { ...m, ...pinnedMsg };
           if (unpinnedIds && unpinnedIds.includes(m.id)) return { ...m, isPinned: false };
           return m;
         }));
@@ -411,7 +411,7 @@ export default function ChatPage() {
           if (prev.some(m => m.id === res.data.data.id)) return prev;
           return [...prev, res.data.data];
         });
-        
+
         // Reset file
         setFileAttachment(null);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -426,10 +426,10 @@ export default function ChatPage() {
             });
           }
         } else {
-          const res = await groupApi.sendMessage(groupId, { 
-            content, 
-            mentions: mentionIds, 
-            replyToId: replyingTo?.id 
+          const res = await groupApi.sendMessage(groupId, {
+            content,
+            mentions: mentionIds,
+            replyToId: replyingTo?.id
           });
           setMessages((prev) => {
             if (prev.some(m => m.id === res.data.data.id)) return prev;
@@ -675,7 +675,7 @@ export default function ChatPage() {
           <div className="flex-1 flex flex-col glass-card overflow-hidden">
             {/* Pinned Message Banner */}
             {pinnedMessages.length > 0 && (
-              <div 
+              <div
                 className="bg-[var(--color-bg-primary)] border-b border-[var(--color-border)] p-2 px-4 flex items-center justify-between text-sm shadow-sm z-10 cursor-pointer hover:bg-[var(--color-bg-secondary)] transition-colors"
                 onClick={() => {
                   const targetId = pinnedMessages[currentPinnedIndex]?.id;
@@ -704,8 +704,8 @@ export default function ChatPage() {
                   <span className="font-semibold text-[var(--color-accent)] whitespace-nowrap">Pinned:</span>
                   <div className="flex-1 overflow-hidden relative h-5">
                     {pinnedMessages.map((pm, idx) => (
-                      <span 
-                        key={pm.id} 
+                      <span
+                        key={pm.id}
                         className={`absolute left-0 top-0 w-full truncate transition-opacity duration-300 ${idx === currentPinnedIndex ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}
                       >
                         {pm.content || 'Media Message'}
@@ -817,25 +817,25 @@ export default function ChatPage() {
 
             {/* Input Form */}
             <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-[var(--color-border)] items-center pb-20 lg:pb-3">
-              <button 
-                type="button" 
-                onClick={() => fileInputRef.current?.click()} 
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
                 className="btn btn-secondary p-2.5 text-xl relative group focus:outline-none"
                 title="Attach image or document (Max 5MB)"
               >
                 📎
               </button>
-              <input 
-                type="file" 
-                className="hidden" 
-                ref={fileInputRef} 
+              <input
+                type="file"
+                className="hidden"
+                ref={fileInputRef}
                 accept="image/*,.pdf,.doc,.docx,.txt"
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
                   if (file.size > 5 * 1024 * 1024) return alert('File exceeds 5MB limit.');
                   setFileAttachment(file);
-                }} 
+                }}
               />
               <input
                 ref={inputRef}
@@ -867,12 +867,12 @@ export default function ChatPage() {
                 <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-3 text-sm text-[var(--color-text-secondary)] mb-4 saturate-50">
                    {forwardingMsg.content || '[Media]'}
                 </div>
-                <input 
-                  type="text" 
-                  placeholder="Search groups..." 
-                  value={forwardSearch} 
-                  onChange={(e) => setForwardSearch(e.target.value)} 
-                  className="w-full mb-3 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]" 
+                <input
+                  type="text"
+                  placeholder="Search groups..."
+                  value={forwardSearch}
+                  onChange={(e) => setForwardSearch(e.target.value)}
+                  className="w-full mb-3 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
                 <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                   {allGroups.filter(g => g.id !== groupId && (g.displayName || g.name || '').toLowerCase().includes(forwardSearch.toLowerCase())).length === 0 && (

@@ -99,10 +99,10 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
         <div className="p-5 space-y-5">
           {/* Avatar & Name */}
           <div className="text-center">
-            <Avatar 
-              src={profile.avatarUrl} 
-              name={profile.displayName} 
-              className="w-20 h-20 rounded-full mx-auto border-2 border-[var(--color-border)]" 
+            <Avatar
+              src={profile.avatarUrl}
+              name={profile.displayName}
+              className="w-20 h-20 rounded-full mx-auto border-2 border-[var(--color-border)]"
             />
             <h3 className="text-lg font-bold mt-3">{profile.displayName}</h3>
             {profile.username && (
@@ -215,7 +215,7 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
                   {actionLoading ? <span className="spinner" /> : '👋 Send Friend Request'}
                 </button>
               )}
-              
+
               <div className="pt-2 border-t border-[var(--color-border)]">
                 {showTransfer ? (
                   <div className="flex flex-col gap-2">
