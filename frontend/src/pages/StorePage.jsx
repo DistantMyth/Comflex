@@ -12,7 +12,7 @@ export default function StorePage() {
   const [allBadges, setAllBadges] = useState([]);
   const [ledger, setLedger] = useState({ balance: 0, transactions: [] });
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('store'); // store, membership, inventory, ledger, (admin)
+  const [activeTab, setActiveTab] = useState('store'); // store, inventory, ledger, (admin)
   const [pricingConfig, setPricingConfig] = useState(null);
   const [popup, setPopup] = useState({ show: false, message: '', isError: false });
 
@@ -30,22 +30,7 @@ export default function StorePage() {
   const [badgeImage, setBadgeImage] = useState(null);
   const [listingForm, setListingForm] = useState({ badgeId: '', price: 0, quantity: -1 });
   const [mintForm, setMintForm] = useState({ userId: '', amount: 100 });
-  const [membershipLoading, setMembershipLoading] = useState(false);
-
-  const handleBuyMembership = async (tier, duration) => {
-    try {
-      setMembershipLoading(true);
-      await storeApi.buyMembership({ tier, duration });
-      showPopup(`Successfully upgraded to ${tier.toUpperCase()} ${duration}!`);
-      refreshProfile();
-      fetchData();
-    } catch (err) {
-      console.error(err);
-      showPopup(err.response?.data?.error?.message || err.message || 'Membership purchase failed', true);
-    } finally {
-      setMembershipLoading(false);
-    }
-  };
+  const [creditsLoading, setCreditsLoading] = useState(false);
 
   const handleBuyCredits = async (amount, priceEth) => {
     try {
@@ -53,7 +38,7 @@ export default function StorePage() {
         showPopup('MetaMask is not installed!', true);
         return;
       }
-      setMembershipLoading(true);
+      setCreditsLoading(true);
       const provider = new ethers.BrowserProvider(window.ethereum);
       await provider.send("eth_requestAccounts", []);
       const signer = await provider.getSigner();
@@ -77,7 +62,7 @@ export default function StorePage() {
       console.error(err);
       showPopup(err.response?.data?.error?.message || err.message || 'Credit purchase failed', true);
     } finally {
-      setMembershipLoading(false);
+      setCreditsLoading(false);
     }
   };
 
@@ -88,7 +73,7 @@ export default function StorePage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      if (activeTab === 'store' || activeTab === 'admin') {
+      if (activeTab === 'store') {
         const res = await storeApi.getListings();
         setListings(res.data.data);
       }
@@ -104,7 +89,7 @@ export default function StorePage() {
         setLedger(res.data.data);
       }
       
-      if (activeTab === 'membership' || activeTab === 'admin') {
+      if (activeTab === 'store' || activeTab === 'admin') {
         const cRes = await storeApi.getStoreConfig();
         setPricingConfig(cRes.data.data);
       }
@@ -179,7 +164,7 @@ export default function StorePage() {
     e.preventDefault();
     if (!adminApi) return;
     try {
-      await adminApi.updateInstitution({ membershipConfig: pricingConfig });
+      await adminApi.updateInstitution({ creditConfig: pricingConfig });
       showPopup('Pricing configuration updated successfully!');
     } catch (err) {
        showPopup(err.response?.data?.error?.message || 'Update failed', true);
@@ -219,7 +204,6 @@ export default function StorePage() {
         {/* Tabs */}
         <div className="flex gap-4 mb-6 sticky top-0 bg-[var(--color-bg-primary)] z-10 py-2 overflow-x-auto">
           <button onClick={() => setActiveTab('store')} className={`btn whitespace-nowrap ${activeTab === 'store' ? 'btn-primary' : 'btn-secondary'}`}>Badges Store</button>
-          <button onClick={() => setActiveTab('membership')} className={`btn whitespace-nowrap bg-purple-600 text-white ${activeTab === 'membership' ? 'ring-2 ring-purple-400' : 'opacity-80'}`}>🌟 Memberships</button>
           <button onClick={() => setActiveTab('inventory')} className={`btn whitespace-nowrap ${activeTab === 'inventory' ? 'btn-primary' : 'btn-secondary'}`}>My Inventory</button>
           <button onClick={() => setActiveTab('ledger')} className={`btn whitespace-nowrap ${activeTab === 'ledger' ? 'btn-primary' : 'btn-secondary'}`}>Ledger History</button>
           {isAdmin && (
@@ -232,96 +216,40 @@ export default function StorePage() {
         ) : (
           <>
             {activeTab === 'store' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-                {listings.length === 0 ? <p className="text-[var(--color-text-muted)] col-span-3">No active listings.</p> : null}
-                {listings.map(l => (
-                  <div key={l.id} className="glass-card p-4 flex flex-col items-center hover:scale-105 transition-transform duration-300">
-                    <img src={resolveAsset(l.badge.imageUrl)} alt={l.badge.name} className="w-24 h-24 mb-4 object-cover drop-shadow-lg" />
-                    <h3 className="font-bold text-lg mb-1">{l.badge.name}</h3>
-                    <p className="text-xs text-[var(--color-text-muted)] text-center mb-4">{l.badge.description}</p>
-                    <div className="mt-auto flex w-full items-center justify-between">
-                      <span className="font-bold text-[var(--color-primary)]">🪙 {l.price}</span>
-                      <span className="text-xs text-[var(--color-text-muted)]">{l.quantity === -1 ? '∞' : `${l.quantity - l.sold} left`}</span>
-                    </div>
-                    <button 
-                      onClick={() => handlePurchase(l.id)} 
-                      disabled={(user?.globalRing !== 0 && user?.creditBalance < l.price) || (l.quantity !== -1 && l.sold >= l.quantity)}
-                      className="btn btn-primary w-full mt-4"
-                    >
-                      {l.quantity !== -1 && l.sold >= l.quantity ? 'Sold Out' : 'Buy Now'}
-                    </button>
+              <>
+                {/* Buy Credits Banner */}
+                <div className="glass-card p-6 border-2 border-yellow-400 bg-yellow-50/10 w-full max-w-4xl mx-auto text-center mb-6">
+                  <h3 className="text-xl font-bold mb-2 text-yellow-600">Need more Credits?</h3>
+                  <p className="text-sm text-[var(--color-text-muted)] mb-4">Exchange ETH for credits instantly entirely on-chain.</p>
+                  <div className="flex justify-center gap-4 flex-wrap">
+                    <button disabled={creditsLoading} onClick={() => handleBuyCredits(100, pricingConfig?.creditEthPrice?.['100'] || 0.01)} className="btn bg-yellow-100 text-yellow-800 hover:bg-yellow-200">100 Credits 🪙 ({pricingConfig?.creditEthPrice?.['100'] || 0.01} ETH) </button>
+                    <button disabled={creditsLoading} onClick={() => handleBuyCredits(500, pricingConfig?.creditEthPrice?.['500'] || 0.045)} className="btn bg-yellow-400 text-white hover:bg-yellow-500">500 Credits 🪙 ({pricingConfig?.creditEthPrice?.['500'] || 0.045} ETH) </button>
+                    <button disabled={creditsLoading} onClick={() => handleBuyCredits(2000, pricingConfig?.creditEthPrice?.['2000'] || 0.15)} className="btn bg-yellow-600 text-white hover:bg-yellow-700">2000 Credits 🪙 ({pricingConfig?.creditEthPrice?.['2000'] || 0.15} ETH) </button>
                   </div>
-                ))}
-              </div>
-            )}
+                </div>
 
-            {activeTab === 'membership' && (
-              <div className="flex flex-col items-center gap-8 fade-in">
-                 
-                 {/* Active Plan Banner */}
-                 {user?.subscriptionPlan && user?.subscriptionPlan !== 'free' && user?.subscriptionExpiry && new Date(user.subscriptionExpiry) > new Date() && (
-                   <div className={`glass-card p-4 border-2 w-full max-w-4xl text-center shadow-lg ${user.subscriptionPlan === 'ultra' ? 'border-purple-500 bg-purple-500/10' : 'border-blue-500 bg-blue-500/10'}`}>
-                     <h3 className="text-xl font-bold mb-1">
-                       Active Plan: <span className="uppercase">{user.subscriptionPlan}</span>
-                     </h3>
-                     <p className="text-sm font-semibold">
-                       Expires on: {new Date(user.subscriptionExpiry).toLocaleDateString()} at {new Date(user.subscriptionExpiry).toLocaleTimeString()}
-                     </p>
-                     
-                     {user.backupSubscriptionPlan && user.backupSubscriptionExpiry && (
-                       <p className="text-xs mt-2 italic text-[var(--color-text-muted)]">
-                         Your previous {user.backupSubscriptionPlan.toUpperCase()} plan will automatically resume afterwards.
-                       </p>
-                     )}
-                   </div>
-                 )}
-
-                 {/* Buy Credits Banner */}
-                 <div className="glass-card p-6 border-2 border-yellow-400 bg-yellow-50/10 w-full max-w-4xl text-center">
-                   <h3 className="text-xl font-bold mb-2 text-yellow-600">Need more Credits?</h3>
-                   <p className="text-sm text-[var(--color-text-muted)] mb-4">Exchange ETH for credits instantly entirely on-chain.</p>
-                   <div className="flex justify-center gap-4 flex-wrap">
-                      <button disabled={membershipLoading} onClick={() => handleBuyCredits(100, pricingConfig?.creditEthPrice?.['100'] || 0.01)} className="btn bg-yellow-100 text-yellow-800 hover:bg-yellow-200">100 Credits 🪙 ({pricingConfig?.creditEthPrice?.['100'] || 0.01} ETH) </button>
-                      <button disabled={membershipLoading} onClick={() => handleBuyCredits(500, pricingConfig?.creditEthPrice?.['500'] || 0.045)} className="btn bg-yellow-400 text-white hover:bg-yellow-500">500 Credits 🪙 ({pricingConfig?.creditEthPrice?.['500'] || 0.045} ETH) </button>
-                      <button disabled={membershipLoading} onClick={() => handleBuyCredits(2000, pricingConfig?.creditEthPrice?.['2000'] || 0.15)} className="btn bg-yellow-600 text-white hover:bg-yellow-700">2000 Credits 🪙 ({pricingConfig?.creditEthPrice?.['2000'] || 0.15} ETH) </button>
-                   </div>
-                 </div>
-
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl mx-auto">
-                   <div className="glass-card p-6 flex flex-col border-2 border-[var(--color-border)] hover:border-blue-400 transition">
-                     <h3 className="text-2xl font-bold mb-2">Pro Plan</h3>
-                     <p className="text-[var(--color-text-muted)] flex-1 text-sm mb-6 pb-4 border-b">Great for regular students. Access more notes and unlimited AI chats.</p>
-                     <ul className="mb-6 space-y-2 text-sm">
-                       <li>✅ 5 Uploads daily</li>
-                       <li>✅ Unlimited Chats</li>
-                       <li>✅ Select from 500MB+ notes</li>
-                     </ul>
-                     <div className="space-y-3 mt-auto">
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('pro', 'weekly')} className="w-full btn bg-blue-100 text-blue-800 hover:bg-blue-200">Weekly - {pricingConfig?.proWeekly || 50} 🪙</button>
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('pro', 'monthly')} className="w-full btn btn-primary">Monthly - {pricingConfig?.proMonthly || 150} 🪙</button>
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('pro', 'yearly')} className="w-full btn bg-green-100 text-green-800 hover:bg-green-200">Yearly - {pricingConfig?.proYearly || 1500} 🪙</button>
-                     </div>
-                   </div>
-
-                   <div className="glass-card p-6 flex flex-col border-2 border-purple-500 shadow-purple-500/20 shadow-xl relative overflow-hidden">
-                     <div className="absolute top-4 right-[-30px] bg-purple-500 text-white font-bold text-xs py-1 px-10 rotate-45">BEST</div>
-                     <h3 className="text-2xl font-bold mb-2 text-purple-600">Ultra Plan</h3>
-                     <p className="text-[var(--color-text-muted)] flex-1 text-sm mb-6 pb-4 border-b">The ultimate study companion. Upload local files directly.</p>
-                     <ul className="mb-6 space-y-2 text-sm font-semibold text-[var(--color-text-secondary)]">
-                       <li>✅ 10 Uploads daily</li>
-                       <li>✅ Upload from Local Device</li>
-                       <li>✅ Unlimited Chats</li>
-                       <li>✅ Priority Gemini Model API</li>
-                       <li>✅ 2GB+ Storage Limit</li>
-                     </ul>
-                     <div className="space-y-3 mt-auto">
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('ultra', 'weekly')} className="w-full btn bg-purple-100 hover:bg-purple-200 text-purple-800">Weekly - {pricingConfig?.ultraWeekly || 100} 🪙</button>
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('ultra', 'monthly')} className="w-full btn bg-purple-600 text-white hover:bg-purple-700">Monthly - {pricingConfig?.ultraMonthly || 300} 🪙</button>
-                       <button disabled={membershipLoading} onClick={() => handleBuyMembership('ultra', 'yearly')} className="w-full btn bg-yellow-100 text-yellow-800 hover:bg-yellow-200 border border-yellow-300">Yearly - {pricingConfig?.ultraYearly || 3000} 🪙</button>
-                     </div>
-                   </div>
-                 </div>
-              </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+                  {listings.length === 0 ? <p className="text-[var(--color-text-muted)] col-span-3">No active listings.</p> : null}
+                  {listings.map(l => (
+                    <div key={l.id} className="glass-card p-4 flex flex-col items-center hover:scale-105 transition-transform duration-300">
+                      <img src={resolveAsset(l.badge.imageUrl)} alt={l.badge.name} className="w-24 h-24 mb-4 object-cover drop-shadow-lg" />
+                      <h3 className="font-bold text-lg mb-1">{l.badge.name}</h3>
+                      <p className="text-xs text-[var(--color-text-muted)] text-center mb-4">{l.badge.description}</p>
+                      <div className="mt-auto flex w-full items-center justify-between">
+                        <span className="font-bold text-[var(--color-primary)]">🪙 {l.price}</span>
+                        <span className="text-xs text-[var(--color-text-muted)]">{l.quantity === -1 ? '∞' : `${l.quantity - l.sold} left`}</span>
+                      </div>
+                      <button 
+                        onClick={() => handlePurchase(l.id)} 
+                        disabled={(user?.globalRing !== 0 && user?.creditBalance < l.price) || (l.quantity !== -1 && l.sold >= l.quantity)}
+                        className="btn btn-primary w-full mt-4"
+                      >
+                        {l.quantity !== -1 && l.sold >= l.quantity ? 'Sold Out' : 'Buy Now'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
 
             {activeTab === 'inventory' && (
@@ -428,16 +356,6 @@ export default function StorePage() {
                     <h2 className="text-xl font-bold mb-4 border-t pt-4">Dynamic Store Pricing</h2>
                     {pricingConfig && (
                       <form onSubmit={handleUpdateConfig} className="grid grid-cols-2 gap-4 text-sm">
-                        
-                        <div className="col-span-2 font-bold mt-2 border-b">Pro Pricing (🪙)</div>
-                        <label className="flex flex-col">Weekly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.proWeekly || ''} onChange={e => setPricingConfig({...pricingConfig, proWeekly: parseInt(e.target.value)})} /></label>
-                        <label className="flex flex-col">Monthly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.proMonthly || ''} onChange={e => setPricingConfig({...pricingConfig, proMonthly: parseInt(e.target.value)})} /></label>
-                        <label className="flex flex-col">Yearly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.proYearly || ''} onChange={e => setPricingConfig({...pricingConfig, proYearly: parseInt(e.target.value)})} /></label>
-                        
-                        <div className="col-span-2 font-bold mt-2 border-b">Ultra Pricing (🪙)</div>
-                        <label className="flex flex-col">Weekly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.ultraWeekly || ''} onChange={e => setPricingConfig({...pricingConfig, ultraWeekly: parseInt(e.target.value)})} /></label>
-                        <label className="flex flex-col">Monthly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.ultraMonthly || ''} onChange={e => setPricingConfig({...pricingConfig, ultraMonthly: parseInt(e.target.value)})} /></label>
-                        <label className="flex flex-col">Yearly <input type="number" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.ultraYearly || ''} onChange={e => setPricingConfig({...pricingConfig, ultraYearly: parseInt(e.target.value)})} /></label>
                         
                         <div className="col-span-2 font-bold mt-2 border-b">Credit Currency Rates (ETH)</div>
                         <label className="flex flex-col">100 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['100'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '100': parseFloat(e.target.value)}})} /></label>

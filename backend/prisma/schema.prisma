@@ -28,10 +28,6 @@ model User {
   cfHandle       String?
   cfRating       Int?
   creditBalance  Int      @default(0)
-  subscriptionPlan   String?  @default("free") // "free", "pro", "ultra"
-  subscriptionExpiry DateTime?
-  backupSubscriptionPlan   String?
-  backupSubscriptionExpiry DateTime?
   chatbotStorageUsed Int?     @default(0) // in bytes
   dailyUploadCount   Int?     @default(0)
   lastUploadDate     DateTime? @default(now())
@@ -110,7 +106,7 @@ model InstitutionConfig {
   defaultCredits    Int      @default(1000)  // Credits given to new users on registration
   notesDownloadReward Int    @default(0)     // Credits awarded per resource download
   emailParsingRules Json?    // { pattern, captureGroup, branchCaptureGroup?, branchMapping?, yearOffset }
-  membershipConfig  Json?    // { proWeekly: 0.005, proMonthly: 0.015, proYearly: 0.15, ultraWeekly: 0.01, ultraMonthly: 0.03, ultraYearly: 0.3 }
+  creditConfig      Json?    // { creditEthPrice: { 100: 0.01, 500: 0.045, 2000: 0.15 } }
   cohortConfig      Json?    // { seniorOffset: -1, juniorOffset: +1, seniorAutoElevate: true }
   autoJoinRules     Json?    // [{ matchField: "year"|"branch"|"both", matchValue: "28", groupId: "..." }]
   createdAt         DateTime @default(now())
@@ -598,8 +594,6 @@ model Transaction {
   type        String   // "transfer", "download_reward", "event_reward", "purchase", "admin_mint", "crypto_purchase"
   referenceId String?  // e.g. Resource ID, Event ID, Chat Message ID
   cryptoAmount String? // String to prevent precision loss for ETH
-  tier         String?
-  duration     String?
   createdAt   DateTime @default(now())
 
   sender      User?    @relation("Sender", fields: [senderId], references: [id])

@@ -22,7 +22,6 @@ export const storeApi = {
   adminCreateListing: (data) => api.post('/store/admin/listings', data),
   mintCredits: (userId, amount) => api.post('/store/admin/mint-credits', { userId, amount }),
 
-  // Memberships & Crypto
-  buyMembership: (data) => api.post('/store/buy-membership', data),
+  // Crypto
   buyCredits: (data) => api.post('/store/buy-credits', data)
 };

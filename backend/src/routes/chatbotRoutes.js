@@ -50,7 +50,6 @@ async function checkAndResetDailyLimits(req, res, next) {
   }
   
   // Apply null safety for old users
-  user.subscriptionPlan = user.subscriptionPlan || 'free';
   user.chatbotStorageUsed = user.chatbotStorageUsed || 0;
   user.dailyUploadCount = user.dailyUploadCount || 0;
   user.dailyChatTokens = user.dailyChatTokens ?? 20;
@@ -59,11 +58,7 @@ async function checkAndResetDailyLimits(req, res, next) {
   next();
 }
 
-const TIER_LIMITS = {
-  free: { uploads: 2, storage: 50 * 1024 * 1024 }, // 50MB total
-  pro: { uploads: 5, storage: 500 * 1024 * 1024 }, // 500MB
-  ultra: { uploads: 10, storage: 2 * 1024 * 1024 * 1024 } // 2GB
-};
+const FREE_LIMITS = { uploads: 2, storage: 50 * 1024 * 1024 }; // 50MB total
 
 // text/html and image/svg+xml are deliberately excluded — they can carry
 // active content and are served from the same origin via /uploads.
@@ -92,27 +87,22 @@ router.get('/', async (req, res, next) => {
 // GET user limits
 router.get('/limits', checkAndResetDailyLimits, (req, res) => {
   const user = req.dbUser;
-  const T = TIER_LIMITS[user.subscriptionPlan] || TIER_LIMITS.free;
   return success(res, {
-    plan: user.subscriptionPlan,
     dailyUploadCount: user.dailyUploadCount,
-    maxUploads: T.uploads,
+    maxUploads: FREE_LIMITS.uploads,
     dailyChatTokens: user.dailyChatTokens,
     storageUsed: user.chatbotStorageUsed,
-    maxStorage: T.storage
+    maxStorage: FREE_LIMITS.storage
   });
 });
 
-// POST upload local file (ULTRA ONLY)
+// POST upload local file
 router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), async (req, res, next) => {
   try {
     const user = req.dbUser;
-    if (user.subscriptionPlan !== 'ultra') {
-      return error(res, 'FORBIDDEN', 'Local uploads are locked to the Ultra plan. Please upgrade.', 403);
-    }
     if (!req.file) return error(res, 'VALIDATION', 'No file uploaded', 400);
 
-    const limit = TIER_LIMITS.ultra;
+    const limit = FREE_LIMITS;
     if (user.dailyUploadCount >= limit.uploads) {
       return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit reached.', 429);
     }
@@ -167,17 +157,17 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
   }
 });
 
-// POST upload from resource (FREE, PRO, ULTRA)
+// POST upload from resource
 router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').notEmpty(), async (req, res, next) => {
   try {
     const errs = validationResult(req);
     if (!errs.isEmpty() || !ID_RE.test(req.body.resourceId)) return error(res, 'VALIDATION', 'Invalid resourceId', 400);
 
     const user = req.dbUser;
-    const limit = TIER_LIMITS[user.subscriptionPlan] || TIER_LIMITS.free;
+    const limit = FREE_LIMITS;
 
     if (user.dailyUploadCount >= limit.uploads) {
-      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit reached for your plan.', 429);
+      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit reached.', 429);
     }
 
     const resource = await prisma.resource.findUnique({ where: { id: req.body.resourceId } });
@@ -272,8 +262,8 @@ router.post('/chat', rateLimiter({
     if (!errs.isEmpty() || !ID_RE.test(req.body.noteId)) return error(res, 'VALIDATION', 'Invalid data', 400);
 
     const user = req.dbUser;
-    if (user.subscriptionPlan === 'free' && user.dailyChatTokens <= 0) {
-      return error(res, 'LIMIT_EXCEEDED', 'You are out of free chat tokens today. Please upgrade.', 403);
+    if (user.dailyChatTokens <= 0) {
+      return error(res, 'LIMIT_EXCEEDED', 'You are out of chat tokens today. Please try again tomorrow.', 403);
     }
 
     const note = await prisma.chatbotNote.findFirst({
@@ -283,14 +273,12 @@ router.post('/chat', rateLimiter({
 
     const answer = await chatWithContext({ fileUri: note.geminiFileUri, mimeType: note.mimetype }, req.body.query);
 
-    if (user.subscriptionPlan === 'free') {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { dailyChatTokens: { decrement: 1 } }
-      });
-    }
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { dailyChatTokens: { decrement: 1 } }
+    });
 
-    return success(res, { answer, remainingTokens: user.subscriptionPlan === 'free' ? user.dailyChatTokens - 1 : 'unlimited' });
+    return success(res, { answer, remainingTokens: user.dailyChatTokens - 1 });
   } catch (err) {
     next(err);
   }

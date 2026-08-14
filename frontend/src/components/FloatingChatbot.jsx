@@ -53,10 +53,6 @@ export default function FloatingChatbot() {
   const handleLocalUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (limits?.plan !== 'ultra') {
-      setAlertInfo({ type: 'alert', message: 'Local uploads are only available on the Ultra plan.' });
-      return;
-    }
     const formData = new FormData();
     formData.append('file', file);
     setLoading(true);
@@ -101,7 +97,7 @@ export default function FloatingChatbot() {
       if (selectedNoteId === id) setSelectedNoteId(null);
       fetchLimits();
       fetchNotes();
-    } catch (err) {
+    } catch {
       setAlertInfo({ type: 'alert', message: 'Delete failed' });
     }
   };
@@ -115,9 +111,7 @@ export default function FloatingChatbot() {
     try {
       const res = await api.post('/chatbot/chat', { noteId: selectedNoteId, query: userMsg.text }, { timeout: 120000 });
       setMessages((prev) => [...prev, { role: 'bot', text: res.data.data.answer }]);
-      if (limits?.plan === 'free') {
-        setLimits((prev) => ({ ...prev, dailyChatTokens: res.data.data.remainingTokens }));
-      }
+      setLimits((prev) => ({ ...prev, dailyChatTokens: res.data.data.remainingTokens }));
     } catch (err) {
       const msg = err.response?.data?.error?.message || err.response?.data?.error || 'Error contacting AI.';
       setMessages((prev) => [...prev, { role: 'bot', text: typeof msg === 'object' ? JSON.stringify(msg) : msg }]);
@@ -159,8 +153,7 @@ export default function FloatingChatbot() {
             <h3 className="font-bold leading-none">Notes AI</h3>
             {limits && (
               <p className="text-xs text-white/75 mt-1">
-                Plan: <span className="uppercase font-semibold">{limits.plan}</span>
-                {limits.plan === 'free' && ` · Tokens: ${limits.dailyChatTokens}`}
+                Tokens: {limits.dailyChatTokens}
               </p>
             )}
           </div>
@@ -196,12 +189,10 @@ export default function FloatingChatbot() {
         >
           <UploadCloud size={14} />
         </button>
-        {limits?.plan === 'ultra' && (
-          <label className="p-1.5 rounded-lg bg-[var(--color-accent)]/10 text-[var(--color-accent)] border border-[var(--color-accent)]/25 cursor-pointer disabled:opacity-50 flex items-center shrink-0">
-            <Paperclip size={14} />
-            <input type="file" className="hidden" accept=".pdf,.txt,.csv,.md" onChange={handleLocalUpload} />
-          </label>
-        )}
+        <label className="p-1.5 rounded-lg bg-[var(--color-accent)]/10 text-[var(--color-accent)] border border-[var(--color-accent)]/25 cursor-pointer disabled:opacity-50 flex items-center shrink-0">
+          <Paperclip size={14} />
+          <input type="file" className="hidden" accept=".pdf,.txt,.csv,.md" onChange={handleLocalUpload} />
+        </label>
       </div>
 
       {/* Chat Area */}

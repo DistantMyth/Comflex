@@ -123,11 +123,9 @@ router.get('/config', async (req, res, next) => {
   try {
     const config = await prisma.institutionConfig.findFirst();
     const defaults = {
-      proWeekly: 50, proMonthly: 150, proYearly: 1500,
-      ultraWeekly: 100, ultraMonthly: 300, ultraYearly: 3000,
       creditEthPrice: { 100: 0.01, 500: 0.045, 2000: 0.15 }
     };
-    return success(res, config?.membershipConfig || defaults);
+    return success(res, config?.creditConfig || defaults);
   } catch (err) {
     next(err);
   }
@@ -348,142 +346,8 @@ router.post('/display-badges', [
 });
 
 // ==========================================
-// LEDGER & CREDITS & MEMBERSHIPS
+// LEDGER & CREDITS
 // ==========================================
-
-const { syncMembership } = require('../utils/membershipSync');
-
-// Purchase Membership (Using Credits)
-router.post('/buy-membership', [
-  body('tier').isIn(['pro', 'ultra']),
-  body('duration').isIn(['weekly', 'monthly', 'yearly'])
-], async (req, res, next) => {
-  try {
-    const errs = validationResult(req);
-    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
-
-    const { tier, duration } = req.body;
-    let user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    
-    // Sync membership states before continuing logic
-    user = await syncMembership(user);
-
-    // DURATION & TIER WEIGHT CONSTANTS
-    const TIER_WEIGHT = { free: 0, pro: 1, ultra: 2 };
-    const DUR_WEIGHT = { weekly: 1, monthly: 2, yearly: 3 };
-
-    // --- RULE 2: Downgrade Lock on Tiers ---
-    // If the user currently has an active plan that is HIGHER than the requested plan, block it.
-    if (user.subscriptionPlan && user.subscriptionExpiry && user.subscriptionExpiry > new Date()) {
-      const curTierWeight = TIER_WEIGHT[user.subscriptionPlan] || 0;
-      const newTierWeight = TIER_WEIGHT[tier] || 0;
-
-      if (curTierWeight > newTierWeight) {
-         return error(res, 'VALIDATION', `You cannot buy a ${tier.toUpperCase()} plan while your ${user.subscriptionPlan.toUpperCase()} plan is still active.`, 403);
-      }
-
-      // --- RULE 1: Duration Lock (Same Tier) ---
-      // If it's the exact same tier, we cannot downgrade the *duration*.
-      // We check their latest purchase transaction to find their active duration.
-      if (curTierWeight === newTierWeight) {
-        const lastTx = await prisma.transaction.findFirst({
-          where: { receiverId: user.id, type: 'purchase', tier: user.subscriptionPlan },
-          orderBy: { createdAt: 'desc' }
-        });
-
-        if (lastTx && lastTx.duration) {
-          const curDurWeight = DUR_WEIGHT[lastTx.duration] || 0;
-          const newDurWeight = DUR_WEIGHT[duration] || 0;
-
-          if (curDurWeight >= newDurWeight) {
-             return error(res, 'VALIDATION', `You already have an active ${lastTx.duration.toUpperCase()} plan. You cannot buy the same or lower duration until it expires.`, 403);
-          }
-        }
-      }
-    }
-
-    // Dynamic Price Matrix
-    const config = await prisma.institutionConfig.findFirst();
-    const mConfig = config?.membershipConfig || {
-      proWeekly: 50, proMonthly: 150, proYearly: 1500,
-      ultraWeekly: 100, ultraMonthly: 300, ultraYearly: 3000
-    };
-    
-    // Format key matching config structure: proWeekly, ultraMonthly
-    const priceKey = `${tier}${duration.charAt(0).toUpperCase() + duration.slice(1)}`;
-    const cost = parseInt(mConfig[priceKey], 10);
-    
-    if (isNaN(cost)) {
-      return error(res, 'SERVER_ERROR', 'Membership pricing configuration error.', 500);
-    }
-
-    if (user.globalRing !== 0 && user.creditBalance < cost) {
-      return error(res, 'VALIDATION', `Insufficient balance. Requires ${cost} credits.`, 400);
-    }
-
-    const now = new Date();
-    let expiryDate = new Date(now);
-    
-    // If extending the EXACT same plan and duration, append to the current expiry date
-    if (user.subscriptionPlan === tier && user.subscriptionExpiry && user.subscriptionExpiry > now) {
-       expiryDate = new Date(user.subscriptionExpiry);
-    }
-
-    if (duration === 'weekly') expiryDate.setDate(expiryDate.getDate() + 7);
-    if (duration === 'monthly') expiryDate.setMonth(expiryDate.getMonth() + 1);
-    if (duration === 'yearly') expiryDate.setFullYear(expiryDate.getFullYear() + 1);
-
-    // --- RULE 3: Temporary Upgrade Overlap (Stacking) ---
-    let newBackupPlan = user.backupSubscriptionPlan;
-    let newBackupExpiry = user.backupSubscriptionExpiry;
-    
-    // If upgrading to a HIGHER tier (e.g. Pro -> Ultra) while their current is valid
-    if (
-        user.subscriptionPlan && 
-        user.subscriptionPlan !== 'free' && 
-        user.subscriptionPlan !== tier && 
-        user.subscriptionExpiry > now
-    ) {
-       // Save their current active lower tier in the background!
-       newBackupPlan = user.subscriptionPlan;
-       newBackupExpiry = user.subscriptionExpiry;
-    }
-
-    await prisma.$transaction(async (ptx) => {
-      const updatePayload = {
-        subscriptionPlan: tier,
-        subscriptionExpiry: expiryDate,
-        backupSubscriptionPlan: newBackupPlan,
-        backupSubscriptionExpiry: newBackupExpiry
-      };
-
-      if (user.globalRing !== 0) {
-        updatePayload.creditBalance = { decrement: cost };
-      }
-
-      await ptx.user.update({
-        where: { id: req.user.id },
-        data: updatePayload
-      });
-
-      await ptx.transaction.create({
-        data: {
-          senderId: req.user.id,
-          receiverId: req.user.id,
-          amount: cost,
-          type: 'purchase',
-          referenceId: `membership_${req.user.id}_${tier}_${duration}`,
-          tier,
-          duration
-        }
-      });
-    });
-
-    return success(res, { message: 'Membership active!', tier, expiryDate });
-  } catch (err) {
-    next(err);
-  }
-});
 
 // Buy Credits (Crypto)
 router.post('/buy-credits', [
@@ -508,7 +372,7 @@ router.post('/buy-credits', [
 
     // Verify against dynamic pricing config
     const config = await prisma.institutionConfig.findFirst();
-    const creditEthPrice = config?.membershipConfig?.creditEthPrice || {
+    const creditEthPrice = config?.creditConfig?.creditEthPrice || {
       100: 0.01, 500: 0.045, 2000: 0.15
     };
 
