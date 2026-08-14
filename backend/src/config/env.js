@@ -53,10 +53,10 @@ const env = {
 
   // Cloudinary (optional locally, required on Render/Vercel)
   // Files uploaded here survive restarts, unlike Render's ephemeral /tmp.
-  CLOUDINARY_URL: process.env.CLOUDINARY_URL || '',
-  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '',
-  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || '',
-  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || '',
+  CLOUDINARY_URL: (process.env.CLOUDINARY_URL || '').trim(),
+  CLOUDINARY_CLOUD_NAME: (process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '').trim(),
+  CLOUDINARY_API_KEY: (process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || '').trim(),
+  CLOUDINARY_API_SECRET: (process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || '').trim(),
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
