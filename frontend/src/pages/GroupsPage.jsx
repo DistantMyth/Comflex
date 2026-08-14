@@ -10,7 +10,7 @@ import { groupApi } from '../api/groupApi';
 import { adminApi } from '../api/adminApi';
 import { setAnonSession } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
-import { Mail, MessagesSquare, Users, KeyRound } from 'lucide-react';
+import { Mail, MessagesSquare, Users, KeyRound, Trash2 } from 'lucide-react';
 import CreateGroupModal from '../components/CreateGroupModal';
 import CreateCohortGroupModal from '../components/CreateCohortGroupModal';
 import BackupKeyModal from '../components/BackupKeyModal';
@@ -111,6 +111,21 @@ export default function GroupsPage() {
     });
     setPendingAnon(null);
     fetchData();
+  };
+
+  const canDeleteGroup = (group) => isAdmin || group.creatorId === user?.id;
+
+  const handleDeleteGroup = async (e, group) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const name = group.displayName || group.name;
+    if (!confirm(`Delete "${name}" permanently? This cannot be undone.`)) return;
+    try {
+      await groupApi.deleteGroup(group.id);
+      setGroups(prev => prev.filter(g => g.id !== group.id));
+    } catch (err) {
+      alert(err.response?.data?.error?.message || 'Failed to delete group.');
+    }
   };
 
   return (
@@ -275,10 +290,25 @@ export default function GroupsPage() {
                   <span className="px-2.5 py-1 rounded-full text-xs text-white bg-[var(--color-accent)]">
                     Admin
                   </span>
+                ) : group.isAnonymous ? (
+                  <span className="px-2.5 py-1 rounded-full text-xs bg-[var(--color-bg-secondary)] border border-[var(--color-accent)] text-[var(--color-accent)]">
+                    {group.myIdentity?.alias ? `Anon · ${group.myIdentity.alias}` : 'Anonymous'}
+                  </span>
                 ) : (
-                  <span className={`px-2.5 py-1 rounded-full text-xs text-white ring-badge-${Math.min(group.userRing, 3)}`}>
+                  <span className={`px-2.5 py-1 rounded-full text-xs text-white ring-badge-${Math.min(group.userRing ?? 3, 3)}`}>
                     Ring {group.userRing}
                   </span>
+                )}
+
+                {/* Delete group (creator or admin) */}
+                {canDeleteGroup(group) && (
+                  <button
+                    onClick={(e) => handleDeleteGroup(e, group)}
+                    title="Delete group"
+                    className="p-2 rounded-lg text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 )}
               </Link>
             ))}

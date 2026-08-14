@@ -185,6 +185,30 @@ async function listUserGroups(userId, anonSessions = []) {
     });
   }
 
+  // Anonymous groups the user created. The creator isn't stored as an identity
+  // (they have not claimed an alias yet) and has no GroupMember row, so it
+  // would otherwise never surface in the list. It appears so the creator can
+  // reopen the group and claim their identity.
+  const createdAnon = await prisma.cohortGroup.findMany({
+    where: { creatorId: userId, isAnonymous: true },
+    include: { _count: { select: { anonIdentities: true } } },
+  });
+  for (const group of createdAnon) {
+    // The creator does not explicitly de-anonymise; they may hold a session
+    // via AnonGroupJoin or an active identity, so dedupe broadly.
+    if (groups.some(g => g.id === group.id)) continue;
+    groups.push({
+      ...sanitizeGroup(group),
+      memberCount: group._count.anonIdentities || 0,
+      isAnonymous: true,
+      userRing: null,
+      userPermissions: null,
+      unreadCount: 0,
+      myIdentity: null,
+      needsKeyRestore: false,
+    });
+  }
+
   return groups;
 }
 
