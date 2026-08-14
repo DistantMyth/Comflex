@@ -59,7 +59,7 @@ function getCloudinary() {
  * @param {string} [opts.publicId] - optional Cloudinary public id
  * @returns {Promise<string>} absolute Cloudinary URL or relative local path
  */
-async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads', publicId } = {}) {
+async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads', publicId, allowDataUri = true } = {}) {
   if (!file) return null;
 
   const cld = getCloudinary();
@@ -77,11 +77,29 @@ async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads'
       try { fs.unlinkSync(file.path); } catch { /* ignore */ }
       return result.secure_url;
     } catch (err) {
-      console.error('[fileStorage] Cloudinary upload failed — falling back to local disk:', err.message);
+      console.error('[fileStorage] Cloudinary upload failed — falling back to persistent storage:', err.message);
     }
   }
 
-  // Local fallback (development) — frontend resolveAsset() adds the origin.
+  // Render (free tier) wipes /tmp and local disk on restarts/deploys.
+  // For images under 2.5MB (avatars, badges, group icons), convert to a Data URI
+  // so it persists safely in MongoDB Atlas even if Cloudinary is not configured.
+  if (allowDataUri && file.path && fs.existsSync(file.path)) {
+    const isImage = file.mimetype?.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif)$/i.test(file.filename || file.originalname || '');
+    if (isImage && file.size <= 2.5 * 1024 * 1024) {
+      try {
+        const buffer = fs.readFileSync(file.path);
+        const mime = file.mimetype || 'image/jpeg';
+        const dataUri = `data:${mime};base64,${buffer.toString('base64')}`;
+        try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+        return dataUri;
+      } catch (err) {
+        console.error('[fileStorage] Failed to create data URI fallback:', err.message);
+      }
+    }
+  }
+
+  // Local fallback (development / large files) — frontend resolveAsset() adds the origin.
   return `${localUrlPrefix}/${file.filename}`;
 }
 
