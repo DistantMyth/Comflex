@@ -26,40 +26,48 @@ import { useGoogleOAuth } from '@react-oauth/google';
 import { Loader2 } from 'lucide-react';
 import { GOOGLE_REDIRECT_PATH } from '../pages/GoogleAuthRedirectPage';
 
-// Reasons for which retrying without FedCM is worth it. Everything else
-// (invalid_client, unregistered_origin, ...) is an OAuth config problem
-// that a popup attempt won't fix either.
-const FEDCM_FALLBACK_REASONS = [
-  'opt_out_or_no_session',
-  'browser_not_supported',
+// Reasons that point at the OAuth client config (not the browser) being
+// broken — retrying a different flow would fail identically.
+const CONFIG_FAIL_REASONS = [
+  'invalid_client',
+  'missing_client_id',
+  'unregistered_origin',
   'secure_http_required',
-  'suppressed_by_user',
-  'unknown_reason',
 ];
 
-// When both attempts fail with one of these, the browser simply can't run
-// an embedded Google flow — switch to the full-page redirect instead.
-const REDIRECT_FALLBACK_REASONS = [
-  'opt_out_or_no_session',
-  'browser_not_supported',
-  'suppressed_by_user',
-  'unknown_reason',
-];
-
-// Reasons where _we_ can't fix anything — the user dismissed the flow.
-const QUIET_REASONS = ['user_cancel', 'suppressed_by_user'];
+// The only reason we treat as "the user walked away" — everything else
+// (suppressed_by_user, opt_out_or_no_session, browser_not_supported, ...)
+// means the browser refused to show the embedded flow, and we should try
+// the next flow instead of bailing out.
+const USER_CANCELLED_REASON = 'user_cancel';
 
 function guidanceFor(reason, origin) {
-  if (reason === 'opt_out_or_no_session') {
-    return "Google Sign-In couldn't open a window — your browser is set to not show it. Make sure you're signed in to Google in this browser, Chrome's \"Sign in with Google\" isn't turned off (Google Account \u2192 Security \u2192 Signing in to other sites), and third-party cookies are allowed for this site. Then try again.";
+  if (reason === 'invalid_client' || reason === 'missing_client_id') {
+    return 'Google Sign-In is misconfigured (invalid client id). Check that GOOGLE_CLIENT_ID in the backend and frontend environment matches the OAuth client.';
   }
   if (reason === 'secure_http_required') {
     return 'Google Sign-In requires a secure origin. Open the site over HTTPS and try again.';
   }
-  if (reason === 'browser_not_supported' || reason === 'unknown_reason') {
-    return `Google Sign-In couldn't open (${reason}). Try again, or use a different browser.`;
-  }
-  return `Google Sign-In couldn't open (${reason}). Make sure the origin "${origin}" is listed in the OAuth client's Authorized JavaScript origins (Google Cloud Console \u2192 APIs & Services \u2192 Credentials) — and the product origin (https://comflex.vercel.app) plus http://localhost:5173 for local dev — then try again.`;
+  return `Google Sign-In couldn't run here (${reason}). Make sure "${origin}" is in the OAuth client's Authorized JavaScript origins and "${origin}/google-auth" is in its Authorized redirect URIs (Google Cloud Console \u2192 APIs & Services \u2192 Credentials). Then try again.`;
+}
+
+// The full-page redirect flow needs no cookie/FedCM support at all, so we
+// drive it with a plain top-level URL rather than gis.prompt() — a direct
+// navigation the browser cannot silently swallow. The ID token lands on
+// `/google-auth#id_token=...`, which GoogleAuthRedirectPage hands to
+// googleLogin().
+function buildRedirectUrl(clientId, origin) {
+  if (!clientId || !origin) return '';
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: `${origin}${GOOGLE_REDIRECT_PATH}`,
+    response_type: 'id_token',
+    scope: 'openid email profile',
+    ux_mode: 'redirect',
+    origin,
+    prompt: 'select_account',
+  });
+  return `https://accounts.google.com/gsi/auth?${params.toString()}`;
 }
 
 const GoogleGLogo = ({ size = 18 }) => (
@@ -112,6 +120,12 @@ export default function GoogleSignInButton({
 
   const notReady = !scriptLoadedSuccessfully || !window.google?.accounts?.id;
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+
+  const redirectUrl = useMemo(() => buildRedirectUrl(clientId, origin), [clientId, origin]);
+
+  const goRedirect = () => {
+    if (redirectUrl) window.location.assign(redirectUrl);
+  };
 
   const fire = useMemo(() => (fn, arg) => {
     if (typeof fn === 'function') fn(arg);
@@ -182,26 +196,6 @@ export default function GoogleSignInButton({
       }, 30 * 1000);
     });
 
-  /**
-   * Full-page redirect flow — works in every browser regardless of
-   * cookie/FedCM settings because it's a plain top-level navigation.
-   * The ID token comes back on the `/google-auth` route and is handed to
-   * the same googleLogin() endpoint. Requires `<origin>/google-auth` to be
-   * registered as an Authorized redirect URI for the OAuth client.
-   */
-  const startRedirectFlow = () => {
-    const gis = window.google?.accounts?.id;
-    if (!gis || !clientId) return;
-    gis.cancel?.();
-    gis.initialize({
-      client_id: clientId,
-      callback: () => {}, // unused in redirect mode — token arrives on the redirect URI
-      ux_mode: 'redirect',
-      redirect_uri: `${origin}${GOOGLE_REDIRECT_PATH}`,
-    });
-    gis.prompt(); // navigates the whole page to accounts.google.com
-  };
-
   const handleClick = async () => {
     if (pendingRef.current) return;
     if (notReady) {
@@ -216,22 +210,22 @@ export default function GoogleSignInButton({
     try {
       // 1. FedCM first — shows a native dialog, works with 3P cookies blocked.
       let result = await attemptPrompt(true);
-      // 2. Classic popup fallback when FedCM can't run.
-      if (result.kind === 'failed' && FEDCM_FALLBACK_REASONS.includes(result.reason)) {
+      // 2. Classic popup fallback whenever FedCM was refused (suppressed_by_user,
+      //    opt_out_or_no_session, ...). Only a genuine user dismissal stops here.
+      if (result.kind === 'failed' && result.reason !== USER_CANCELLED_REASON) {
         result = await attemptPrompt(false);
       }
 
       if (result.kind === 'success') {
         fire(onSuccess, result.credential);
-      } else if (result.kind === 'cancel' || (result.kind === 'failed' && QUIET_REASONS.includes(result.reason))) {
+      } else if (result.kind === 'cancel' || result.reason === USER_CANCELLED_REASON) {
         fire(onError, 'Google sign-in was cancelled.');
-      } else if (result.kind === 'failed' && REDIRECT_FALLBACK_REASONS.includes(result.reason)) {
-        // Popup + FedCM both refused (Brave Shields, privacy browsers):
-        // hand off to the cookie-free redirect flow — Google's login page
-        // always opens there.
-        startRedirectFlow();
-      } else {
+      } else if (CONFIG_FAIL_REASONS.includes(result.reason)) {
         fire(onError, guidanceFor(result.reason, origin));
+      } else {
+        // Popup and FedCM both refused (Brave Shields, Firefox, 3P-cookie
+        // blocking, ...): hand off to the cookie-free full-page redirect.
+        goRedirect();
       }
     } finally {
       stopPending();
@@ -271,13 +265,12 @@ export default function GoogleSignInButton({
         </span>
       )}
       {!notReady && !pending && (
-        <button
-          type="button"
-          onClick={startRedirectFlow}
+        <a
+          href={redirectUrl || undefined}
           className="text-xs text-[var(--color-text-muted)] underline underline-offset-2 hover:text-[var(--color-accent)] transition-colors"
         >
           Google not opening? Sign in in this window instead
-        </button>
+        </a>
       )}
     </div>
   );
