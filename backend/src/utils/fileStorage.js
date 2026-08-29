@@ -147,4 +147,4 @@ async function deleteStoredFile(url) {
   }
 }
 
-module.exports = { storeFile, deleteStoredFile, isCloudinaryConfigured };
+module.exports = { storeFile, deleteStoredFile, isCloudinaryConfigured, getCloudinary };
