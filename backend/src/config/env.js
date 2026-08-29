@@ -9,57 +9,60 @@
 const dotenv = require('dotenv');
 dotenv.config();
 
+function cleanEnvString(val) {
+  if (!val) return '';
+  return String(val).replace(/^["']|["']$/g, '').trim();
+}
+
 const env = {
   // Server
   PORT: parseInt(process.env.PORT, 10) || 5000,
-  NODE_ENV: process.env.NODE_ENV || 'development',
+  NODE_ENV: cleanEnvString(process.env.NODE_ENV) || 'development',
 
   // Database
-  DATABASE_URL: process.env.DATABASE_URL,
+  DATABASE_URL: cleanEnvString(process.env.DATABASE_URL),
 
   // JWT
-  JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
-  JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
-  JWT_ACCESS_EXPIRY: process.env.JWT_ACCESS_EXPIRY || '15m',
-  JWT_REFRESH_EXPIRY: process.env.JWT_REFRESH_EXPIRY || '7d',
+  JWT_ACCESS_SECRET: cleanEnvString(process.env.JWT_ACCESS_SECRET) || 'dev-access-secret',
+  JWT_REFRESH_SECRET: cleanEnvString(process.env.JWT_REFRESH_SECRET) || 'dev-refresh-secret',
+  JWT_ACCESS_EXPIRY: cleanEnvString(process.env.JWT_ACCESS_EXPIRY) || '15m',
+  JWT_REFRESH_EXPIRY: cleanEnvString(process.env.JWT_REFRESH_EXPIRY) || '7d',
 
   // Seed Admin
-  SEED_ADMIN_EMAIL: process.env.SEED_ADMIN_EMAIL,
-  SEED_ADMIN_PASSWORD: process.env.SEED_ADMIN_PASSWORD,
-  SEED_ADMIN_DISPLAY_NAME: process.env.SEED_ADMIN_DISPLAY_NAME || 'Platform Admin',
+  SEED_ADMIN_EMAIL: cleanEnvString(process.env.SEED_ADMIN_EMAIL),
+  SEED_ADMIN_PASSWORD: cleanEnvString(process.env.SEED_ADMIN_PASSWORD),
+  SEED_ADMIN_DISPLAY_NAME: cleanEnvString(process.env.SEED_ADMIN_DISPLAY_NAME) || 'Platform Admin',
 
   // CORS
-  FRONTEND_URL: (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, ''),
+  FRONTEND_URL: (cleanEnvString(process.env.FRONTEND_URL) || 'http://localhost:5173').replace(/\/+$/, ''),
 
   // Google OAuth
-  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
+  GOOGLE_CLIENT_ID: cleanEnvString(process.env.GOOGLE_CLIENT_ID),
 
   // Email Service — provider can be: "smtp" | "console"
-  // "console" logs emails to terminal (default for development)
-  EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || 'console',
-  EMAIL_FROM: process.env.EMAIL_FROM || 'noreply@comflex.dev',
+  EMAIL_PROVIDER: cleanEnvString(process.env.EMAIL_PROVIDER) || 'console',
+  EMAIL_FROM: cleanEnvString(process.env.EMAIL_FROM) || 'noreply@comflex.dev',
 
   // SMTP config (only used when EMAIL_PROVIDER=smtp)
-  SMTP_HOST: process.env.SMTP_HOST || '',
+  SMTP_HOST: cleanEnvString(process.env.SMTP_HOST),
   SMTP_PORT: parseInt(process.env.SMTP_PORT, 10) || 587,
-  SMTP_USER: process.env.SMTP_USER || '',
-  SMTP_PASS: process.env.SMTP_PASS || '',
+  SMTP_USER: cleanEnvString(process.env.SMTP_USER),
+  SMTP_PASS: cleanEnvString(process.env.SMTP_PASS),
 
   // Email API key (for future providers like Resend/SendGrid)
-  EMAIL_API_KEY: process.env.EMAIL_API_KEY || '',
+  EMAIL_API_KEY: cleanEnvString(process.env.EMAIL_API_KEY),
 
   // File Storage Path (local dev only — Render wipes /tmp)
-  STORAGE_PATH: process.env.STORAGE_PATH || require('path').join(__dirname, '../../uploads'),
+  STORAGE_PATH: cleanEnvString(process.env.STORAGE_PATH) || require('path').join(__dirname, '../../uploads'),
 
   // Cloudinary (optional locally, required on Render/Vercel)
-  // Files uploaded here survive restarts, unlike Render's ephemeral /tmp.
-  CLOUDINARY_URL: (process.env.CLOUDINARY_URL || '').trim(),
-  CLOUDINARY_CLOUD_NAME: (process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '').trim(),
-  CLOUDINARY_API_KEY: (process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || '').trim(),
-  CLOUDINARY_API_SECRET: (process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || '').trim(),
+  CLOUDINARY_URL: cleanEnvString(process.env.CLOUDINARY_URL),
+  CLOUDINARY_CLOUD_NAME: cleanEnvString(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME),
+  CLOUDINARY_API_KEY: cleanEnvString(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY),
+  CLOUDINARY_API_SECRET: cleanEnvString(process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET),
 
   // Google Gemini AI
-  GEMINI_API_KEY: (process.env.GEMINI_API_KEY || '').trim(),
+  GEMINI_API_KEY: cleanEnvString(process.env.GEMINI_API_KEY),
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
