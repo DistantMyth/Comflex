@@ -50,7 +50,7 @@ export default function LoginPage() {
       const result = await googleLogin(credentialResponse.credential);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
-      setError(err.response?.data?.message || 'Google login failed.');
+      setError(err.response?.data?.error?.message || err.response?.data?.message || 'Google login failed.');
     } finally {
       setLoading(false);
     }

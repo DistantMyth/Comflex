@@ -19,7 +19,7 @@ model User {
   email          String   @unique
   username       String?  @unique   // chosen during registration
   usernameChangedAt DateTime?       // last username change (30-day cooldown)
-  password       String             // bcrypt hashed (empty string for Google-only until set)
+  password       String   @default("")      // bcrypt hashed (empty string for Google-only until set)
   displayName    String
   avatarUrl      String?
   bio            String?  @default("")

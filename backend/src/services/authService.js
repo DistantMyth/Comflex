@@ -175,6 +175,7 @@ async function googleLogin(idToken) {
       user = await prisma.user.create({
         data: {
           email: googleEmail,
+          password: '',
           displayName: googleUser.name,
           avatarUrl: googleUser.picture,
           googleId: googleUser.googleId,
