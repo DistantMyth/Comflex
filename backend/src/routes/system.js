@@ -24,12 +24,34 @@ router.get('/status', async (req, res, next) => {
     const { isCloudinaryConfigured } = require('../utils/fileStorage');
 
     const envKeys = Object.keys(process.env).sort();
-    let secretsFiles = [];
-    try {
-      if (fs.existsSync('/etc/secrets')) {
-        secretsFiles = fs.readdirSync('/etc/secrets');
+    
+    function inspectDir(dir) {
+      const results = [];
+      try {
+        if (fs.existsSync(dir)) {
+          const entries = fs.readdirSync(dir);
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry);
+            try {
+              const stat = fs.statSync(fullPath);
+              if (stat.isDirectory()) {
+                results.push({ path: fullPath, type: 'dir', children: fs.readdirSync(fullPath) });
+              } else {
+                const rawContent = fs.readFileSync(fullPath, 'utf8');
+                results.push({ path: fullPath, type: 'file', size: stat.size, preview: rawContent.slice(0, 30) });
+              }
+            } catch (e) {
+              results.push({ path: fullPath, error: e.message });
+            }
+          }
+        }
+      } catch (e) {
+        results.push({ dir, error: e.message });
       }
-    } catch {}
+      return results;
+    }
+
+    const secretsInspection = inspectDir('/etc/secrets');
 
     const diagnostics = {
       mediaStorage: isCloudinaryConfigured() ? 'cloudinary' : 'local_ephemeral',
@@ -41,8 +63,7 @@ router.get('/status', async (req, res, next) => {
       apiKeyLen: (env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || '').length,
       apiSecretLen: (env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || '').length,
       allEnvKeyNames: envKeys,
-      secretsDirExists: fs.existsSync('/etc/secrets'),
-      secretsFiles,
+      secretsInspection,
       buildTimestamp: new Date().toISOString(),
     };
 
