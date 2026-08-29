@@ -19,6 +19,7 @@ export const storeApi = {
 
   // Admin Store
   adminCreateBadge: (data) => api.post('/store/admin/badges', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  adminDeleteBadge: (id) => api.delete(`/store/admin/badges/${id}`),
   adminCreateListing: (data) => api.post('/store/admin/listings', data),
   adminUpdateListing: (id, data) => api.patch(`/store/admin/listings/${id}`, data),
   adminDeleteListing: (id) => api.delete(`/store/admin/listings/${id}`),

@@ -8,7 +8,7 @@ const env = require('../config/env');
 const authMiddleware = require('../middleware/auth');
 const prisma = require('../prisma');
 const { success, error } = require('../utils/apiResponse');
-const { storeFile } = require('../utils/fileStorage');
+const { storeFile, deleteStoredFile } = require('../utils/fileStorage');
 const { validateStoredFile } = require('../utils/fileMagic');
 const { ethers } = require('ethers');
 
@@ -44,48 +44,154 @@ router.post('/wallet/challenge', async (req, res, next) => {
 
 // Step 2: prove ownership of `address` by signing the nonce.
 router.post('/wallet', [
-  body('address').isString().withMessage('Address must be a string.'),
-  body('signature').isString().withMessage('Signature must be a string.'),
+  body('address').isEthereumAddress().withMessage('Valid Ethereum address required.'),
+  body('signature').isString().notEmpty().withMessage('Signature required.')
 ], async (req, res, next) => {
   try {
-    const errs = validationResult(req);
-    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
 
     const { address, signature } = req.body;
-    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
-      return error(res, 'VALIDATION', 'Invalid Ethereum address.', 400);
-    }
-
-    const existing = await prisma.user.findFirst({
-      where: { walletAddress: { equals: address, mode: 'insensitive' }, id: { not: req.user.id } }
-    });
-    if (existing) {
-      return error(res, 'CONFLICT', 'This wallet address is already bound to another account.', 409);
-    }
-
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user.walletNonce || !user.walletNonceExpiry || user.walletNonceExpiry.getTime() < Date.now()) {
-      return error(res, 'VALIDATION', 'Challenge expired. Request a new nonce and sign it.', 400);
+
+    if (!user.walletNonce || !user.walletNonceExpiry || new Date() > user.walletNonceExpiry) {
+      return error(res, 'CHALLENGE_EXPIRED', 'Wallet challenge has expired. Request a new challenge nonce.', 400);
     }
 
-    let recovered;
+    const message = `Comflex wallet binding\n\nNonce: ${user.walletNonce}\nAccount: ${user.id}`;
+    let recoveredAddress;
     try {
-      recovered = ethers.verifyMessage(`Comflex wallet binding\n\nNonce: ${user.walletNonce}\nAccount: ${req.user.id}`, signature);
+      recoveredAddress = ethers.verifyMessage(message, signature);
     } catch {
-      return error(res, 'VALIDATION', 'Signature could not be verified.', 400);
+      return error(res, 'INVALID_SIGNATURE', 'Could not verify wallet signature.', 400);
     }
 
-    if (recovered.toLowerCase() !== address.toLowerCase()) {
-      return error(res, 'VALIDATION', 'Signature does not match the address.', 400);
+    if (recoveredAddress.toLowerCase() !== address.toLowerCase()) {
+      return error(res, 'SIGNATURE_MISMATCH', 'Signature does not match the provided wallet address.', 400);
+    }
+
+    // Check if address is already registered to a different account
+    const existingBinding = await prisma.user.findFirst({
+      where: {
+        walletAddress: { equals: address.toLowerCase(), mode: 'insensitive' },
+        id: { not: req.user.id }
+      }
+    });
+    if (existingBinding) {
+      return error(res, 'WALLET_IN_USE', 'This wallet address is already bound to another account.', 409);
     }
 
     await prisma.user.update({
       where: { id: req.user.id },
-      data: { walletAddress: address, walletNonce: null, walletNonceExpiry: null },
+      data: {
+        walletAddress: address.toLowerCase(),
+        walletNonce: null,
+        walletNonceExpiry: null,
+      }
     });
 
-    return success(res, { message: 'Wallet bound to your account.', walletAddress: address });
+    return success(res, { message: 'Wallet bound successfully.', walletAddress: address.toLowerCase() });
   } catch (err) {
+    next(err);
+  }
+});
+
+// Get user credit ledger / history
+router.get('/ledger', async (req, res, next) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { creditBalance: true }
+    });
+
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        OR: [
+          { senderId: req.user.id },
+          { receiverId: req.user.id }
+        ]
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        sender: { select: { id: true, username: true, displayName: true } },
+        receiver: { select: { id: true, username: true, displayName: true } }
+      }
+    });
+
+    return success(res, { balance: user.creditBalance, transactions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Transfer credits to another user
+router.post('/transfer', [
+  body('receiverId').notEmpty().withMessage('Receiver ID, username, or email is required.'),
+  body('amount').isInt({ min: 1, max: 1000000 }).withMessage('Transfer amount must be between 1 and 1,000,000 credits.')
+], async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
+
+    const { receiverId, amount } = req.body;
+    const cleanReceiver = typeof receiverId === 'string' ? receiverId.trim() : '';
+
+    if (!cleanReceiver) {
+      return error(res, 'VALIDATION', 'Receiver identifier is required.', 400);
+    }
+
+    const receiver = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: cleanReceiver },
+          { email: cleanReceiver },
+          ...(cleanReceiver.match(/^[0-9a-fA-F]{24}$/) ? [{ id: cleanReceiver }] : [])
+        ]
+      }
+    });
+
+    if (!receiver) {
+      return error(res, 'NOT_FOUND', 'Recipient user not found.', 404);
+    }
+
+    if (receiver.id === req.user.id) {
+      return error(res, 'INVALID_TRANSFER', 'Cannot transfer credits to yourself.', 400);
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const deductionResult = await tx.user.updateMany({
+        where: {
+          id: req.user.id,
+          creditBalance: { gte: amount }
+        },
+        data: {
+          creditBalance: { decrement: amount }
+        }
+      });
+
+      if (deductionResult.count === 0) {
+        throw Object.assign(new Error('Insufficient credit balance.'), { code: 'INSUFFICIENT_CREDITS', statusCode: 400 });
+      }
+
+      await tx.user.update({
+        where: { id: receiver.id },
+        data: { creditBalance: { increment: amount } }
+      });
+
+      await tx.transaction.create({
+        data: {
+          senderId: req.user.id,
+          receiverId: receiver.id,
+          amount,
+          type: 'transfer'
+        }
+      });
+    });
+
+    return success(res, { message: `Transferred ${amount} credits successfully.` });
+  } catch (err) {
+    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
     next(err);
   }
 });
@@ -141,7 +247,9 @@ router.get('/config', async (req, res, next) => {
 // Get all badges
 router.get('/badges', async (req, res, next) => {
   try {
-    const badges = await prisma.badge.findMany();
+    const badges = await prisma.badge.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
     return success(res, badges);
   } catch (err) {
     next(err);
@@ -203,6 +311,42 @@ router.post('/admin/badges', upload.single('image'), [
   }
 });
 
+// Admin: Delete a badge
+router.delete('/admin/badges/:id', async (req, res, next) => {
+  try {
+    const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
+
+    const badge = await prisma.badge.findUnique({ where: { id: req.params.id } });
+    if (!badge) return error(res, 'NOT_FOUND', 'Badge not found.', 404);
+
+    // Check if actively listed in store
+    const activeListings = await prisma.storeListing.count({ where: { badgeId: req.params.id } });
+    if (activeListings > 0) {
+      return error(res, 'CONFLICT', 'Please delist this badge from the store before deleting it.', 409);
+    }
+
+    // Check if owned by users
+    const ownedCount = await prisma.userBadge.count({ where: { badgeId: req.params.id } });
+    if (ownedCount > 0) {
+      return error(res, 'CONFLICT', 'Cannot delete badge because it has already been awarded to or purchased by users.', 409);
+    }
+
+    // Delete stored image file
+    if (badge.imageUrl) {
+      try {
+        await deleteStoredFile(badge.imageUrl);
+      } catch { /* ignore non-fatal cleanup error */ }
+    }
+
+    await prisma.badge.delete({ where: { id: req.params.id } });
+    return success(res, { message: `Badge "${badge.name}" deleted successfully.` });
+  } catch (err) {
+    if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Badge not found.', 404);
+    next(err);
+  }
+});
+
 // Admin: Create store listing
 router.post('/admin/listings', [
   body('badgeId').isMongoId().withMessage('Invalid badge ID.'),
@@ -252,19 +396,21 @@ router.patch('/admin/listings/:id', [
     });
     return success(res, listing);
   } catch (err) {
+    if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Listing not found.', 404);
     next(err);
   }
 });
 
-// Admin: Delete store listing
+// Admin: Delete store listing (Delist)
 router.delete('/admin/listings/:id', async (req, res, next) => {
   try {
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
 
     await prisma.storeListing.delete({ where: { id: req.params.id } });
-    return success(res, { message: 'Listing deleted.' });
+    return success(res, { message: 'Item delisted from store successfully.' });
   } catch (err) {
+    if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Listing not found.', 404);
     next(err);
   }
 });
