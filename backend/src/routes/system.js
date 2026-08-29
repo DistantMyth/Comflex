@@ -6,6 +6,7 @@
  */
 
 const express = require('express');
+const env = require('../config/env');
 const prisma = require('../prisma');
 const { success } = require('../utils/apiResponse');
 
