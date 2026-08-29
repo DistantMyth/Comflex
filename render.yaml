@@ -53,11 +53,15 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
-      # Email: "console" logs reset links to the Render logs; "smtp" sends real mail
-      # For "smtp" (e.g. Brevo): SMTP_HOST=smtp-relay.brevo.com, SMTP_PORT=587,
-      # SMTP_USER=your Brevo login email, SMTP_PASS=your xsmtpsib_ key, and
-      # EMAIL_FROM must be a sender verified in Brevo or sends are rejected.
+      # Email: HTTPS REST API (Port 443 — works on Render Free Tier)
+      # For Brevo REST API: EMAIL_PROVIDER=brevo, EMAIL_API_KEY=xkeysib-...
+      # For Resend REST API: EMAIL_PROVIDER=resend, EMAIL_API_KEY=re_...
+      # For SMTP: EMAIL_PROVIDER=smtp (blocked on Render Free Tier; works on paid plans)
       - key: EMAIL_PROVIDER
+        sync: false
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_FROM
         sync: false
       - key: SMTP_HOST
         sync: false
@@ -66,8 +70,6 @@ services:
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS
-        sync: false
-      - key: EMAIL_FROM
         sync: false
       # Gemini — AI chatbot (free key from https://aistudio.google.com/apikey)
       - key: GEMINI_API_KEY

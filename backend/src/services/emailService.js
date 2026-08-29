@@ -74,41 +74,127 @@ function getTransporter() {
   return _transporter;
 }
 
+/**
+ * Send an email via Brevo REST API over HTTPS (Port 443 — immune to Render SMTP blocks).
+ */
+async function sendViaBrevoApi(mailOptions, apiKey) {
+  const payload = {
+    sender: { name: 'Comflex', email: env.EMAIL_FROM },
+    to: [{ email: mailOptions.to }],
+    subject: mailOptions.subject,
+    htmlContent: mailOptions.html,
+    textContent: mailOptions.text,
+  };
+
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const errorMsg = data.message || `Brevo API returned status ${res.status}`;
+    console.error('[emailService] ❌ Brevo API error:', errorMsg);
+    throw new Error(errorMsg);
+  }
+
+  return { messageId: data.messageId || `brevo-${Date.now()}` };
+}
+
+/**
+ * Send an email via Resend REST API over HTTPS (Port 443).
+ */
+async function sendViaResendApi(mailOptions, apiKey) {
+  const payload = {
+    from: env.EMAIL_FROM,
+    to: [mailOptions.to],
+    subject: mailOptions.subject,
+    html: mailOptions.html,
+    text: mailOptions.text,
+  };
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const errorMsg = data.message || `Resend API returned status ${res.status}`;
+    console.error('[emailService] ❌ Resend API error:', errorMsg);
+    throw new Error(errorMsg);
+  }
+
+  return { messageId: data.id || `resend-${Date.now()}` };
+}
+
 async function sendMailWithFallback(mailOptions) {
-  if (env.EMAIL_PROVIDER !== 'smtp') {
-    const transporter = getTransporter();
-    return transporter.sendMail(mailOptions);
+  const provider = (env.EMAIL_PROVIDER || '').toLowerCase();
+  const apiKey = env.EMAIL_API_KEY;
+
+  // 1. Brevo HTTPS API (via EMAIL_PROVIDER=brevo, EMAIL_PROVIDER=api, or auto-detected xkeysib- key)
+  if (provider === 'brevo' || (provider === 'api' && apiKey?.startsWith('xkeysib-')) || (apiKey && apiKey.startsWith('xkeysib-'))) {
+    if (!apiKey) throw new Error('EMAIL_API_KEY (Brevo API key) is missing in environment variables.');
+    return sendViaBrevoApi(mailOptions, apiKey);
   }
 
-  const nodemailer = require('nodemailer');
-  const portsToTry = [env.SMTP_PORT, env.SMTP_PORT === 465 ? 587 : 465];
+  // 2. Resend HTTPS API (via EMAIL_PROVIDER=resend, or auto-detected re_ key)
+  if (provider === 'resend' || (provider === 'api' && apiKey?.startsWith('re_')) || (apiKey && apiKey.startsWith('re_'))) {
+    if (!apiKey) throw new Error('EMAIL_API_KEY (Resend API key) is missing in environment variables.');
+    return sendViaResendApi(mailOptions, apiKey);
+  }
 
-  let lastErr = null;
-  for (const port of portsToTry) {
-    try {
-      const isSsl = port === 465;
-      const transporter = nodemailer.createTransport({
-        host: env.SMTP_HOST,
-        port,
-        secure: isSsl,
-        auth: {
-          user: env.SMTP_USER,
-          pass: env.SMTP_PASS,
-        },
-        connectionTimeout: 8000,
-        greetingTimeout: 8000,
-        socketTimeout: 12000,
-        tls: { rejectUnauthorized: false }
-      });
+  // 3. Generic API provider with an API key
+  if (provider === 'api' && apiKey) {
+    if (apiKey.startsWith('re_')) return sendViaResendApi(mailOptions, apiKey);
+    return sendViaBrevoApi(mailOptions, apiKey);
+  }
 
-      return await transporter.sendMail(mailOptions);
-    } catch (err) {
-      console.warn(`[emailService] ⚠️ SMTP send failed on port ${port}:`, err.message);
-      lastErr = err;
+  // 4. SMTP (Nodemailer)
+  if (provider === 'smtp') {
+    const nodemailer = require('nodemailer');
+    const portsToTry = [env.SMTP_PORT, env.SMTP_PORT === 465 ? 587 : 465];
+
+    let lastErr = null;
+    for (const port of portsToTry) {
+      try {
+        const isSsl = port === 465;
+        const transporter = nodemailer.createTransport({
+          host: env.SMTP_HOST,
+          port,
+          secure: isSsl,
+          auth: {
+            user: env.SMTP_USER,
+            pass: env.SMTP_PASS,
+          },
+          connectionTimeout: 8000,
+          greetingTimeout: 8000,
+          socketTimeout: 12000,
+          tls: { rejectUnauthorized: false }
+        });
+
+        return await transporter.sendMail(mailOptions);
+      } catch (err) {
+        console.warn(`[emailService] ⚠️ SMTP send failed on port ${port}:`, err.message);
+        lastErr = err;
+      }
     }
+
+    throw lastErr || new Error('Failed to send email through SMTP. Note: Render Free Tier blocks SMTP ports 25/465/587; set EMAIL_API_KEY to use HTTPS API instead.');
   }
 
-  throw lastErr || new Error('Failed to send email through SMTP');
+  // 5. Console fallback
+  const transporter = getTransporter();
+  return transporter.sendMail(mailOptions);
 }
 
 /**

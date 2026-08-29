@@ -61,7 +61,9 @@ Everything below is free tier. Total cost: **$0/month**.
    - `GOOGLE_CLIENT_ID` → from Google Cloud console (see section 5)
    - `FRONTEND_URL` → your Vercel URL, e.g. `https://comflex.vercel.app`
    - `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` → from step 2
-   - `EMAIL_PROVIDER=console` (reset links print in Render logs) — or `smtp` + SMTP vars for real mail
+   - `EMAIL_PROVIDER=brevo` + `EMAIL_API_KEY=xkeysib-...` (Brevo API key via HTTPS port 443 — REQUIRED for Render Free Tier because Render blocks outbound SMTP ports 25/465/587) or `resend` + `EMAIL_API_KEY=re_...`
+   - `EMAIL_FROM=thetarun3@gmail.com` (must be a verified sender in your Brevo/Resend account)
+   - `EMAIL_PROVIDER=console` for dev/testing without keys (reset links print in Render logs)
 4. **Apply**.
 
 **Option B — Manual:** Render → New → Web Service → point at the repo, root dir `backend`,
@@ -119,4 +121,5 @@ When it's live you'll get `https://comflex-backend.onrender.com`. Check
 | Backend slow first click | Render sleeping → UptimeRobot should prevent this; otherwise it wakes in ~30 s. |
 | Socket not connecting | `VITE_BACKEND_URL` must be set on Vercel (the socket uses it too now). |
 | Reset link "sent" but no email | `EMAIL_PROVIDER=console` → read the Render logs for the link. |
+| Verification/Reset mail fails ("Failed to send verification email" / 502) | Render Free Tier blocks outbound SMTP (ports 25, 465, 587). Switch to HTTPS REST API by setting `EMAIL_PROVIDER=brevo` and `EMAIL_API_KEY=xkeysib-...` (or `resend` with `re_...`). |
 | `prisma generate` fails on Render | Nothing — just redeploy; ensure `buildCommand` includes `npx prisma generate`. |

@@ -72,18 +72,18 @@ const env = {
   // Google OAuth
   GOOGLE_CLIENT_ID: cleanEnvString(process.env.GOOGLE_CLIENT_ID),
 
-  // Email Service — provider can be: "smtp" | "console"
-  EMAIL_PROVIDER: cleanEnvString(process.env.EMAIL_PROVIDER) || 'console',
+  // Email Service — provider can be: "brevo" | "resend" | "api" | "smtp" | "console"
+  EMAIL_PROVIDER: cleanEnvString(process.env.EMAIL_PROVIDER) || (cleanEnvString(process.env.EMAIL_API_KEY || process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) ? 'api' : 'console'),
   EMAIL_FROM: cleanEnvString(process.env.EMAIL_FROM) || 'noreply@comflex.dev',
 
-  // SMTP Settings
+  // SMTP Settings (for local dev or hosting with unblocked SMTP ports)
   SMTP_HOST: cleanEnvString(process.env.SMTP_HOST),
   SMTP_PORT: parseInt(process.env.SMTP_PORT, 10) || 587,
   SMTP_USER: cleanEnvString(process.env.SMTP_USER),
   SMTP_PASS: cleanEnvString(process.env.SMTP_PASS),
 
-  // Email API key (for future providers like Resend/SendGrid)
-  EMAIL_API_KEY: cleanEnvString(process.env.EMAIL_API_KEY),
+  // Email API key (for HTTPS port 443 providers like Brevo/Resend — works on Render Free Tier)
+  EMAIL_API_KEY: cleanEnvString(process.env.EMAIL_API_KEY || process.env.BREVO_API_KEY || process.env.RESEND_API_KEY),
 
   // File Storage Path (local dev only — Render wipes /tmp)
   STORAGE_PATH: cleanEnvString(process.env.STORAGE_PATH) || path.join(__dirname, '../../uploads'),
