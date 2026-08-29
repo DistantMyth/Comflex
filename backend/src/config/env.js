@@ -15,8 +15,32 @@ dotenv.config();
 try { dotenv.config({ path: path.resolve(process.cwd(), '.env') }); } catch {}
 try { dotenv.config({ path: path.resolve(__dirname, '../../.env') }); } catch {}
 try { dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); } catch {}
-try { if (fs.existsSync('/etc/secrets/.env')) dotenv.config({ path: '/etc/secrets/.env' }); } catch {}
-try { if (fs.existsSync('/etc/secrets/comflex-backend.env')) dotenv.config({ path: '/etc/secrets/comflex-backend.env' }); } catch {}
+
+// Render /etc/secrets loader (supports Environment Groups & Secret Files)
+function loadEnvFromDirectory(dirPath) {
+  if (!fs.existsSync(dirPath)) return;
+  try {
+    const entries = fs.readdirSync(dirPath);
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          const parsed = dotenv.parse(content);
+          for (const [k, v] of Object.entries(parsed)) {
+            if (!process.env[k]) {
+              process.env[k] = v;
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
+loadEnvFromDirectory('/etc/secrets');
+loadEnvFromDirectory('/etc/secrets/..data');
 
 function cleanEnvString(val) {
   if (!val) return '';

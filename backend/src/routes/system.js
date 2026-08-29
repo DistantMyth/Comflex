@@ -53,7 +53,7 @@ router.get('/status', async (req, res, next) => {
       branchMapping: config?.emailParsingRules?.branchMapping || {},
       mediaStorage: isCloudinaryConfigured() ? 'cloudinary' : 'local_ephemeral',
       cloudinaryDebug,
-      version: '1.0.3-deep-debug',
+      version: '1.0.4-secrets-loaded',
     });
   } catch (err) {
     next(err);
