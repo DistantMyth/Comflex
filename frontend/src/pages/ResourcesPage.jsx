@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { resourceApi } from '../api/resourceApi';
-import resolveAsset from '../utils/resolveAsset';
 
 const getDynamicFolderTree = (user, myYear) => {
   const tree = {
@@ -46,6 +45,11 @@ export default function ResourcesPage() {
   const [subjects, setSubjects] = useState([]);
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [downloadingId, setDownloadingId] = useState(null);
+
+  // Search and sort
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'oldest' | 'name' | 'size'
 
   // Modals
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -128,11 +132,13 @@ export default function ResourcesPage() {
   }, [currentLevel, fetchSubjects, fetchResources]);
 
   const navigateTo = (index) => {
+    setSearchQuery('');
     if (index === -1) setPath([]);
     else setPath(path.slice(0, index + 1));
   };
 
   const handleFolderClick = (name, type = 'folder', id = null) => {
+    setSearchQuery('');
     setPath([...path, { name, type, id }]);
   };
 
@@ -157,29 +163,86 @@ export default function ResourcesPage() {
     }
   };
 
+  const handleDownloadResource = async (resObj, preview = false) => {
+    try {
+      setDownloadingId(resObj.id);
+      const res = await resourceApi.downloadResource(resObj.id);
+      const blob = new Blob([res.data], { type: resObj.mimetype || 'application/octet-stream' });
+      const url = window.URL.createObjectURL(blob);
+      if (preview) {
+        window.open(url, '_blank');
+      } else {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = resObj.fileName || resObj.title || 'download';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      setTimeout(() => window.URL.revokeObjectURL(url), 15000);
+    } catch (err) {
+      alert(err.response?.data?.error?.message || err.message || 'Failed to download file.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  // Filter and sort resources / subjects
+  const filteredSubjects = subjects.filter(s =>
+    s.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredResources = resources
+    .filter(r =>
+      r.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      r.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (r.uploader?.displayName && r.uploader.displayName.toLowerCase().includes(searchQuery.toLowerCase()))
+    )
+    .sort((a, b) => {
+      if (sortBy === 'newest') return new Date(b.createdAt) - new Date(a.createdAt);
+      if (sortBy === 'oldest') return new Date(a.createdAt) - new Date(b.createdAt);
+      if (sortBy === 'name') return a.title.localeCompare(b.title);
+      if (sortBy === 'size') return (b.fileSize || 0) - (a.fileSize || 0);
+      return 0;
+    });
+
   // UI Renderers
   const renderFolders = () => {
     if (currentLevel === 'SUBJECTS') {
       return (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {subjects.length === 0 && !loading && (
-            <p className="text-[var(--color-text-muted)] col-span-3 py-8 text-center bg-[var(--color-bg-primary)] rounded-xl border border-[var(--color-border)]">No subjects created yet.</p>
-          )}
-          {loading && <div className="col-span-3 text-center py-4">Loading...</div>}
-          {!loading && subjects.map(subj => (
-            <div key={subj.id} onClick={() => handleFolderClick(subj.name, 'subject', subj.id)}
-              className="glass-card p-4 flex items-center justify-between cursor-pointer hover:border-[var(--color-accent)] transition-colors group">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">📁</span>
-                <span className="font-medium text-sm">{subj.name}</span>
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+            <input
+              type="text"
+              placeholder="Search subjects..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full sm:w-64 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredSubjects.length === 0 && !loading && (
+              <p className="text-[var(--color-text-muted)] col-span-3 py-8 text-center bg-[var(--color-bg-primary)] rounded-xl border border-[var(--color-border)]">
+                {searchQuery ? 'No matching subjects found.' : 'No subjects created yet.'}
+              </p>
+            )}
+            {loading && <div className="col-span-3 text-center py-4">Loading...</div>}
+            {!loading && filteredSubjects.map(subj => (
+              <div key={subj.id} onClick={() => handleFolderClick(subj.name, 'subject', subj.id)}
+                className="glass-card p-4 flex items-center justify-between cursor-pointer hover:border-[var(--color-accent)] transition-colors group">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">📁</span>
+                  <span className="font-medium text-sm">{subj.name}</span>
+                </div>
+                {isAdminOrManager && (
+                  <button onClick={(e) => handleDeleteSubject(e, subj.id)} className="text-xs text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition-opacity">
+                    Delete
+                  </button>
+                )}
               </div>
-              {isAdminOrManager && (
-                <button onClick={(e) => handleDeleteSubject(e, subj.id)} className="text-xs text-[var(--color-danger)] opacity-0 group-hover:opacity-100 transition-opacity">
-                  Delete
-                </button>
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       );
     }
@@ -218,39 +281,73 @@ export default function ResourcesPage() {
     if (currentLevel !== 'FILES') return null;
 
     return (
-      <div className="space-y-3">
-        {loading && <div className="text-center py-4">Loading files...</div>}
-        {!loading && resources.length === 0 && (
-          <p className="text-[var(--color-text-muted)] text-center py-8 bg-[var(--color-bg-primary)] rounded-xl border border-[var(--color-border)]">This folder is empty. Be the first to upload notes!</p>
-        )}
-        {!loading && resources.map(res => {
-          const canDelete = user.id === res.uploaderId || isAdminOrManager;
-          const mbSize = (res.fileSize / (1024 * 1024)).toFixed(1);
-          return (
-            <div key={res.id} className="glass-card p-4 flex items-center gap-4">
-              <div className="text-3xl text-[var(--color-primary)]">📄</div>
-              <div className="flex-1 min-w-0">
-                <a href={resolveAsset(res.fileUrl)} target="_blank" rel="noreferrer"
-                   className="font-medium hover:text-[var(--color-accent)] hover:underline block truncate">
-                  {res.title}
-                </a>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  {mbSize} MB • Uploaded by {res.uploader?.displayName}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <a href={resolveAsset(res.fileUrl)} download={res.fileName} className="btn btn-secondary text-xs px-3 py-1">
-                  Download
-                </a>
-                {canDelete && (
-                  <button onClick={() => handleDeleteResource(res.id)} className="btn btn-danger text-xs px-3 py-1 bg-[rgba(239,68,68,0.1)] text-red-500 hover:bg-red-500 hover:text-white border-none">
-                    Delete
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+          <input
+            type="text"
+            placeholder="Search files or uploaders..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full sm:w-64 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
+          />
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <span className="text-xs text-[var(--color-text-secondary)]">Sort by:</span>
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-2.5 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="name">Name (A-Z)</option>
+              <option value="size">Size (Largest)</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {loading && <div className="text-center py-4">Loading files...</div>}
+          {!loading && filteredResources.length === 0 && (
+            <p className="text-[var(--color-text-muted)] text-center py-8 bg-[var(--color-bg-primary)] rounded-xl border border-[var(--color-border)]">
+              {searchQuery ? 'No matching files found.' : 'This folder is empty. Be the first to upload notes!'}
+            </p>
+          )}
+          {!loading && filteredResources.map(res => {
+            const canDelete = user.id === res.uploaderId || isAdminOrManager;
+            const mbSize = (res.fileSize / (1024 * 1024)).toFixed(1);
+            const isDownloading = downloadingId === res.id;
+            return (
+              <div key={res.id} className="glass-card p-4 flex items-center gap-4">
+                <div className="text-3xl text-[var(--color-primary)]">📄</div>
+                <div className="flex-1 min-w-0">
+                  <button
+                    onClick={() => handleDownloadResource(res, true)}
+                    className="font-medium text-left hover:text-[var(--color-accent)] hover:underline block truncate"
+                  >
+                    {res.title}
                   </button>
-                )}
+                  <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                    {mbSize} MB • Uploaded by {res.uploader?.displayName}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleDownloadResource(res, false)}
+                    disabled={isDownloading}
+                    className="btn btn-secondary text-xs px-3 py-1 flex items-center gap-1"
+                  >
+                    {isDownloading ? 'Downloading...' : 'Download'}
+                  </button>
+                  {canDelete && (
+                    <button onClick={() => handleDeleteResource(res.id)} className="btn btn-danger text-xs px-3 py-1 bg-[rgba(239,68,68,0.1)] text-red-500 hover:bg-red-500 hover:text-white border-none">
+                      Delete
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     );
   };
@@ -381,11 +478,19 @@ function UploadModal({ onClose, subjectId, onSuccess }) {
     }
   };
 
+  const handleCancelUpload = () => {
+    if (abortCtrl.current) {
+      abortCtrl.current.abort();
+    }
+    setUploading(false);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!file || !subjectId) return;
 
     setUploading(true);
+    setProgress(0);
     const fd = new FormData();
     fd.append('file', file);
     fd.append('title', title || file.name);
@@ -394,15 +499,19 @@ function UploadModal({ onClose, subjectId, onSuccess }) {
     abortCtrl.current = new AbortController();
 
     try {
-      await resourceApi.uploadResource(fd, (evt) => {
-        if (evt.total) {
-          setProgress(Math.round((evt.loaded * 100) / evt.total));
-        }
-      });
+      await resourceApi.uploadResource(
+        fd,
+        (evt) => {
+          if (evt.total) {
+            setProgress(Math.round((evt.loaded * 100) / evt.total));
+          }
+        },
+        abortCtrl.current.signal
+      );
       onSuccess();
       onClose();
     } catch(err) {
-      if (err.name !== 'CanceledError') {
+      if (err.name !== 'CanceledError' && err.name !== 'AbortError' && err.code !== 'ERR_CANCELED') {
          alert(err.response?.data?.error?.message || 'Upload failed');
       }
     } finally {
@@ -420,6 +529,11 @@ function UploadModal({ onClose, subjectId, onSuccess }) {
             <div className="text-center font-medium">Uploading... {progress}%</div>
             <div className="w-full bg-[var(--color-bg-card)] rounded-full h-3 overflow-hidden">
               <div className="bg-[var(--color-accent)] h-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+            </div>
+            <div className="flex justify-center pt-2">
+              <button type="button" onClick={handleCancelUpload} className="btn btn-secondary text-xs px-4 py-1.5">
+                Cancel Upload
+              </button>
             </div>
           </div>
         ) : (

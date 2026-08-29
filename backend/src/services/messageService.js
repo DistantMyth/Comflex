@@ -189,7 +189,7 @@ async function editMessage(messageId, userId, newContent, groupId = null, anon =
  * Delete a message (soft delete — marks as deleted).
  * Anonymous groups: ownership is proven by the identity secret.
  */
-async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId = null, anon = null) {
+async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId = null, anon = null, actorRing = 3) {
   await assertMessageInGroup(messageId, groupId);
   const msg = await prisma.message.findUnique({ where: { id: messageId } });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
@@ -197,8 +197,24 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId
   const isOwn = msg.authorType === 'anon'
     ? (anon && msg.anonAuthorId === anon.identityId)
     : msg.authorId === userId;
-  if (!isOwn && !canDeleteOthers) {
-    throw Object.assign(new Error('You do not have permission to delete this message.'), { statusCode: 403, code: 'PERMISSION_DENIED' });
+  if (!isOwn) {
+    if (!canDeleteOthers) {
+      throw Object.assign(new Error('You do not have permission to delete this message.'), { statusCode: 403, code: 'PERMISSION_DENIED' });
+    }
+    // Check ring hierarchy if author is in normal group
+    if (msg.authorId && groupId) {
+      const authorMembership = await prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId: msg.authorId, groupId } },
+        select: { ring: true },
+      });
+      const authorRing = authorMembership?.ring ?? 3;
+      if (actorRing !== 0 && authorRing <= actorRing) {
+        throw Object.assign(
+          new Error('Cannot delete messages from users at your level or above.'),
+          { statusCode: 403, code: 'RING_VIOLATION' }
+        );
+      }
+    }
   }
 
   return prisma.message.update({

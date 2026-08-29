@@ -6,7 +6,7 @@
  */
 
 const express = require('express');
-const { body, param, validationResult } = require('express-validator');
+const { body, validationResult } = require('express-validator');
 const authService = require('../services/authService');
 const authMiddleware = require('../middleware/auth');
 const { rateLimiter } = require('../middleware/rateLimit');
@@ -24,8 +24,7 @@ router.use(rateLimiter({
   keyPrefix: 'auth-ip',
 }));
 
-// Per-account login throttling — keyed by the normalized email so a brute
-// force against ONE account is capped even when distributed across IPs.
+// Per-account login throttling — keyed by the normalized email
 const loginEmailLimit = rateLimiter({
   windowMs: 10 * 60 * 1000,
   max: 10,
@@ -34,15 +33,37 @@ const loginEmailLimit = rateLimiter({
   keyFn: (req) => (typeof req.body?.email === 'string' ? authService.normalizeEmail(req.body.email) : null),
 });
 
+// Dedicated rate limiter for registration
+const registerIpLimit = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: 'Too many registration attempts from this IP. Try again later.',
+  keyPrefix: 'auth-register-ip',
+});
+
+// Dedicated rate limiter for password resets
+const resetPasswordLimit = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: 'Too many password reset attempts from this IP. Try again later.',
+  keyPrefix: 'auth-reset-pw-ip',
+});
+
+const passwordComplexity = (fieldName = 'password') =>
+  body(fieldName)
+    .isLength({ min: 8, max: 72 }).withMessage('Password must be 8–72 characters.')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number.');
+
 /**
  * POST /api/v1/auth/register
  * Create a new user account (email/password — legacy flow).
  */
 router.post(
   '/register',
+  registerIpLimit,
   [
     body('email').isEmail().withMessage('A valid email is required.'),
-    body('password').isLength({ min: 8, max: 72 }).withMessage('Password must be 8–72 characters.'),
+    passwordComplexity('password'),
     body('displayName').trim().isLength({ min: 2, max: 50 }).withMessage('Display name must be 2–50 characters.'),
   ],
   async (req, res, next) => {
@@ -105,7 +126,7 @@ router.post(
   '/set-password',
   authMiddleware,
   [
-    body('newPassword').isLength({ min: 8, max: 72 }).withMessage('Password must be 8–72 characters.'),
+    passwordComplexity('newPassword'),
     body('currentPassword').optional().isString().withMessage('Current password must be a string.'),
   ],
   async (req, res, next) => {
@@ -223,9 +244,6 @@ router.post(
         );
       }
 
-      // CSRF guard: when the refresh token comes via cookie (cross-site
-      // SameSite=None path), only accept requests whose Origin is ours
-      // or absent (same-origin navigations / curl).
       const token = req.cookies?.[REFRESH_COOKIE_NAME] || req.body.refreshToken;
       if (!token) {
         return error(res, 'VALIDATION_ERROR', 'Refresh token is required.', 400);
@@ -246,7 +264,6 @@ router.post(
 
       const result = await authService.refreshAccessToken(token);
       if (result.refreshToken) {
-        // Rotated refresh token — set it as a fresh cookie.
         setRefreshCookie(res, result.refreshToken);
       }
       return success(res, result);
@@ -306,9 +323,7 @@ router.post('/forgot-password', rateLimiter({
 
 /**
  * GET /api/v1/auth/reset-email-status?email=
- * Report password-reset rate-limit state (public — limiter state only, no PII).
- * Rate-limited per IP so attackers can't scrape limiter state for arbitrary
- * addresses or use it as an enumeration oracle.
+ * Report password-reset rate-limit state.
  */
 router.get('/reset-email-status', rateLimiter({
   windowMs: 10 * 60 * 1000,
@@ -330,9 +345,10 @@ router.get('/reset-email-status', rateLimiter({
  */
 router.post(
   '/reset-password',
+  resetPasswordLimit,
   [
     body('token').notEmpty().withMessage('Reset token is required.'),
-    body('newPassword').isLength({ min: 8, max: 72 }).withMessage('Password must be 8–72 characters.'),
+    passwordComplexity('newPassword'),
   ],
   async (req, res, next) => {
     try {

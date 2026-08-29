@@ -1,9 +1,3 @@
-/**
- * MessagesPage — DM conversations list & active chat.
- * Shows all DM conversations in a sidebar and the active chat in the main area.
- * Features: read receipt tick marks (✓ sent, ✓✓ read), real-time updates.
- */
-
 import { useState, useEffect, useCallback, useRef, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { dmApi } from '../api/dmApi';
@@ -11,7 +5,6 @@ import { storeApi } from '../api/storeApi';
 import { userApi } from '../api/userApi';
 import { AuthContext } from '../context/AuthContext';
 import { useSocket } from '../hooks/useSocket';
-import MessageBubble from '../components/MessageBubble';
 import resolveAsset from '../utils/resolveAsset';
 
 export default function MessagesPage() {
@@ -25,12 +18,23 @@ export default function MessagesPage() {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [sending, setSending] = useState(false);
   const [showCreditTransfer, setShowCreditTransfer] = useState(false);
   const [creditAmount, setCreditAmount] = useState('');
   const [creditMsg, setCreditMsg] = useState('');
   const [fallbackPartner, setFallbackPartner] = useState(null);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [forwardingMsg, setForwardingMsg] = useState(null);
+  const [forwardSearch, setForwardSearch] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editContent, setEditContent] = useState('');
+
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const scrollContainerRef = useRef(null);
 
   // Fetch conversation list
   const fetchConversations = useCallback(async () => {
@@ -49,8 +53,13 @@ export default function MessagesPage() {
     if (!activeUserId) return;
     if (!silent) setLoading(true);
     try {
-      const res = await dmApi.getMessages(activeUserId);
-      setMessages(res.data.data?.messages || []);
+      const res = await dmApi.getMessages(activeUserId, 1, 50);
+      const fetched = res.data.data?.messages || [];
+      setMessages(fetched);
+      setPage(1);
+      const totalPages = res.data.data?.pagination?.totalPages || 1;
+      setHasMore(totalPages > 1);
+
       // Mark as read via socket (for real-time notification) or REST fallback
       try {
         if (connected) {
@@ -67,6 +76,24 @@ export default function MessagesPage() {
       if (!silent) setLoading(false);
     }
   }, [activeUserId, fetchConversations, connected, markDMRead]);
+
+  const loadOlderMessages = async () => {
+    if (loadingOlder || !hasMore || !activeUserId) return;
+    setLoadingOlder(true);
+    try {
+      const nextPage = page + 1;
+      const res = await dmApi.getMessages(activeUserId, nextPage, 50);
+      const older = res.data.data?.messages || [];
+      setMessages(prev => [...older, ...prev]);
+      setPage(nextPage);
+      const totalPages = res.data.data?.pagination?.totalPages || 1;
+      setHasMore(nextPage < totalPages);
+    } catch (err) {
+      console.error('Failed to load older messages:', err);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
 
   useEffect(() => { fetchConversations(); }, [fetchConversations]);
   useEffect(() => { fetchMessages(); }, [fetchMessages]);
@@ -88,7 +115,10 @@ export default function MessagesPage() {
       onEvent('dm:new', (msg) => {
         // If we're in the active conversation, add the message
         if (activeUserId && (msg.senderId === activeUserId || msg.receiverId === activeUserId)) {
-          setMessages(prev => [...prev, msg]);
+          setMessages(prev => {
+            if (prev.some(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
           // Auto-mark as read since we're viewing this conversation
           if (msg.senderId === activeUserId) {
             markDMRead(activeUserId).catch(() => {});
@@ -107,15 +137,27 @@ export default function MessagesPage() {
           ));
         }
       }),
+      onEvent('dm:edit', (updatedMsg) => {
+        setMessages(prev => prev.map(m => m.id === updatedMsg.id ? { ...m, ...updatedMsg } : m));
+      }),
+      onEvent('dm:delete', ({ messageId }) => {
+        setMessages(prev => prev.map(m =>
+          m.id === messageId
+            ? { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null }
+            : m
+        ));
+      }),
     ];
 
     return () => cleanups.forEach(fn => fn?.());
   }, [connected, onEvent, activeUserId, currentUser?.id, markDMRead, fetchConversations]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom when new messages arrive (if not loading older)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!loadingOlder) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages.length, loadingOlder]);
 
   // Poll for new messages when disconnected from the socket (5s). While
   // connected, real-time events already keep the conversation fresh.
@@ -123,16 +165,9 @@ export default function MessagesPage() {
     if (!activeUserId) return;
     if (connected) return;
     const interval = setInterval(() => fetchMessages(true), 5000);
-    // Auto-focus input when opening a conversation
     setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearInterval(interval);
   }, [activeUserId, fetchMessages, connected]);
-
-  const [replyingTo, setReplyingTo] = useState(null);
-  const [forwardingMsg, setForwardingMsg] = useState(null);
-  const [forwardSearch, setForwardSearch] = useState('');
-  const [editingId, setEditingId] = useState(null);
-  const [editContent, setEditContent] = useState('');
 
   const submitForward = async (targetUserId) => {
     if (!forwardingMsg) return;
@@ -140,7 +175,10 @@ export default function MessagesPage() {
       await dmApi.sendMessage(targetUserId, {
         content: forwardingMsg.content,
         forwarded: true,
-        msgType: forwardingMsg.msgType || 'text'
+        msgType: forwardingMsg.msgType || 'text',
+        fileUrl: forwardingMsg.fileUrl,
+        fileName: forwardingMsg.fileName,
+        fileSize: forwardingMsg.fileSize,
       });
       alert('Message forwarded successfully.');
       setForwardingMsg(null);
@@ -148,8 +186,6 @@ export default function MessagesPage() {
       alert(err.response?.data?.error?.message || 'Failed to forward message.');
     }
   };
-
-  const inputRef = useRef(null);
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -165,7 +201,6 @@ export default function MessagesPage() {
       console.error('Failed to send message:', err);
     } finally {
       setSending(false);
-      // Wait for React to re-enable the input before focusing
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   };
@@ -210,7 +245,7 @@ export default function MessagesPage() {
     <>
     <div className="flex h-[calc(100dvh-9rem)] lg:h-[calc(100dvh-6rem)] min-h-[440px] relative">
         {/* Conversations sidebar */}
-        <div className="w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-secondary)]">
+        <div className={`w-full md:w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-secondary)] ${activeUserId ? 'hidden md:flex' : 'flex'}`}>
           <div className="p-4 border-b border-[var(--color-border)]">
             <h2 className="text-lg font-bold">Messages</h2>
             <input
@@ -271,11 +306,18 @@ export default function MessagesPage() {
         </div>
 
         {/* Chat area */}
-        <div className="flex-1 flex flex-col">
+        <div className={`flex-1 flex flex-col ${!activeUserId ? 'hidden md:flex' : 'flex'}`}>
           {activeUserId ? (
             <>
               {/* Chat header */}
               <div className="p-4 border-b border-[var(--color-border)] flex items-center gap-3 bg-[var(--color-bg-secondary)]">
+                <button
+                  onClick={() => navigate('/messages')}
+                  className="md:hidden p-1.5 -ml-1 text-[var(--color-text-secondary)] hover:text-white rounded-lg flex items-center justify-center"
+                  title="Back to conversations"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                </button>
                 {activePartner?.avatarUrl ? (
                   <img src={resolveAsset(activePartner.avatarUrl)} alt="" className="w-8 h-8 rounded-full object-cover" />
                 ) : (
@@ -290,10 +332,22 @@ export default function MessagesPage() {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+              <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+                {hasMore && (
+                  <div className="text-center py-2">
+                    <button
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlder}
+                      className="text-xs text-[var(--color-accent)] hover:underline font-medium disabled:opacity-50"
+                    >
+                      {loadingOlder ? 'Loading older messages...' : '↑ Load older messages'}
+                    </button>
+                  </div>
+                )}
                 {loading && messages.length === 0 && <p className="text-center text-[var(--color-text-muted)] animate-pulse">Loading messages...</p>}
                 {messages.map(msg => {
                   const isMine = msg.senderId === currentUser?.id;
+                  const repliedMessage = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
 
                   const handleSaveEdit = async () => {
                     if (!editContent.trim()) return;
@@ -306,7 +360,7 @@ export default function MessagesPage() {
 
                   return (
                     <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group relative items-center gap-2`}>
-                      {!isMine && (
+                      {!isMine && !msg.isDeleted && (
                         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity order-last">
                            <button onClick={() => setReplyingTo(msg)} className="text-xs text-[var(--color-text-muted)] hover:text-white p-1" title="Reply">↩</button>
                            <button onClick={() => setForwardingMsg(msg)} className="text-xs text-[var(--color-text-muted)] hover:text-white p-1" title="Forward">➦</button>
@@ -322,6 +376,19 @@ export default function MessagesPage() {
                            <p className="italic text-white/50 text-xs py-1">[Message deleted]</p>
                         ) : (
                           <>
+                            {msg.forwarded && (
+                              <p className={`text-[10px] italic flex items-center gap-1 mb-1 font-medium ${isMine ? 'text-white/80' : 'text-[var(--color-text-muted)]'}`}>
+                                ➦ Forwarded
+                              </p>
+                            )}
+
+                            {msg.replyToId && (
+                              <div className={`text-xs px-2.5 py-1.5 mb-2 rounded border-l-2 bg-black/15 border-[var(--color-accent)] truncate max-w-full ${isMine ? 'text-white/90' : 'text-[var(--color-text-secondary)]'}`}>
+                                <span className="font-semibold">{repliedMessage?.author?.displayName || 'Reply'}: </span>
+                                <span className="truncate">{repliedMessage?.content || (repliedMessage?.fileUrl ? '[Attachment]' : '[Message]')}</span>
+                              </div>
+                            )}
+
                             {editingId === msg.id ? (
                               <div className="flex flex-col gap-2 min-w-[200px]">
                                 <input
@@ -350,7 +417,7 @@ export default function MessagesPage() {
                                     )}
                                   </div>
                                 )}
-                                <p className="whitespace-pre-wrap">{msg.content}</p>
+                                {msg.content && <p className="whitespace-pre-wrap">{msg.content}</p>}
                               </>
                             )}
                           </>
@@ -370,7 +437,7 @@ export default function MessagesPage() {
                            <button onClick={async () => {
                              try {
                                await dmApi.deleteMessage(msg.id);
-                               setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isDeleted: true, content: '[Message deleted]' } : m));
+                               setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null } : m));
                              } catch { alert('Failed to delete'); }
                            }} className="text-xs text-[var(--color-danger)] hover:text-red-400 p-1" title="Delete">🗑</button>
                            <button onClick={() => setReplyingTo(msg)} className="text-xs text-[var(--color-text-muted)] hover:text-white p-1" title="Reply">↩</button>

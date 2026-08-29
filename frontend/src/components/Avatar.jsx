@@ -11,7 +11,7 @@ export default function Avatar({ src, alt, name, className, fallbackChar = '?' }
   const resolved = resolveAsset(src);
 
   if (!resolved || error) {
-    const initial = name?.charAt(0)?.toUpperCase() || fallbackChar;
+    const initial = name?.trim().charAt(0)?.toUpperCase() || fallbackChar;
     return (
       <div className={`flex items-center justify-center avatar-gradient text-white font-bold overflow-hidden flex-shrink-0 ${className}`}>
         {initial}

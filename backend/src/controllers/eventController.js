@@ -79,15 +79,25 @@ async function grantSubmissionRewards({ event, team, submission, grantedById }) 
 exports.listEvents = async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    
-    // Find events matching user targeting tags or public events (empty targetTags)
+    const isGlobalAdmin = user.globalRing === 0;
+
+    // Non-organizers only see published/ongoing/completed events and not invite-only
+    const statusFilter = isGlobalAdmin
+      ? undefined
+      : { in: ['published', 'ongoing', 'completed'] };
+
     const events = await prisma.event.findMany({
       where: {
-        OR: [
-          { targetTags: { isEmpty: true } },
-          { targetTags: { hasSome: user.cohortTags || [] } }
-        ],
-        // Optionally filter by status based on business logic, here we fetch all for debugging
+        AND: [
+          statusFilter ? { status: statusFilter } : {},
+          !isGlobalAdmin ? { inviteMode: { not: 'invite_only' } } : {},
+          {
+            OR: [
+              { targetTags: { isEmpty: true } },
+              { targetTags: { hasSome: user.cohortTags || [] } }
+            ]
+          }
+        ]
       },
       include: {
         subEvents: true,
@@ -156,6 +166,16 @@ exports.getEvent = async (req, res, next) => {
     const isOrganizer = event.creatorId === user.id || event.organizers.some(o => o.userId === user.id);
     const organizerView = isOrganizer || user.globalRing === 0;
 
+    if (!organizerView) {
+      if (event.status === 'draft') {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+      }
+      const eligErr = eligibilityError(event, user);
+      if (eligErr && event.inviteMode !== 'invite_only') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: eligErr } });
+      }
+    }
+
     if (organizerView) {
       // Reward rules are organizer/participant-incentive config — public to
       // organizers only; participants see actual payouts in their results.
@@ -175,7 +195,7 @@ exports.createEvent = async (req, res, next) => {
   try {
     const {
       title, description, startDate, endDate, durationHours, durationMinutes, category, targetTags: targetTagsRaw,
-      parentId, keepTeamsSame, isTeamEvent, minTeamSize, maxTeamSize, status,
+      parentId, keepTeamsSame, isTeamEvent, minTeamSize, maxTeamSize, status: requestedStatus,
       taskViewMode, scoreMode, wrongSubmissionPenalty, autoStart,
       inviteMode: inviteModeRaw, allowedCohorts: allowedCohortsRaw, blockedCohorts: blockedCohortsRaw, allowedUserIds, blockedUserIds
     } = req.body;
@@ -192,6 +212,7 @@ exports.createEvent = async (req, res, next) => {
     const inviteMode = mayTargetGroups ? (inviteModeRaw || 'open') : 'invite_only';
     const allowedCohorts = mayTargetGroups ? (allowedCohortsRaw || []) : [];
     const blockedCohorts = mayTargetGroups ? (blockedCohortsRaw || []) : [];
+    const status = (mayTargetGroups && requestedStatus) ? requestedStatus : 'draft';
 
     // If it's a subevent, check if user is an organizer of the parent event
     if (parentId) {
@@ -223,9 +244,9 @@ exports.createEvent = async (req, res, next) => {
         parentId,
         keepTeamsSame: keepTeamsSame || false,
         isTeamEvent: isTeamEvent || false,
-        minTeamSize: minTeamSize || 1,
-        maxTeamSize: maxTeamSize || 1,
-        status: status || 'draft',
+        minTeamSize: minTeamSize ? Math.max(1, minTeamSize) : 1,
+        maxTeamSize: maxTeamSize ? Math.max(1, maxTeamSize) : 1,
+        status,
         autoStart: autoStart !== undefined ? autoStart : true,
         creatorId: user.id,
         inviteMode,
@@ -481,7 +502,7 @@ exports.listTeams = async (req, res, next) => {
           }
         } : {
           invites: {
-            where: { invitedUserId: req.user.id },
+            where: { OR: [{ invitedUserId: req.user.id }, { invitedBy: req.user.id }] },
             include: {
               invitedUser: { select: { id: true, displayName: true, avatarUrl: true } }
             }
@@ -580,10 +601,14 @@ exports.acceptTeamInvite = async (req, res, next) => {
       return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not authorized.' } });
     }
 
-    // A rejected invite is final — do not let users resurrect it to bypass
-    // the leader's decision.
-    if (invite.status === 'rejected') {
-      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'This invite has been rejected.' } });
+    // Only pending invites can be accepted
+    if (invite.status !== 'pending') {
+      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: `This invite is already ${invite.status}.` } });
+    }
+
+    // Invites expire after 7 days
+    if (invite.createdAt && (Date.now() - new Date(invite.createdAt).getTime() > 7 * 24 * 60 * 60 * 1000)) {
+      return res.status(400).json({ error: { code: 'EXPIRED', message: 'This invite has expired.' } });
     }
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
@@ -591,11 +616,6 @@ exports.acceptTeamInvite = async (req, res, next) => {
 
     const hasStarted = event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate));
     if (hasStarted) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Cannot join. The event has already started.' } });
-
-    const membersCount = await prisma.eventTeamMember.count({ where: { teamId: invite.teamId } });
-    if (membersCount >= event.maxTeamSize) {
-      return res.status(400).json({ error: { code: 'CONFLICT', message: 'Team is already full.' } });
-    }
 
     const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
 
@@ -610,29 +630,45 @@ exports.acceptTeamInvite = async (req, res, next) => {
       }
     }
 
-    // Check if user is already in a team
-    const existingTeam = await prisma.eventTeamMember.findFirst({
-      where: {
-        userId: req.user.id,
-        team: { eventId }
+    // Atomic transaction for team capacity and join validation
+    await prisma.$transaction(async (tx) => {
+      const existingTeam = await tx.eventTeamMember.findFirst({
+        where: {
+          userId: req.user.id,
+          team: { eventId }
+        }
+      });
+
+      if (existingTeam) {
+        throw Object.assign(new Error('You are already in a team for this event.'), { statusCode: 400, code: 'CONFLICT' });
       }
-    });
 
-    if (existingTeam) {
-      return res.status(400).json({ error: { code: 'CONFLICT', message: 'You are already in a team.' } });
-    }
+      const membersCount = await tx.eventTeamMember.count({ where: { teamId: invite.teamId } });
+      if (membersCount >= event.maxTeamSize) {
+        throw Object.assign(new Error('Team is already full.'), { statusCode: 400, code: 'CONFLICT' });
+      }
 
-    await prisma.eventTeamMember.create({
-      data: { teamId: invite.teamId, userId: req.user.id }
-    });
+      await tx.eventTeamMember.create({
+        data: { teamId: invite.teamId, userId: req.user.id }
+      });
 
-    await prisma.eventTeamInvite.update({
-      where: { id: inviteId },
-      data: { status: 'accepted' }
+      await tx.eventTeamInvite.update({
+        where: { id: inviteId },
+        data: { status: 'accepted' }
+      });
+
+      // If team now meets minTeamSize, update team status to registered
+      if (membersCount + 1 >= (event.minTeamSize || 1)) {
+        await tx.eventTeam.update({
+          where: { id: invite.teamId },
+          data: { status: 'registered' }
+        });
+      }
     });
 
     return success(res, { message: 'Invite accepted.' });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: { code: err.code || 'BAD_REQUEST', message: err.message } });
     next(err);
   }
 };
@@ -710,6 +746,13 @@ exports.verifyTeamParticipation = async (req, res, next) => {
 exports.leaveTeam = async (req, res, next) => {
   try {
     const { id: eventId, teamId } = req.params;
+
+    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { status: true, startDate: true, autoStart: true } });
+    const hasStarted = event && (event.status === 'ongoing' || event.status === 'completed' || (event.autoStart && new Date() >= new Date(event.startDate)));
+    if (hasStarted) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Cannot leave or modify teams once the event has started.' } });
+    }
+
     const member = await prisma.eventTeamMember.findUnique({
       where: { teamId_userId: { teamId, userId: req.user.id } }
     });
@@ -763,9 +806,17 @@ exports.acceptLeaderSwap = async (req, res, next) => {
   try {
     const { teamId } = req.params;
     const team = await prisma.eventTeam.findUnique({ where: { id: teamId } });
+    if (!team) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found.' } });
     
     if (team.proposedLeaderId !== req.user.id) {
        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not the proposed leader.' } });
+    }
+
+    const isMember = await prisma.eventTeamMember.findUnique({
+      where: { teamId_userId: { teamId, userId: req.user.id } }
+    });
+    if (!isMember) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are no longer a member of this team.' } });
     }
 
     const updated = await prisma.eventTeam.update({
@@ -781,6 +832,7 @@ exports.rejectLeaderSwap = async (req, res, next) => {
   try {
     const { teamId } = req.params;
     const team = await prisma.eventTeam.findUnique({ where: { id: teamId } });
+    if (!team) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Team not found.' } });
     
     if (team.proposedLeaderId !== req.user.id) {
        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You are not the proposed leader.' } });
@@ -814,7 +866,7 @@ exports.createTask = async (req, res, next) => {
         eventId, title, description, order, basePoints: basePoints || 100, 
         submissionType: submissionType || 'text',
         submissionConfig, isAutoEvaluated: isAutoEvaluated || false,
-        isDynamicScore: isDynamicScore || false,
+        isDynamicScore: isDynamicScore !== undefined ? isDynamicScore : (Number(decayPercentage) > 0),
         decayPercentage: decayPercentage || 0,
         wrongSubmissionPenalty: wrongSubmissionPenalty || 0
       }
@@ -917,8 +969,44 @@ exports.submitTask = async (req, res, next) => {
 
     if (!member) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Not in a team.' } });
 
+    if (member.team.status !== 'registered') {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Your team registration is pending and not yet finalized.' } });
+    }
+
     const event = await prisma.event.findUnique({ where: { id: eventId } });
     if (!event) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Event not found.' } });
+
+    // Validate event lifecycle and submission window
+    const now = new Date();
+    const start = new Date(event.startDate);
+    const end = event.endDate
+      ? new Date(event.endDate)
+      : new Date(start.getTime() + (event.durationHours * 3600000) + (event.durationMinutes * 60000));
+
+    const isOngoing = event.status === 'ongoing' || (event.status === 'published' && event.autoStart && now >= start && now < end);
+    if (!isOngoing) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Submissions are only allowed while the event is ongoing.' } });
+    }
+
+    // Dynamic sequential task unlocking validation
+    if (event.taskViewMode === 'dynamic' && task.order > 1) {
+      const priorTasks = await prisma.eventTask.findMany({
+        where: { eventId, order: { lt: task.order } },
+        select: { id: true },
+      });
+      if (priorTasks.length > 0) {
+        const solvedPrior = await prisma.eventSubmission.count({
+          where: {
+            teamId: member.teamId,
+            taskId: { in: priorTasks.map(t => t.id) },
+            status: 'correct',
+          },
+        });
+        if (solvedPrior < priorTasks.length) {
+          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You must solve previous tasks before attempting this one.' } });
+        }
+      }
+    }
 
     // Auto-grading: mcq / true_false / checkboxes / text / url tasks evaluate
     // against the answer key; everything else waits for an organizer.
@@ -1012,27 +1100,50 @@ function computeLeaderboard(event, teams) {
   const leaderboard = teams.map(team => {
     let totalScore = team.points || 0; // Legacy base points
     const history = [];
+    let lastPointDate = new Date(0);
 
     (team.submissions || []).forEach(sub => {
-      const change = computeScore({ task: sub.task, event, submittedAt: sub.submittedAt, status: sub.status });
+      let change = 0;
+      if (sub.task?.isAutoEvaluated) {
+        change = computeScore({ task: sub.task, event, submittedAt: sub.submittedAt, status: sub.status });
+      } else {
+        if (sub.status === 'correct') {
+          change = sub.scoreAwarded ?? sub.task?.basePoints ?? 0;
+        } else if (sub.status === 'wrong') {
+          change = -((sub.task?.wrongSubmissionPenalty || 0) + (event.wrongSubmissionPenalty || 0));
+        }
+      }
       totalScore += change;
+      if (change > 0 && new Date(sub.submittedAt) > lastPointDate) {
+        lastPointDate = new Date(sub.submittedAt);
+      }
       if (sub.status === 'correct') {
-        history.push({ type: 'submission', taskId: sub.taskId, taskTitle: sub.task.title, scoreChange: change, date: sub.submittedAt, status: 'correct' });
+        history.push({ type: 'submission', taskId: sub.taskId, taskTitle: sub.task?.title, scoreChange: change, date: sub.submittedAt, status: 'correct' });
       } else if (sub.status === 'wrong') {
-        history.push({ type: 'submission', taskId: sub.taskId, taskTitle: sub.task.title, scoreChange: change, date: sub.submittedAt, status: 'wrong' });
+        history.push({ type: 'submission', taskId: sub.taskId, taskTitle: sub.task?.title, scoreChange: change, date: sub.submittedAt, status: 'wrong' });
       }
     });
 
     (team.pointAdjustments || []).forEach(adj => {
       totalScore += adj.pointsAdded;
+      if (adj.pointsAdded > 0 && new Date(adj.createdAt) > lastPointDate) {
+        lastPointDate = new Date(adj.createdAt);
+      }
       history.push({ type: 'adjustment', reason: adj.reason, awardedBy: adj.awardedBy?.displayName, scoreChange: adj.pointsAdded, date: adj.createdAt });
     });
 
     history.sort((a, b) => new Date(b.date) - new Date(a.date));
-    return { id: team.id, name: team.name, score: Math.round(totalScore), history, team };
+    return { id: team.id, name: team.name, score: Math.round(totalScore), lastPointDate, history, team };
   });
 
-  leaderboard.sort((a, b) => b.score - a.score);
+  // Deterministic tie-breaking: highest score first, then earliest last point earned, then alphabetical name
+  leaderboard.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.lastPointDate.getTime() !== b.lastPointDate.getTime()) {
+      return a.lastPointDate.getTime() - b.lastPointDate.getTime();
+    }
+    return (a.name || '').localeCompare(b.name || '');
+  });
   return leaderboard;
 }
 

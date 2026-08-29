@@ -85,6 +85,10 @@ export default function ManageEventsPage() {
 
   const handleCreateEvent = async (e) => {
     e.preventDefault();
+    if (form.isTeamEvent && Number(form.minTeamSize) > Number(form.maxTeamSize)) {
+      setMessage('Minimum team size cannot be greater than maximum team size.');
+      return;
+    }
     setCreating(true);
     setMessage('');
 

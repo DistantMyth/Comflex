@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { storeApi } from '../api/storeApi';
 import { ethers } from 'ethers';
@@ -15,6 +16,7 @@ export default function StorePage() {
   const [activeTab, setActiveTab] = useState('store'); // store, inventory, ledger, (admin)
   const [pricingConfig, setPricingConfig] = useState(null);
   const [popup, setPopup] = useState({ show: false, message: '', isError: false });
+  const [purchasingId, setPurchasingId] = useState(null);
 
   const showPopup = (message, isError = false) => {
     setPopup({ show: true, message, isError });
@@ -41,7 +43,33 @@ export default function StorePage() {
       setCreditsLoading(true);
       const provider = new ethers.BrowserProvider(window.ethereum);
       await provider.send("eth_requestAccounts", []);
+
+      // Verify Sepolia testnet chain
+      const network = await provider.getNetwork();
+      if (network.chainId !== 11155111n) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0xaa36a7' }],
+          });
+        } catch {
+          showPopup('Please switch your wallet network to Sepolia Testnet.', true);
+          return;
+        }
+      }
+
       const signer = await provider.getSigner();
+      const signerAddress = await signer.getAddress();
+
+      // Verify wallet binding — sign challenge if not bound
+      if (!user?.walletAddress || user.walletAddress.toLowerCase() !== signerAddress.toLowerCase()) {
+        showPopup('Please sign the message in your wallet to bind your address before purchase...');
+        const challengeRes = await storeApi.getWalletChallenge();
+        const nonce = challengeRes.data.data.nonce;
+        const message = `Comflex wallet binding\n\nNonce: ${nonce}\nAccount: ${user?.id}`;
+        const signature = await signer.signMessage(message);
+        await storeApi.bindWallet({ address: signerAddress, signature });
+      }
 
       const treasury = import.meta.env.VITE_TREASURY_ADDRESS;
       if (!treasury) throw new Error("Treasury not configured");
@@ -51,7 +79,7 @@ export default function StorePage() {
         value: ethers.parseEther(priceEth.toString())
       });
 
-      showPopup(`Transaction sent! Please wait... Hash: ${tx.hash}`);
+      showPopup(`Transaction sent! Waiting for confirmation... Hash: ${tx.hash}`);
       await tx.wait();
 
       await storeApi.buyCredits({ txHash: tx.hash, amount });
@@ -101,6 +129,8 @@ export default function StorePage() {
   }, [fetchData]);
 
   const handlePurchase = async (listingId) => {
+    if (purchasingId) return;
+    setPurchasingId(listingId);
     try {
       await storeApi.purchaseBadge(listingId);
       showPopup('Purchase successful!');
@@ -108,6 +138,8 @@ export default function StorePage() {
       refreshProfile(); // to update credits
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Purchase failed', true);
+    } finally {
+      setPurchasingId(null);
     }
   };
 
@@ -241,10 +273,10 @@ export default function StorePage() {
                       </div>
                       <button
                         onClick={() => handlePurchase(l.id)}
-                        disabled={(user?.globalRing !== 0 && user?.creditBalance < l.price) || (l.quantity !== -1 && l.sold >= l.quantity)}
+                        disabled={(user?.globalRing !== 0 && user?.creditBalance < l.price) || (l.quantity !== -1 && l.sold >= l.quantity) || purchasingId === l.id}
                         className="btn btn-primary w-full mt-4"
                       >
-                        {l.quantity !== -1 && l.sold >= l.quantity ? 'Sold Out' : 'Buy Now'}
+                        {purchasingId === l.id ? 'Purchasing...' : l.quantity !== -1 && l.sold >= l.quantity ? 'Sold Out' : 'Buy Now'}
                       </button>
                     </div>
                   ))}
@@ -264,7 +296,7 @@ export default function StorePage() {
                  ))}
                  <div className="col-span-full mt-4 p-4 border border-[var(--color-accent)] rounded-lg bg-[var(--color-accent)]/10">
                    <p className="text-sm font-semibold text-[var(--color-accent)]">💡 Want to show these off?</p>
-                   <p className="text-xs text-[var(--color-text-secondary)] mt-1">Go to your <a href="/profile" className="underline font-bold">Profile</a> to equip up to 5 badges to display next to your name in chats!</p>
+                   <p className="text-xs text-[var(--color-text-secondary)] mt-1">Go to your <Link to="/profile" className="underline font-bold">Profile</Link> to equip up to 5 badges to display next to your name in chats!</p>
                  </div>
               </div>
             )}
@@ -283,22 +315,23 @@ export default function StorePage() {
                   <tbody>
                     {ledger.transactions.length === 0 && <tr><td colSpan="4" className="p-4 text-center text-[var(--color-text-muted)]">No transactions found.</td></tr>}
                     {ledger.transactions.map((tx) => {
-                      const isSender = tx.senderId === user?.id;
+                      const isCredit = tx.type === 'crypto_purchase' || tx.type === 'download_reward' || tx.type === 'event_reward' || (tx.type === 'transfer' && tx.receiverId === user?.id);
                       return (
                         <tr key={tx.id} className="border-b border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)]/50">
                           <td className="p-4">{new Date(tx.createdAt).toLocaleString()}</td>
                           <td className="p-4 capitalize">{tx.type.replace('_', ' ')}</td>
                           <td className="p-4 font-bold">
-                            <span className={isSender ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}>
-                              {isSender ? '-' : '+'}🪙 {tx.amount}
+                            <span className={isCredit ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}>
+                              {isCredit ? '+' : '-'}🪙 {tx.amount}
                             </span>
                           </td>
                           <td className="p-4 text-[var(--color-text-secondary)]">
                             {tx.type === 'purchase' ? 'Store'
+                             : tx.type === 'crypto_purchase' ? 'Crypto Purchase (ETH)'
                              : tx.type === 'download_reward' ? 'System Reward'
                              : tx.type === 'event_reward' ? 'Event Reward'
-                             : isSender ? `To ${tx.receiver?.displayName}`
-                             : `From ${tx.sender?.displayName || 'System'}`}
+                             : isCredit ? `From ${tx.sender?.displayName || 'System'}`
+                             : `To ${tx.receiver?.displayName}`}
                           </td>
                         </tr>
                       );
@@ -358,9 +391,9 @@ export default function StorePage() {
                       <form onSubmit={handleUpdateConfig} className="grid grid-cols-2 gap-4 text-sm">
 
                         <div className="col-span-2 font-bold mt-2 border-b">Credit Currency Rates (ETH)</div>
-                        <label className="flex flex-col">100 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['100'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '100': parseFloat(e.target.value)}})} /></label>
-                        <label className="flex flex-col">500 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['500'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '500': parseFloat(e.target.value)}})} /></label>
-                        <label className="flex flex-col">2000 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['2000'] || ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '2000': parseFloat(e.target.value)}})} /></label>
+                        <label className="flex flex-col">100 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['100'] ?? ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '100': parseFloat(e.target.value)}})} /></label>
+                        <label className="flex flex-col">500 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['500'] ?? ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '500': parseFloat(e.target.value)}})} /></label>
+                        <label className="flex flex-col">2000 Credits <input type="number" step="0.001" className="p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)]" value={pricingConfig.creditEthPrice?.['2000'] ?? ''} onChange={e => setPricingConfig({...pricingConfig, creditEthPrice: {...pricingConfig.creditEthPrice, '2000': parseFloat(e.target.value)}})} /></label>
 
                         <button type="submit" className="col-span-2 btn btn-primary mt-2 flex items-center justify-center">💾 Save Dynamic Configuration</button>
                       </form>

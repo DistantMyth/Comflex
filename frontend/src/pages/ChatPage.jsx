@@ -12,7 +12,7 @@ import { Settings, Users } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { groupApi } from '../api/groupApi';
-import { getAnonSessions, setAnonSession } from '../api/client';
+import { getAnonSessions, setAnonSession, removeAnonSession } from '../api/client';
 import MessageBubble from '../components/MessageBubble';
 import GroupSidebar from '../components/GroupSidebar';
 import UserProfilePanel from '../components/UserProfilePanel';
@@ -70,7 +70,12 @@ export default function ChatPage() {
   const [forwardSearch, setForwardSearch] = useState('');
 
   // Pinned Messages state
-  const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);
+  const [currentPinnedIndex, setCurrentPinnedIndex] = useState(0);  // Pagination and scroll tracking
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const isNearBottomRef = useRef(true);
+  const chatContainerRef = useRef(null);
 
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
@@ -94,7 +99,7 @@ export default function ChatPage() {
   // Handle pinned messages (top 5, newest first)
   const pinnedMessages = useMemo(() => {
     return messages
-      .filter(m => m.isPinned)
+      .filter((m) => m.isPinned && !m.isDeleted)
       .sort((a, b) => {
         const timeA = new Date(a.pinnedAt || a.createdAt).getTime();
         const timeB = new Date(b.pinnedAt || b.createdAt).getTime();
@@ -109,9 +114,31 @@ export default function ChatPage() {
     }
   }, [pinnedMessages.length, currentPinnedIndex]);
 
+  // Load older messages
+  const loadOlderMessages = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await groupApi.getMessages(groupId, page + 1, 50);
+      const newMsgs = Array.isArray(res?.data?.data?.messages)
+        ? res.data.data.messages
+        : (Array.isArray(res?.data?.data) ? res.data.data : []);
+      if (newMsgs.length < 50) setHasMore(false);
+      setMessages(prev => [...[...newMsgs].reverse(), ...prev]);
+      setPage(p => p + 1);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   // Load group info, messages, and members
   useEffect(() => {
     if (!groupId) return;
+
+    setPage(1);
+    setHasMore(true);
 
     const loadData = async () => {
       setLoading(true);
@@ -128,6 +155,7 @@ export default function ChatPage() {
           ? msgsRes.data.data.messages
           : (Array.isArray(msgsRes?.data?.data) ? msgsRes.data.data : []);
         setMessages([...msgList].reverse()); // oldest first
+        if (msgList.length < 50) setHasMore(false);
         setFriendIds((friendsRes?.data?.data || []).map(f => f.id));
 
         const bMap = {};
@@ -286,14 +314,29 @@ export default function ChatPage() {
           navigate('/groups');
         }
       }),
+      onEvent('anon:banned', ({ groupId: gid, identityId: iid }) => {
+        if (gid === groupId && myIdentity?.identityId === iid) {
+          alert('Your identity has been banned from this group.');
+          removeAnonSession(groupId);
+          navigate('/groups');
+        }
+      }),
+      onEvent('anon:moderation', ({ type, identityId: iid, groupId: gid }) => {
+        if (gid === groupId && type === 'ban') {
+          // If the banned identity is in local view, hide their messages
+          setMessages((prev) => prev.filter((m) => m.author?.id !== iid));
+        }
+      }),
     ];
 
     return () => cleanups.forEach((fn) => fn?.());
-  }, [connected, onEvent, groupId, user?.id, markRead, navigate]);
+  }, [connected, onEvent, groupId, user?.id, markRead, navigate, myIdentity?.identityId]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages if user is already near bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   // Handle @mention detection in input
@@ -611,6 +654,27 @@ export default function ChatPage() {
           >
             {restoring ? 'Restoring...' : 'Restore identity'}
           </button>
+          <div className="mt-4 pt-4 border-t border-[var(--color-border)] flex flex-col gap-2">
+            <button
+              onClick={async () => {
+                if (confirm('Leave this anonymous group? If you rejoin later with an invite link, you will choose a fresh alias.')) {
+                  try {
+                    await groupApi.leaveGroup(groupId);
+                    navigate('/groups');
+                  } catch {
+                    navigate('/groups');
+                  }
+                }
+              }}
+              className="btn btn-secondary w-full text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+              type="button"
+            >
+              Lost your key? Leave group & start over
+            </button>
+            <Link to="/groups" className="text-xs text-[var(--color-text-muted)] hover:underline mt-1">
+              ← Back to My Groups
+            </Link>
+          </div>
         </div>
       </div>
     ) : (
@@ -751,7 +815,22 @@ export default function ChatPage() {
             )}
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
+            <div
+              ref={chatContainerRef}
+              onScroll={(e) => {
+                const { scrollTop, scrollHeight, clientHeight } = e.target;
+                isNearBottomRef.current = scrollHeight - (scrollTop + clientHeight) < 150;
+                if (scrollTop < 50 && hasMore && !loadingMore) {
+                  loadOlderMessages();
+                }
+              }}
+              className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0"
+            >
+              {loadingMore && (
+                <div className="py-2 text-center text-xs text-[var(--color-text-muted)] animate-pulse">
+                  Loading older messages...
+                </div>
+              )}
               {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-[var(--color-text-muted)] text-sm">
                   No messages yet. Start the conversation!
@@ -942,15 +1021,46 @@ export default function ChatPage() {
             />
           )}
           {showSidebar && !selectedUserId && !isAnon && (
-            <div className="w-64 glass-card overflow-y-auto flex-shrink-0 hidden md:block">
-              <GroupSidebar
-                groupId={groupId}
-                userPermissions={userPerms}
-                currentUserId={user?.id}
-                isAdmin={isAdmin}
-                onUserClick={(userId) => setSelectedUserId(userId)}
-              />
-            </div>
+            <>
+              {/* Desktop sidebar */}
+              <div className="w-64 glass-card overflow-y-auto flex-shrink-0 hidden md:block">
+                <GroupSidebar
+                  groupId={groupId}
+                  userPermissions={userPerms}
+                  currentUserId={user?.id}
+                  isAdmin={isAdmin}
+                  onUserClick={(userId) => setSelectedUserId(userId)}
+                />
+              </div>
+              {/* Mobile slide-over drawer */}
+              <div className="fixed inset-0 z-40 md:hidden bg-black/60 flex justify-end">
+                <div className="w-72 glass-card h-full overflow-y-auto p-2 relative bg-[var(--color-bg-secondary)] shadow-2xl flex flex-col">
+                  <div className="flex justify-between items-center p-3 border-b border-[var(--color-border)]">
+                    <h3 className="font-semibold text-sm">Members</h3>
+                    <button
+                      onClick={() => setShowSidebar(false)}
+                      className="text-[var(--color-text-muted)] hover:text-white p-1 text-base"
+                      type="button"
+                      aria-label="Close members drawer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    <GroupSidebar
+                      groupId={groupId}
+                      userPermissions={userPerms}
+                      currentUserId={user?.id}
+                      isAdmin={isAdmin}
+                      onUserClick={(userId) => {
+                        setSelectedUserId(userId);
+                        setShowSidebar(false);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

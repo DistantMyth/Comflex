@@ -8,18 +8,32 @@
 
 const { extractCohortYear } = require('../services/cohortService');
 
-function enforceBatchAccess(req, targetSubCategory) {
+function enforceBatchAccess(req, targetSubCategory, yearGroup) {
+  if (!req?.user) return false;
   if (req.user.globalRing === 0) return true; // Admins skip
-  if (!targetSubCategory || !targetSubCategory.startsWith('Batch ')) return true; // Technical or other
+
+  // If no subcategory is specified (e.g., Technical category), it's open to everyone
+  if (!targetSubCategory) return true;
+
+  const batchMatch = String(targetSubCategory).match(/^batch\s*(\d+)$/i);
+  if (!batchMatch) return true; // Non-batch category (e.g. Technical)
 
   const myYear = extractCohortYear(req.user.cohortTags);
-  if (!myYear) return true; // Fallback if user has no assigned cohort
+  if (!myYear) return false; // Fail closed if user has no assigned cohort
 
-  const targetYear = parseInt(targetSubCategory.replace('Batch ', ''), 10);
-  if (!isNaN(targetYear)) {
-    return targetYear === myYear || targetYear === myYear + 1;
+  const targetYear = parseInt(batchMatch[1], 10);
+  if (isNaN(targetYear)) return false;
+
+  // Juniors batch access check
+  if (targetYear === myYear + 1) {
+    // Non-admins can only see "Last Year" / "Past Year Paper" for their immediate juniors
+    if (yearGroup && /this\s*year/i.test(String(yearGroup))) {
+      return false;
+    }
+    return true;
   }
-  return true;
+
+  return targetYear === myYear;
 }
 
 module.exports = { enforceBatchAccess };

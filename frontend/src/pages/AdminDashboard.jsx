@@ -2,7 +2,7 @@
  * AdminDashboard — Institution config, cohort rules, groups, auto-join, user management.
  *
  * Only accessible to Ring 0 (Admin) users.
- * Five tabs: Institution | Cohort Rules | Groups | Auto-Join | Users
+ * Six tabs: Institution | Cohort Rules | Groups | Auto-Join | Users | Diagnostics | Database
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -10,7 +10,7 @@ import { adminApi } from '../api/adminApi';
 import resolveAsset from '../utils/resolveAsset';
 import {
   Search, RefreshCw, Trash2, ShieldCheck, UserPlus,
-  CheckCircle2, XCircle, Users,
+  CheckCircle2, XCircle, Users, Activity,
 } from 'lucide-react';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member', 'Restricted'];
@@ -30,6 +30,7 @@ export default function AdminDashboard() {
             { key: 'groups', label: '📋 Groups' },
             { key: 'autojoin', label: '🔗 Auto-Join' },
             { key: 'users', label: '👥 Users' },
+            { key: 'diagnostics', label: '📊 Diagnostics' },
             { key: 'database', label: '💾 Database' },
           ].map((t) => (
             <button
@@ -46,12 +47,13 @@ export default function AdminDashboard() {
           ))}
         </div>
 
-        {tab === 'institution' && <InstitutionTab />}
-        {tab === 'cohort' && <CohortTab />}
-        {tab === 'groups' && <GroupsTab />}
-        {tab === 'autojoin' && <AutoJoinTab />}
-        {tab === 'users' && <UsersTab />}
-        {tab === 'database' && <DatabaseTab />}
+        <div className={tab === 'institution' ? 'block' : 'hidden'}><InstitutionTab /></div>
+        <div className={tab === 'cohort' ? 'block' : 'hidden'}><CohortTab /></div>
+        <div className={tab === 'groups' ? 'block' : 'hidden'}><GroupsTab /></div>
+        <div className={tab === 'autojoin' ? 'block' : 'hidden'}><AutoJoinTab /></div>
+        <div className={tab === 'users' ? 'block' : 'hidden'}><UsersTab /></div>
+        <div className={tab === 'diagnostics' ? 'block' : 'hidden'}><DiagnosticsTab /></div>
+        <div className={tab === 'database' ? 'block' : 'hidden'}><DatabaseTab /></div>
       </div>
   );
 }
@@ -64,25 +66,25 @@ function InstitutionTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', domain: '', defaultCredits: 0 });
-  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState({ message: '', isError: false });
 
   useEffect(() => {
     adminApi.getInstitution().then((res) => {
       const data = res.data.data;
       setConfig(data);
       setForm({ name: data?.name || '', domain: data?.domain || '', defaultCredits: data?.defaultCredits ?? 0 });
-    }).catch(() => setMessage('Failed to load config.'))
+    }).catch(() => setStatus({ message: 'Failed to load config.', isError: true }))
       .finally(() => setLoading(false));
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
-    setMessage('');
+    setStatus({ message: '', isError: false });
     try {
       await adminApi.updateInstitution(form);
-      setMessage('Institution settings updated!');
+      setStatus({ message: 'Institution settings updated!', isError: false });
     } catch (err) {
-      setMessage(err.response?.data?.error?.message || 'Save failed.');
+      setStatus({ message: err.response?.data?.error?.message || 'Save failed.', isError: true });
     } finally {
       setSaving(false);
     }
@@ -93,7 +95,11 @@ function InstitutionTab() {
   return (
     <div className="glass-card p-6 space-y-4">
       <h3 className="text-lg font-semibold">Institution Settings</h3>
-      {message && <div className="text-sm text-[var(--color-success)]">{message}</div>}
+      {status.message && (
+        <div className={`text-sm p-3 rounded-lg ${status.isError ? 'bg-red-500/10 text-[var(--color-danger)] border border-red-500/20' : 'bg-emerald-500/10 text-[var(--color-success)] border border-emerald-500/20'}`}>
+          {status.message}
+        </div>
+      )}
       <div>
         <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Institution Name</label>
         <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -299,7 +305,8 @@ function GroupsTab() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [newGroup, setNewGroup] = useState({ name: '', displayName: '', description: '', type: 'custom' });
-  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState({ message: '', isError: false });
+  const [deleteModal, setDeleteModal] = useState({ show: false, id: null, name: '' });
 
   const fetchGroups = useCallback(async () => {
     setLoading(true);
@@ -316,35 +323,68 @@ function GroupsTab() {
   const handleCreate = async () => {
     if (!newGroup.name.trim()) return;
     setCreating(true);
-    setMessage('');
+    setStatus({ message: '', isError: false });
     try {
       await adminApi.createGroup(newGroup);
-      setMessage('Group created!');
+      setStatus({ message: 'Group created successfully!', isError: false });
       setNewGroup({ name: '', displayName: '', description: '', type: 'custom' });
       await fetchGroups();
     } catch (err) {
-      setMessage(err.response?.data?.error?.message || 'Failed to create group.');
+      setStatus({ message: err.response?.data?.error?.message || 'Failed to create group.', isError: true });
     } finally {
       setCreating(false);
     }
   };
 
-  const handleDelete = async (id, name) => {
-    if (!confirm(`Delete group "${name}"? This cannot be undone.`)) return;
+  const handleConfirmDelete = async () => {
+    if (!deleteModal.id) return;
     try {
-      await adminApi.deleteGroup(id);
+      await adminApi.deleteGroup(deleteModal.id);
+      setStatus({ message: `Group "${deleteModal.name}" deleted.`, isError: false });
+      setDeleteModal({ show: false, id: null, name: '' });
       await fetchGroups();
     } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to delete group.');
+      setStatus({ message: err.response?.data?.error?.message || 'Failed to delete group.', isError: true });
+      setDeleteModal({ show: false, id: null, name: '' });
     }
   };
 
   return (
     <div className="space-y-6">
+      {/* Delete Group Modal */}
+      {deleteModal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="glass-card p-6 rounded-2xl max-w-md w-full border-2 border-[var(--color-danger)] shadow-2xl">
+            <h3 className="text-lg font-bold text-[var(--color-danger)] mb-2">Delete Group</h3>
+            <p className="text-sm text-[var(--color-text-secondary)] mb-6 leading-relaxed">
+              Are you sure you want to delete the group <strong>"{deleteModal.name}"</strong>? This will remove all group messages and memberships. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteModal({ show: false, id: null, name: '' })}
+                className="btn btn-secondary text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="btn bg-[var(--color-danger)] text-white hover:bg-red-600 text-sm font-semibold"
+              >
+                Delete Group
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create new group */}
       <div className="glass-card p-6 space-y-4">
         <h3 className="text-lg font-semibold">Create Group</h3>
-        {message && <div className="text-sm text-[var(--color-success)]">{message}</div>}
+        {status.message && (
+          <div className={`text-sm p-3 rounded-lg ${status.isError ? 'bg-red-500/10 text-[var(--color-danger)] border border-red-500/20' : 'bg-emerald-500/10 text-[var(--color-success)] border border-emerald-500/20'}`}>
+            {status.message}
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Internal Name *</label>
@@ -407,7 +447,7 @@ function GroupsTab() {
                   <p className="text-xs text-[var(--color-text-muted)]">{g.name} · {g.type} · {g.memberCount ?? '?'} members</p>
                 </div>
                 <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-bg-card)] text-[var(--color-text-muted)]">{g.type}</span>
-                <button onClick={() => handleDelete(g.id, g.name)} className="text-xs text-[var(--color-danger)] hover:underline">Delete</button>
+                <button onClick={() => setDeleteModal({ show: true, id: g.id, name: g.displayName || g.name })} className="text-xs text-[var(--color-danger)] hover:underline">Delete</button>
               </div>
             ))}
           </div>
@@ -609,104 +649,127 @@ function AutoJoinTab() {
 }
 
 // ============================================================
-// Users Tab — with canCreateGroups toggle
+// Users Tab — with canCreateGroups toggle, debounced search & confirmation modals
 // ============================================================
 function UsersTab() {
   const [users, setUsers] = useState([]);
   const [pagination, setPagination] = useState({});
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [ringFilter, setRingFilter] = useState('');
+  const [modal, setModal] = useState({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+  const [banner, setBanner] = useState({ show: false, text: '', isError: false });
+
+  const showBanner = (text, isError = false) => {
+    setBanner({ show: true, text, isError });
+    setTimeout(() => setBanner({ show: false, text: '', isError: false }), 4000);
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const fetchUsers = useCallback(async (page = 1) => {
     setLoading(true);
     try {
-      const res = await adminApi.listUsers({ search, page, limit: 10 });
+      const params = { page, limit: 10 };
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
+      if (ringFilter !== '') params.ring = ringFilter;
+      const res = await adminApi.listUsers(params);
       setUsers(res.data.data.users);
       setPagination(res.data.data.pagination);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [search]);
+  }, [debouncedSearch, ringFilter]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
-  const handleRingChange = async (userId, newRing) => {
-    try {
-      await adminApi.setUserRing(userId, newRing);
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to change ring.');
-    }
+  const handleRingChange = (userId, displayName, newRing) => {
+    setModal({
+      show: true,
+      title: 'Change User Role',
+      message: `Are you sure you want to change "${displayName}"'s role to Ring ${newRing} (${RING_LABELS[newRing] || 'Restricted'})?`,
+      isDanger: newRing === 0,
+      onConfirm: async () => {
+        try {
+          await adminApi.setUserRing(userId, newRing);
+          showBanner('Role updated successfully.');
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Failed to change ring.', true);
+        } finally {
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      }
+    });
   };
 
   const handleRetag = async (userId) => {
     try {
       await adminApi.retagUser(userId);
+      showBanner('User cohort tags re-processed.');
       fetchUsers(pagination.page);
     } catch {
-      alert('Retag failed.');
+      showBanner('Retag failed.', true);
     }
   };
 
-  const handleToggleCreateGroups = async (userId, current) => {
+  const handleTogglePermission = async (userId, field, current) => {
     try {
-      await adminApi.setUserPermissions(userId, { canCreateGroups: !current });
+      await adminApi.setUserPermissions(userId, { [field]: !current });
+      showBanner('Permissions updated.');
       fetchUsers(pagination.page);
     } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to update permissions.');
+      showBanner(err.response?.data?.error?.message || 'Failed to update permissions.', true);
     }
   };
 
-  const handleToggleCreateEvents = async (userId, current) => {
-    try {
-      await adminApi.setUserPermissions(userId, { canCreateEvents: !current });
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to update permissions.');
-    }
-  };
-
-  const handleToggleManageResources = async (userId, current) => {
-    try {
-      await adminApi.setUserPermissions(userId, { canManageResources: !current });
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to update permissions.');
-    }
-  };
-
-  const handleToggleManageStore = async (userId, current) => {
-    try {
-      await adminApi.setUserPermissions(userId, { canManageStore: !current });
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to update permissions.');
-    }
-  };
-
-  const handleDeleteUser = async (userId, displayName) => {
-    if (!confirm(`⚠️ Permanently delete "${displayName}"?\n\nThis will remove their account, messages, group memberships, friendships, and DMs. This cannot be undone.`)) return;
-    try {
-      await adminApi.deleteUser(userId);
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to delete user.');
-    }
+  const handleDeleteUser = (userId, displayName) => {
+    setModal({
+      show: true,
+      title: 'Delete User Permanently',
+      message: `⚠️ Permanently delete "${displayName}"? This will remove their account, messages, team records, friendships, and badges. This action CANNOT be undone.`,
+      isDanger: true,
+      onConfirm: async () => {
+        try {
+          await adminApi.deleteUser(userId);
+          showBanner(`User "${displayName}" deleted.`);
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Failed to delete user.', true);
+        } finally {
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      }
+    });
   };
 
   const [retagging, setRetagging] = useState(false);
-  const handleRetagAll = async () => {
-    if (!confirm('Re-process ALL users through current cohort + auto-join rules?\n\nThis will remove existing group memberships and re-assign based on current config.')) return;
-    setRetagging(true);
-    try {
-      const res = await adminApi.retagAllUsers();
-      const d = res.data.data;
-      alert(`✅ ${d.message}\nProcessed: ${d.processed}/${d.total}`);
-      fetchUsers(pagination.page);
-    } catch (err) {
-      alert(err.response?.data?.error?.message || 'Retag all failed.');
-    } finally {
-      setRetagging(false);
-    }
+  const handleRetagAll = () => {
+    setModal({
+      show: true,
+      title: 'Re-tag All Platform Users',
+      message: 'Re-process ALL users through current cohort + auto-join rules? This will update cohort group memberships based on the current configuration.',
+      isDanger: false,
+      onConfirm: async () => {
+        setRetagging(true);
+        try {
+          const res = await adminApi.retagAllUsers();
+          const d = res.data.data;
+          showBanner(`✅ ${d.message} (Processed: ${d.processed}/${d.total})`);
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Retag all failed.', true);
+        } finally {
+          setRetagging(false);
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      }
+    });
   };
 
   const ringBadge = (ring) => {
@@ -722,37 +785,68 @@ function UsersTab() {
 
   const permissionToggles = (u) => [
     {
-      key: 'groups',
+      key: 'canCreateGroups',
       label: 'Create Groups',
       enabled: u.canCreateGroups,
-      onToggle: () => handleToggleCreateGroups(u.id, u.canCreateGroups),
+      onToggle: () => handleTogglePermission(u.id, 'canCreateGroups', u.canCreateGroups),
       hint: u.canCreateGroups ? 'Allowed to create groups' : 'Cannot create groups',
     },
     {
-      key: 'events',
+      key: 'canCreateEvents',
       label: 'Create Events',
       enabled: u.canCreateEvents,
-      onToggle: () => handleToggleCreateEvents(u.id, u.canCreateEvents),
+      onToggle: () => handleTogglePermission(u.id, 'canCreateEvents', u.canCreateEvents),
       hint: u.canCreateEvents ? 'Allowed to create events' : 'Cannot create events',
     },
     {
-      key: 'resources',
+      key: 'canManageResources',
       label: 'Manage Resources',
       enabled: u.canManageResources,
-      onToggle: () => handleToggleManageResources(u.id, u.canManageResources),
+      onToggle: () => handleTogglePermission(u.id, 'canManageResources', u.canManageResources),
       hint: u.canManageResources ? 'Allowed to manage resources' : 'Cannot manage resources',
     },
     {
-      key: 'store',
+      key: 'canManageStore',
       label: 'Manage Store',
       enabled: u.canManageStore,
-      onToggle: () => handleToggleManageStore(u.id, u.canManageStore),
+      onToggle: () => handleTogglePermission(u.id, 'canManageStore', u.canManageStore),
       hint: u.canManageStore ? 'Allowed to manage the store' : 'Cannot manage the store',
     },
   ];
 
   return (
     <div className="space-y-6">
+      {/* Confirmation Modal */}
+      {modal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className={`glass-card p-6 rounded-2xl max-w-md w-full border-2 shadow-2xl ${modal.isDanger ? 'border-[var(--color-danger)]' : 'border-[var(--color-accent)]'}`}>
+            <h3 className="text-lg font-bold mb-2">{modal.title}</h3>
+            <p className="text-sm text-[var(--color-text-secondary)] mb-6 leading-relaxed">{modal.message}</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false })}
+                className="btn btn-secondary text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={modal.onConfirm}
+                className={`btn text-sm font-semibold text-white ${modal.isDanger ? 'bg-[var(--color-danger)] hover:bg-red-600' : 'btn-primary'}`}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Banner */}
+      {banner.show && (
+        <div className={`p-3 rounded-lg text-sm transition-all animate-fade-in ${banner.isError ? 'bg-red-500/10 text-[var(--color-danger)] border border-red-500/20' : 'bg-emerald-500/10 text-[var(--color-success)] border border-emerald-500/20'}`}>
+          {banner.text}
+        </div>
+      )}
+
       {/* Create Test User */}
       <CreateTestUserForm onCreated={() => fetchUsers(pagination.page)} />
 
@@ -765,7 +859,7 @@ function UsersTab() {
             <button
               onClick={handleRetagAll}
               disabled={retagging}
-              className="btn btn-secondary text-xs px-3 py-1.5"
+              className="btn btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5"
               title="Apply current cohort + auto-join rules to all existing users"
             >
               <RefreshCw size={12} className={retagging ? 'animate-spin' : ''} />
@@ -775,16 +869,28 @@ function UsersTab() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative mb-5">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name or email..."
-            className="pl-10"
-          />
+        {/* Search and Filters */}
+        <div className="flex flex-col sm:flex-row gap-3 mb-5">
+          <div className="relative flex-1">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, username, or email..."
+              className="pl-10 w-full"
+            />
+          </div>
+          <select
+            value={ringFilter}
+            onChange={(e) => setRingFilter(e.target.value)}
+            className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg text-sm px-3 py-2 text-[var(--color-text-primary)]"
+          >
+            <option value="">All Roles (Rings 0-4)</option>
+            {[0, 1, 2, 3, 4].map((r) => (
+              <option key={r} value={r}>Ring {r} - {RING_LABELS[r] || 'Restricted'}</option>
+            ))}
+          </select>
         </div>
 
         {loading ? (
@@ -799,7 +905,6 @@ function UsersTab() {
           <div className="space-y-4">
             {users.map((u) => (
               <div key={u.id} className="rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)] overflow-hidden">
-                {/* Header: avatar, identity, actions */}
                 <div className="flex items-center gap-3 p-4">
                   {u.avatarUrl ? (
                     <img src={resolveAsset(u.avatarUrl)} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
@@ -816,7 +921,7 @@ function UsersTab() {
                         Ring {u.globalRing} · {RING_LABELS[u.globalRing] || 'Restricted'}
                       </span>
                     </div>
-                    <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">{u.email}</p>
+                    <p className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">@{u.username || 'unnamed'} · {u.email}</p>
                     {u.cohortTags?.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1.5">
                         {u.cohortTags.slice(0, 3).map((tag) => (
@@ -851,7 +956,6 @@ function UsersTab() {
                   </div>
                 </div>
 
-                {/* Permissions + ring */}
                 <div className="border-t border-[var(--color-border)] p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <ShieldCheck size={14} className="text-[var(--color-text-muted)]" />
@@ -890,7 +994,7 @@ function UsersTab() {
                     <span className="text-xs font-medium text-[var(--color-text-secondary)]">Role</span>
                     <select
                       value={u.globalRing}
-                      onChange={(e) => handleRingChange(u.id, parseInt(e.target.value))}
+                      onChange={(e) => handleRingChange(u.id, u.displayName, parseInt(e.target.value, 10))}
                       className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg text-sm px-2 py-1 text-[var(--color-text-primary)]"
                     >
                       {[0, 1, 2, 3, 4].map((r) => (
@@ -904,7 +1008,6 @@ function UsersTab() {
           </div>
         )}
 
-        {/* Pagination */}
         {pagination.totalPages > 1 && (
           <div className="flex justify-center gap-2 mt-4">
             {Array.from({ length: pagination.totalPages }, (_, i) => (
@@ -933,13 +1036,12 @@ function UsersTab() {
 function CreateTestUserForm({ onCreated }) {
   const [form, setForm] = useState({ email: '', displayName: '', password: '' });
   const [creating, setCreating] = useState(false);
-  const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState('success');
+  const [status, setStatus] = useState({ message: '', isError: false });
 
   const handleCreate = async () => {
     if (!form.email.trim() || !form.displayName.trim()) return;
     setCreating(true);
-    setMessage('');
+    setStatus({ message: '', isError: false });
     try {
       const res = await adminApi.createTestUser({
         email: form.email,
@@ -947,13 +1049,11 @@ function CreateTestUserForm({ onCreated }) {
         password: form.password || undefined,
       });
       const d = res.data.data;
-      setMessageType('success');
-      setMessage(`✅ ${d.message}`);
+      setStatus({ message: `✅ ${d.message}`, isError: false });
       setForm({ email: '', displayName: '', password: '' });
       onCreated?.();
     } catch (err) {
-      setMessageType('error');
-      setMessage(err.response?.data?.error?.message || 'Failed to create test user.');
+      setStatus({ message: err.response?.data?.error?.message || 'Failed to create test user.', isError: true });
     } finally {
       setCreating(false);
     }
@@ -961,16 +1061,22 @@ function CreateTestUserForm({ onCreated }) {
 
   return (
     <div className="glass-card p-6 space-y-4">
-      <h3 className="text-lg font-semibold">🧪 Create Test User</h3>
+      <h3 className="text-lg font-semibold flex items-center gap-2">
+        <UserPlus size={18} className="text-[var(--color-accent)]" /> Create Test User
+      </h3>
       <p className="text-xs text-[var(--color-text-muted)]">
         Create a user directly (bypasses registration flow). Cohort tags are auto-assigned from email.
       </p>
-      {message && (
-        <div className={`text-sm ${
-          messageType === 'success' ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'
-        }`}>{message}</div>
+      {status.message && (
+        <div className={`text-sm p-3 rounded-lg ${
+          status.isError
+            ? 'bg-red-500/10 text-[var(--color-danger)] border border-red-500/20'
+            : 'bg-emerald-500/10 text-[var(--color-success)] border border-emerald-500/20'
+        }`}>
+          {status.message}
+        </div>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Email *</label>
           <input type="email" value={form.email}
@@ -999,16 +1105,117 @@ function CreateTestUserForm({ onCreated }) {
 }
 
 // ============================================================
-// Database Tab — Backup and Clear functions
+// Diagnostics Tab — System Telemetry & Record Counts
+// ============================================================
+function DiagnosticsTab() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const fetchDiagnostics = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await adminApi.getDiagnostics();
+      setData(res.data.data);
+    } catch (err) {
+      setError(err.response?.data?.error?.message || 'Failed to load diagnostics.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDiagnostics();
+  }, []);
+
+  if (loading) return <div className="skeleton h-64 w-full rounded-xl" />;
+  if (error) return <div className="text-sm text-[var(--color-danger)] p-4 glass-card">{error}</div>;
+
+  const formatUptime = (seconds) => {
+    const d = Math.floor(seconds / (3600 * 24));
+    const h = Math.floor((seconds % (3600 * 24)) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${d > 0 ? `${d}d ` : ''}${h}h ${m}m ${s}s`;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="glass-card p-6">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Activity size={20} className="text-[var(--color-accent)]" /> Platform Health & Diagnostics
+          </h3>
+          <button onClick={fetchDiagnostics} className="btn btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
+            <p className="text-xs text-[var(--color-text-muted)]">Server Status</p>
+            <p className="text-lg font-bold text-[var(--color-success)] capitalize mt-1">🟢 {data?.status || 'Online'}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
+            <p className="text-xs text-[var(--color-text-muted)]">Uptime</p>
+            <p className="text-lg font-bold text-[var(--color-primary)] mt-1">{formatUptime(data?.uptime || 0)}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
+            <p className="text-xs text-[var(--color-text-muted)]">Node.js Version</p>
+            <p className="text-lg font-bold text-[var(--color-text-primary)] mt-1">{data?.nodeVersion || 'N/A'}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
+            <p className="text-xs text-[var(--color-text-muted)]">Process Memory (RSS)</p>
+            <p className="text-lg font-bold text-[var(--color-accent)] mt-1">{data?.memoryUsage?.rssMb || 0} MB</p>
+          </div>
+        </div>
+
+        <h4 className="text-sm font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] mb-3">Database Records</h4>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.users || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Users</p>
+          </div>
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.groups || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Groups</p>
+          </div>
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.messages || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Messages</p>
+          </div>
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.events || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Events</p>
+          </div>
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.resources || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Resources</p>
+          </div>
+          <div className="p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-center">
+            <span className="text-2xl font-extrabold">{data?.counts?.transactions || 0}</span>
+            <p className="text-[11px] text-[var(--color-text-muted)] mt-1">Transactions</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Database Tab — Backup and Clear functions with Password Verification
 // ============================================================
 function DatabaseTab() {
   const [loadingBackup, setLoadingBackup] = useState(false);
   const [loadingClear, setLoadingClear] = useState(false);
-  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState({ message: '', isError: false });
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
 
   const handleBackup = async () => {
     setLoadingBackup(true);
-    setMessage('');
+    setStatus({ message: '', isError: false });
     try {
       const res = await adminApi.backupDatabase();
       const url = window.URL.createObjectURL(new Blob([res.data]));
@@ -1018,25 +1225,26 @@ function DatabaseTab() {
       document.body.appendChild(link);
       link.click();
       link.parentNode.removeChild(link);
-      setMessage('Backup downloaded successfully.');
+      setStatus({ message: 'Backup downloaded successfully.', isError: false });
     } catch {
-      setMessage('Failed to create backup.');
+      setStatus({ message: 'Failed to create backup.', isError: true });
     } finally {
       setLoadingBackup(false);
     }
   };
 
-  const handleClear = async () => {
-    if (!window.confirm('⚠️ DANGER: Are you absolutely sure you want to clear the entire database?\n\nThis will permanently delete all users (except yourself), groups, messages, and events. This CANNOT BE UNDONE. Make sure you take a backup first!')) return;
-
+  const handleConfirmClear = async (e) => {
+    e.preventDefault();
+    if (!adminPassword) return;
     setLoadingClear(true);
-    setMessage('');
+    setStatus({ message: '', isError: false });
     try {
-      const res = await adminApi.clearDatabase();
-      setMessage(res.data?.data?.message || 'Database successfully cleared.');
-      window.alert('Database cleared successfully.');
+      const res = await adminApi.clearDatabase(adminPassword);
+      setStatus({ message: res.data?.data?.message || 'Database successfully cleared.', isError: false });
+      setShowClearModal(false);
+      setAdminPassword('');
     } catch (err) {
-      setMessage(err.response?.data?.error?.message || 'Failed to clear database.');
+      setStatus({ message: err.response?.data?.error?.message || 'Failed to clear database.', isError: true });
     } finally {
       setLoadingClear(false);
     }
@@ -1044,9 +1252,56 @@ function DatabaseTab() {
 
   return (
     <div className="space-y-6">
+      {/* Password Confirmation Modal for Wipe */}
+      {showClearModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="glass-card p-6 rounded-2xl max-w-md w-full border-2 border-[var(--color-danger)] shadow-2xl">
+            <h3 className="text-lg font-bold text-[var(--color-danger)] mb-2">⚠️ Confirm Full Database Wipe</h3>
+            <p className="text-sm text-[var(--color-text-secondary)] mb-4 leading-relaxed">
+              This will permanently purge all platform data (users, messages, groups, events, resources). Only your admin account and institution config will be kept.
+            </p>
+            <form onSubmit={handleConfirmClear} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[var(--color-text-secondary)] mb-1">
+                  Enter your Admin Password to confirm:
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder="Admin Password"
+                  className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded focus:outline-[var(--color-danger)]"
+                />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setShowClearModal(false); setAdminPassword(''); }}
+                  className="btn btn-secondary text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loadingClear || !adminPassword}
+                  className="btn bg-[var(--color-danger)] text-white hover:bg-red-600 text-sm font-bold"
+                >
+                  {loadingClear ? <span className="spinner" /> : 'Yes, Clear All Data'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="glass-card p-6 space-y-4">
         <h3 className="text-lg font-semibold">Database Management</h3>
-        {message && <div className={`text-sm ${message.includes('Failed') ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}>{message}</div>}
+        {status.message && (
+          <div className={`text-sm p-3 rounded-lg ${status.isError ? 'bg-red-500/10 text-[var(--color-danger)] border border-red-500/20' : 'bg-emerald-500/10 text-[var(--color-success)] border border-emerald-500/20'}`}>
+            {status.message}
+          </div>
+        )}
 
         <div className="p-4 rounded-xl bg-[var(--color-bg-primary)] border border-[var(--color-border)]">
           <h4 className="font-semibold mb-1">Backup Database</h4>
@@ -1059,8 +1314,8 @@ function DatabaseTab() {
         <div className="p-4 rounded-xl bg-[rgba(239,68,68,0.05)] border border-[rgba(239,68,68,0.3)]">
           <h4 className="font-semibold text-red-500 mb-1">Clear Database</h4>
           <p className="text-sm text-[var(--color-text-muted)] mb-3">Permanently delete all non-essential data. Your admin account and the core institution configuration will be preserved.</p>
-          <button onClick={handleClear} disabled={loadingClear} className="btn border border-[var(--color-danger)] text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white transition-colors text-sm">
-            {loadingClear ? <span className="spinner" /> : '🛑 Clear All Data'}
+          <button onClick={() => setShowClearModal(true)} className="btn border border-[var(--color-danger)] text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white transition-colors text-sm font-semibold">
+            🛑 Clear All Data
           </button>
         </div>
       </div>

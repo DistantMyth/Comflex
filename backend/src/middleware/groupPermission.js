@@ -91,6 +91,18 @@ async function requireGroupMember(req, res, next) {
         return next();
       }
 
+      // Check if user has an enrolled join record in this anonymous group
+      const join = await prisma.anonGroupJoin.findUnique({
+        where: { groupId_userId: { groupId, userId: req.user.id } },
+        select: { id: true },
+      }).catch(() => null);
+
+      if (join) {
+        req.anonEnrolled = true;
+        req.groupMembership = { ring: 3, permissions: {} };
+        return next();
+      }
+
       return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
     }
 
@@ -133,11 +145,19 @@ function requireGroupPermission(permissionKey) {
       return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
     }
 
-    // Evaluate permissions: merge member specific + ring specific
+    // Evaluate permissions: explicit member override > ring permission > default ring permission
     const memberPerms = membership.permissions || {};
     const ringPerms = membership.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
-    // A permission is true if AT LEAST one of the memberPerms or ringPerms is true
-    const hasPermission = memberPerms[permissionKey] === true || ringPerms[permissionKey] === true;
+    const defaultPerms = groupService.getDefaultPermissions(membership.ring);
+
+    let hasPermission = false;
+    if (memberPerms[permissionKey] !== undefined) {
+      hasPermission = memberPerms[permissionKey] === true;
+    } else if (ringPerms[permissionKey] !== undefined) {
+      hasPermission = ringPerms[permissionKey] === true;
+    } else {
+      hasPermission = defaultPerms[permissionKey] === true;
+    }
 
     if (!hasPermission && membership.group?.creatorId !== req.user.id) {
       return error(res, 'PERMISSION_DENIED', `You do not have the "${permissionKey}" permission in this group.`, 403);

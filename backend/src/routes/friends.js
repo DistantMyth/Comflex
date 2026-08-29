@@ -62,7 +62,8 @@ const requestLimit = require('../middleware/rateLimit').rateLimiter({
   windowMs: 10 * 60 * 1000,
   max: 30,
   message: 'Too many friend requests sent. Try again later.',
-  keyPrefix: 'friend-request-ip',
+  keyPrefix: 'friend-request-user',
+  keyFn: (req) => req.user?.id || req.ip,
 });
 
 router.post(

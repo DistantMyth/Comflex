@@ -63,11 +63,11 @@ async function verifyGoogleToken(idToken) {
   // Validate that the email belongs to the configured institution domain
   const config = await prisma.institutionConfig.findFirst();
   if (config && config.domain) {
-    const emailDomain = payload.email.split('@')[1]?.toLowerCase();
-    const configDomain = config.domain.toLowerCase();
+    const emailDomain = payload.email.split('@')[1]?.toLowerCase().trim();
+    const configDomain = config.domain.toLowerCase().trim().replace(/^@/, '');
     if (emailDomain !== configDomain) {
       throw Object.assign(
-        new Error(`Only emails from @${config.domain} are allowed. You used @${emailDomain}.`),
+        new Error(`Only emails from @${configDomain} are allowed. You used @${emailDomain}.`),
         { statusCode: 403, code: 'INVALID_DOMAIN' }
       );
     }

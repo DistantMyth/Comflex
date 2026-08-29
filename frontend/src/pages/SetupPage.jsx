@@ -28,7 +28,8 @@ export default function SetupPage() {
     setError('');
     setLoading(true);
     try {
-      await adminApi.setupInstitution(institution);
+      const sanitizedDomain = institution.domain.trim().toLowerCase().replace(/^@/, '');
+      await adminApi.setupInstitution({ ...institution, domain: sanitizedDomain });
       setStep(2);
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Failed to save institution settings.');

@@ -57,6 +57,9 @@ const env = {
   CLOUDINARY_CLOUD_NAME: (process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || '').trim(),
   CLOUDINARY_API_KEY: (process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || '').trim(),
   CLOUDINARY_API_SECRET: (process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || '').trim(),
+
+  // Google Gemini AI
+  GEMINI_API_KEY: (process.env.GEMINI_API_KEY || '').trim(),
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────

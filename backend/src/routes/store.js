@@ -56,6 +56,13 @@ router.post('/wallet', [
       return error(res, 'VALIDATION', 'Invalid Ethereum address.', 400);
     }
 
+    const existing = await prisma.user.findFirst({
+      where: { walletAddress: { equals: address, mode: 'insensitive' }, id: { not: req.user.id } }
+    });
+    if (existing) {
+      return error(res, 'CONFLICT', 'This wallet address is already bound to another account.', 409);
+    }
+
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (!user.walletNonce || !user.walletNonceExpiry || user.walletNonceExpiry.getTime() < Date.now()) {
       return error(res, 'VALIDATION', 'Challenge expired. Request a new nonce and sign it.', 400);
@@ -156,17 +163,23 @@ router.get('/listings', async (req, res, next) => {
 
 // Admin: Create a badge
 router.post('/admin/badges', upload.single('image'), [
-  body('name').notEmpty(),
-  body('description').notEmpty()
+  body('name').trim().notEmpty().withMessage('Badge name is required.'),
+  body('description').trim().notEmpty().withMessage('Badge description is required.')
 ], async (req, res, next) => {
   try {
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
     
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
 
     const { name, description, isEventBadge } = req.body;
+
+    const existingBadge = await prisma.badge.findUnique({ where: { name } });
+    if (existingBadge) {
+      return error(res, 'CONFLICT', 'A badge with this name already exists.', 409);
+    }
+
     let imageUrl = req.body.imageUrl;
     
     if (req.file) {
@@ -184,6 +197,7 @@ router.post('/admin/badges', upload.single('image'), [
     });
     return success(res, badge, 201);
   } catch (err) {
+    if (err.code === 'P2002') return error(res, 'CONFLICT', 'A badge with this name already exists.', 409);
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
     next(err);
   }
@@ -192,12 +206,15 @@ router.post('/admin/badges', upload.single('image'), [
 // Admin: Create store listing
 router.post('/admin/listings', [
   body('badgeId').isMongoId().withMessage('Invalid badge ID.'),
-  body('price').isInt({ min: 0, max: 1000000 }),
-  body('quantity').isInt({ min: -1, max: 1000000 }) // -1 for infinite
+  body('price').isInt({ min: 0, max: 1000000 }).withMessage('Price must be between 0 and 1,000,000.'),
+  body('quantity').isInt({ min: -1, max: 1000000 }).withMessage('Quantity must be between -1 and 1,000,000.') // -1 for infinite
 ], async (req, res, next) => {
   try {
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
 
     const { badgeId, price, quantity } = req.body;
     const badge = await prisma.badge.findUnique({ where: { id: badgeId } });
@@ -212,22 +229,67 @@ router.post('/admin/listings', [
   }
 });
 
+// Admin: Update store listing
+router.patch('/admin/listings/:id', [
+  body('price').optional().isInt({ min: 0, max: 1000000 }).withMessage('Price must be between 0 and 1,000,000.'),
+  body('quantity').optional().isInt({ min: -1, max: 1000000 }).withMessage('Quantity must be between -1 and 1,000,000.')
+], async (req, res, next) => {
+  try {
+    const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
+
+    const { price, quantity } = req.body;
+    const updateData = {};
+    if (price !== undefined) updateData.price = price;
+    if (quantity !== undefined) updateData.quantity = quantity;
+
+    const listing = await prisma.storeListing.update({
+      where: { id: req.params.id },
+      data: updateData,
+    });
+    return success(res, listing);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Admin: Delete store listing
+router.delete('/admin/listings/:id', async (req, res, next) => {
+  try {
+    const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
+
+    await prisma.storeListing.delete({ where: { id: req.params.id } });
+    return success(res, { message: 'Listing deleted.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Admin: Mint credits for a user
 router.post('/admin/mint-credits', [
-  body('userId').notEmpty(),
-  body('amount').isInt({ min: 1 })
+  body('userId').notEmpty().withMessage('User ID, username, or email is required.'),
+  body('amount').isInt({ min: 1, max: 1000000 }).withMessage('Amount must be between 1 and 1,000,000.')
 ], async (req, res, next) => {
   try {
     const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
     if (dbUser.globalRing !== 0) return error(res, 'FORBIDDEN', 'Admin only', 403);
+
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
+
     const { userId, amount } = req.body;
+    const userQuery = typeof userId === 'string' ? userId.trim() : '';
 
     const targetUser = await prisma.user.findFirst({
       where: {
         OR: [
-          { username: userId },
-          { email: userId },
-          ...(userId.match(/^[0-9a-fA-F]{24}$/) ? [{ id: userId }] : [])
+          { username: userQuery },
+          { email: userQuery },
+          ...(userQuery.match(/^[0-9a-fA-F]{24}$/) ? [{ id: userQuery }] : [])
         ]
       }
     });
@@ -253,6 +315,9 @@ router.post('/purchase', [
   body('listingId').isMongoId().withMessage('Invalid listing ID.')
 ], async (req, res, next) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid input.', 400, errors.array());
+
     const { listingId } = req.body;
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     const listing = await prisma.storeListing.findUnique({ where: { id: listingId }, include: { badge: true } });
@@ -266,26 +331,38 @@ router.post('/purchase', [
     });
     if (alreadyOwns) return error(res, 'VALIDATION', 'You already own this badge', 400);
 
-    // Perform transaction
+    // Perform transaction atomically
     await prisma.$transaction(async (tx) => {
-      // 1. Deduct credits
+      // 1. Deduct credits conditionally
       if (user.globalRing !== 0) {
-        await tx.user.update({
-          where: { id: user.id },
+        const debited = await tx.user.updateMany({
+          where: { id: user.id, creditBalance: { gte: listing.price } },
           data: { creditBalance: { decrement: listing.price } }
         });
+        if (debited.count === 0) {
+          throw new Error('INSUFFICIENT_CREDITS');
+        }
       }
-      // 2. Increment sold count
-      await tx.storeListing.update({
-        where: { id: listing.id },
+      // 2. Increment sold count conditionally (prevent overselling)
+      const updatedListing = await tx.storeListing.updateMany({
+        where: {
+          id: listing.id,
+          OR: [
+            { quantity: -1 },
+            { sold: { lt: listing.quantity } }
+          ]
+        },
         data: { sold: { increment: 1 } }
       });
+      if (updatedListing.count === 0) {
+        throw new Error('SOLD_OUT');
+      }
+
       // 3. Grant Badge
       await tx.userBadge.create({
         data: { userId: user.id, badgeId: listing.badgeId, source: 'store' }
       });
-      // 4. Create Ledger Record — referenceId must be unique per purchase,
-      //    so the (type, referenceId) index can dedupe retries.
+      // 4. Create Ledger Record — referenceId must be unique per purchase
       await tx.transaction.create({
         data: {
           senderId: user.id,
@@ -299,6 +376,15 @@ router.post('/purchase', [
 
     return success(res, { message: 'Purchase successful' });
   } catch (err) {
+    if (err.code === 'P2002' || err.message === 'ALREADY_OWNED') {
+      return error(res, 'VALIDATION', 'You already own this badge.', 400);
+    }
+    if (err.message === 'INSUFFICIENT_CREDITS') {
+      return error(res, 'VALIDATION', 'Insufficient credits.', 400);
+    }
+    if (err.message === 'SOLD_OUT') {
+      return error(res, 'VALIDATION', 'Listing is sold out.', 400);
+    }
     next(err);
   }
 });
@@ -324,6 +410,9 @@ router.post('/display-badges', [
   }).withMessage('Each badge ID must be a valid ObjectId.')
 ], async (req, res, next) => {
   try {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid badge IDs.', 400, errs.array());
+
     const { badgeIds } = req.body;
     
     // Verify user owns all requested badges
@@ -352,12 +441,12 @@ router.post('/display-badges', [
 
 // Buy Credits (Crypto)
 router.post('/buy-credits', [
-  body('txHash').isString().notEmpty(),
-  body('amount').isInt({ min: 1, max: 100000 })
+  body('txHash').isString().notEmpty().withMessage('txHash is required.'),
+  body('amount').isInt({ min: 1, max: 100000 }).withMessage('amount must be between 1 and 100,000.')
 ], async (req, res, next) => {
   try {
     const errs = validationResult(req);
-    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400);
+    if (!errs.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errs.array());
 
     const { txHash, amount } = req.body;
     const treasury = process.env.TREASURY_ADDRESS;
@@ -386,7 +475,8 @@ router.post('/buy-credits', [
     }
 
     // Validate using ethers on Sepolia
-    const provider = new ethers.JsonRpcProvider('https://ethereum-sepolia-rpc.publicnode.com');
+    const rpcUrl = process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
+    const provider = new ethers.JsonRpcProvider(rpcUrl, 11155111, { staticNetwork: true });
     const tx = await provider.getTransaction(txHash);
 
     if (!tx) return error(res, 'NOT_FOUND', 'Transaction not found on network', 404);
@@ -412,9 +502,9 @@ router.post('/buy-credits', [
       return error(res, 'VALIDATION', 'Transaction failed on-chain; no credits issued.', 400);
     }
 
-    const actualEth = Number(ethers.formatEther(tx.value));
-    if (actualEth < expectedEth) {
-      return error(res, 'VALIDATION', `Transaction value (${actualEth} ETH) is lower than required (${expectedEth} ETH) for ${amount} Credits.`, 400);
+    const expectedWei = ethers.parseEther(expectedEth.toString());
+    if (tx.value < expectedWei) {
+      return error(res, 'VALIDATION', `Transaction value (${ethers.formatEther(tx.value)} ETH) is lower than required (${expectedEth} ETH) for ${amount} Credits.`, 400);
     }
 
     // Dedupe: txHash is unique per claim — the (type, referenceId) unique
@@ -460,9 +550,14 @@ router.post('/buy-credits', [
 // Transfer credits
 router.post('/transfer', [
   body('receiverId').isMongoId().withMessage('Invalid receiver ID.'),
-  body('amount').isInt({ min: 1, max: 100000 })
+  body('amount').isInt({ min: 1, max: 100000 }).withMessage('Transfer amount must be between 1 and 100,000.')
 ], async (req, res, next) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return error(res, 'VALIDATION', 'Invalid transfer data.', 400, errors.array());
+    }
+
     const { receiverId, amount } = req.body;
     const senderId = req.user.id;
 

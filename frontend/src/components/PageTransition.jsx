@@ -1,13 +1,17 @@
 /**
- * PageTransition — Animated wrapper for routed pages.
+ * PageTransition — Animated wrapper for routed pages with reduced motion support.
  * Fades content in on mount / route change.
- * No exit animation — AnimatePresence swaps instantly, avoiding the
- * visible delay ("tab glitch") that exit + wait mode caused.
  */
 
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 
 export default function PageTransition({ children }) {
+  const shouldReduceMotion = useReducedMotion();
+
+  if (shouldReduceMotion) {
+    return <div style={{ height: '100%' }}>{children}</div>;
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0 }}

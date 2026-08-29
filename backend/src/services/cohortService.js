@@ -172,20 +172,20 @@ async function assignCohortTags(userId, email) {
 
   // ── Auto-Join Rules ──
   // Apply admin-configured auto-join rules based on year and/or branch
+  const fullYear = year < 100 ? 2000 + year : year;
+  const shortYear = String(fullYear % 100).padStart(2, '0');
+  const strFullYear = String(fullYear);
+
   const autoJoinRules = config.autoJoinRules || [];
   for (const rule of autoJoinRules) {
     let matches = false;
+    const mv = String(rule.matchValue || '').trim().toLowerCase();
     if (rule.matchField === 'year') {
-      const y2 = String(year % 100);
-      const y4 = String(year);
-      matches = rule.matchValue === y2 || rule.matchValue === y4;
+      matches = mv === shortYear || mv === strFullYear;
     } else if (rule.matchField === 'branch' && branch) {
-      matches = rule.matchValue.toLowerCase() === branch;
+      matches = mv === branch;
     } else if (rule.matchField === 'both' && branch) {
-      const y2 = String(year % 100);
-      const y4 = String(year);
-      const mv = rule.matchValue.toLowerCase();
-      matches = mv === `${y2}-${branch}` || mv === `${y4}-${branch}`;
+      matches = mv === `${shortYear}-${branch}` || mv === `${strFullYear}-${branch}`;
     }
 
     if (matches && rule.groupId) {
@@ -199,33 +199,16 @@ async function assignCohortTags(userId, email) {
             data: {
               userId,
               groupId: group.id,
-              ring: 3, // default member ring for auto-join
-              permissions: {
-                can_send_messages: true,
-                can_delete_own_messages: true,
-                can_delete_others_messages: false,
-                can_mute_members: false,
-                can_kick_members: false,
-                can_add_members: false,
-                can_tag_members: true,
-                can_manage_economy: false,
-                can_create_events: false,
-                can_pin_messages: false,
-                can_manage_roles: false,
-                can_edit_group_info: false,
-                can_stop_others_tagging: false,
-              },
+              ring: 3, // Default: Member
+              permissions: { can_send_messages: true, can_view_history: true },
             },
           });
-          if (!tags.includes(group.name)) {
-            tags.push(group.name);
-          }
         }
       }
     }
   }
 
-  // Update the user's cohortTags array
+  // Update user's cohortTags in database
   await prisma.user.update({
     where: { id: userId },
     data: { cohortTags: tags },
@@ -237,14 +220,24 @@ async function assignCohortTags(userId, email) {
 
 /**
  * Re-tag a user: remove their existing cohort memberships and re-apply
- * the current parsing rules. Used after an admin updates the config.
+ * the current parsing rules. Preserves custom groups.
  */
 async function retagUser(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new Error('User not found');
 
-  // Remove existing cohort-related group memberships
-  await prisma.groupMember.deleteMany({ where: { userId } });
+  // Remove ONLY primary & cross-year cohort-related group memberships (preserve custom groups)
+  const cohortGroups = await prisma.cohortGroup.findMany({
+    where: { type: { in: ['primary', 'cross-year'] } },
+    select: { id: true },
+  });
+  const cohortGroupIds = cohortGroups.map((g) => g.id);
+
+  if (cohortGroupIds.length > 0) {
+    await prisma.groupMember.deleteMany({
+      where: { userId, groupId: { in: cohortGroupIds } },
+    });
+  }
 
   // Re-assign based on current rules
   return assignCohortTags(userId, user.email);

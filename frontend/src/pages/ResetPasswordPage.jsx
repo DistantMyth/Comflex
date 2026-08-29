@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Lock, Loader2, KeyRound, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { Lock, Loader2, KeyRound, ArrowLeft, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { authApi } from '../api/authApi';
 import AuthShell from '../components/AuthShell';
 
@@ -15,6 +15,8 @@ export default function ResetPasswordPage() {
   const token = searchParams.get('token') || '';
 
   const [form, setForm] = useState({ newPassword: '', confirmPassword: '' });
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
@@ -28,6 +30,9 @@ export default function ResetPasswordPage() {
     if (!token) return setError('Reset token is missing. Please use the link from your email.');
     if (form.newPassword !== form.confirmPassword) return setError('Passwords do not match.');
     if (form.newPassword.length < 8) return setError('Password must be at least 8 characters.');
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(form.newPassword)) {
+      return setError('Password must contain at least one uppercase letter, one lowercase letter, and one number.');
+    }
 
     setLoading(true);
     try {
@@ -44,7 +49,7 @@ export default function ResetPasswordPage() {
   return (
     <AuthShell
       title={success ? 'Password reset!' : 'Reset password'}
-      subtitle={success ? undefined : 'Choose a new password for your account.'}
+      subtitle={success ? undefined : 'Choose a strong new password for your account.'}
       footer={
         <Link to="/login" className="inline-flex items-center gap-1.5 text-[var(--color-accent)] font-semibold hover:underline">
           <ArrowLeft size={14} /> Back to Login
@@ -85,15 +90,24 @@ export default function ResetPasswordPage() {
                 <input
                   id="reset-pwd"
                   name="newPassword"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   value={form.newPassword}
                   onChange={handleChange}
-                  placeholder="Min 8 characters"
+                  placeholder="Min 8 chars (upper, lower, number)"
+                  autoComplete="new-password"
                   required
                   minLength={8}
                   autoFocus
-                  className="pl-10"
+                  className="pl-10 pr-10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
             </div>
 
@@ -106,17 +120,26 @@ export default function ResetPasswordPage() {
                 <input
                   id="reset-confirm"
                   name="confirmPassword"
-                  type="password"
+                  type={showConfirmPassword ? 'text' : 'password'}
                   value={form.confirmPassword}
                   onChange={handleChange}
                   placeholder="Re-enter password"
+                  autoComplete="new-password"
                   required
-                  className="pl-10"
+                  className="pl-10 pr-10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
               </div>
             </div>
 
-            <button type="submit" disabled={loading || !token} className="btn btn-primary w-full">
+            <button type="submit" disabled={loading || !token} className="btn btn-primary w-full mt-2">
               {loading ? <Loader2 size={16} className="animate-spin" /> : <KeyRound size={16} />}
               {loading ? 'Resetting...' : 'Reset Password'}
             </button>

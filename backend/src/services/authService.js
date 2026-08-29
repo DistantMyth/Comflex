@@ -32,6 +32,12 @@ function hashRefreshToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
+const RESERVED_USERNAMES = new Set([
+  'admin', 'administrator', 'system', 'comflex', 'root', 'support',
+  'official', 'moderator', 'staff', 'help', 'api', 'security',
+  'null', 'undefined', 'bot', 'guest', 'anonymous', 'superuser',
+]);
+
 /**
  * Register a new user (email/password — legacy, kept for admin accounts).
  * 1. Check institution is configured (registration gate)
@@ -64,11 +70,12 @@ async function register(email, password, displayName) {
     throw Object.assign(new Error('An account with this email already exists.'), { statusCode: 409, code: 'DUPLICATE_EMAIL' });
   }
 
-  // Auto-generate a unique temporary username
-  const baseUsername = normalizedEmail.split('@')[0];
+  // Auto-generate a unique temporary username (sanitized of dots and special characters)
+  const rawBase = normalizedEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
+  const baseUsername = (rawBase.length >= 3 ? rawBase : `user_${rawBase || 'member'}`).slice(0, 20);
   let tempUsername = baseUsername;
   let counter = 1;
-  while (await prisma.user.findUnique({ where: { username: tempUsername } })) {
+  while (await prisma.user.findUnique({ where: { username: tempUsername } }) || RESERVED_USERNAMES.has(tempUsername.toLowerCase())) {
     tempUsername = `${baseUsername}${counter}`;
     counter++;
   }
@@ -261,6 +268,14 @@ async function setUsername(userId, username) {
     );
   }
 
+  // Check reserved usernames
+  if (RESERVED_USERNAMES.has(username.toLowerCase())) {
+    throw Object.assign(
+      new Error('This username is reserved and cannot be chosen.'),
+      { statusCode: 400, code: 'RESERVED_USERNAME' }
+    );
+  }
+
   // Get current user to check cooldown
   const currentUser = await prisma.user.findUnique({ where: { id: userId } });
   if (!currentUser) {
@@ -306,6 +321,10 @@ async function checkUsername(username) {
     return { available: false, reason: 'Invalid format. Use 3–30 alphanumeric characters or underscores.' };
   }
 
+  if (RESERVED_USERNAMES.has(username.toLowerCase())) {
+    return { available: false, reason: 'This username is reserved and cannot be chosen.' };
+  }
+
   const existing = await prisma.user.findFirst({
     where: { username: { equals: username, mode: 'insensitive' } },
   });
@@ -316,20 +335,20 @@ async function checkUsername(username) {
 /**
  * Login an existing user.
  * 1. Find user by email
- * 2. Compare password hash
+ * 2. Compare password hash (using constant-time dummy hash on missing user)
  * 3. Return JWT pair
  */
 async function login(email, password) {
   const normalizedEmail = normalizeEmail(email);
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-  if (!user || !user.hasPassword) {
-    // Identical message for unknown accounts and Google-only accounts —
-    // prevents account enumeration.
-    throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401, code: 'INVALID_CREDENTIALS' });
-  }
 
-  const valid = await comparePassword(password, user.password);
-  if (!valid) {
+  // Constant-time dummy hash to defeat user enumeration timing attacks
+  const DUMMY_HASH = '$2a$12$e8h.NcmmF4vj50qLwYm3.OaI73wIcx9c7m7yS4sO0bK78xJ2vKzCe';
+  const targetHash = (user && user.hasPassword && user.password) ? user.password : DUMMY_HASH;
+  const valid = await comparePassword(password, targetHash);
+
+  if (!user || !user.hasPassword || !valid) {
+    // Identical message for unknown accounts, wrong passwords, and Google-only accounts
     throw Object.assign(new Error('Invalid email or password.'), { statusCode: 401, code: 'INVALID_CREDENTIALS' });
   }
 
@@ -347,8 +366,6 @@ async function login(email, password) {
     accessToken,
     refreshToken,
     user: sanitizeUser(user),
-    // Same legacy-heuristic as googleLogin: auto-generated handles that were
-    // never claimed via setUsername get steered to /set-password.
     needsUsername: !user.username || (!user.usernameChangedAt && /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))),
   };
 }
@@ -379,7 +396,11 @@ async function refreshAccessToken(token) {
   }
 
   const presentedHash = hashRefreshToken(token);
-  if (user.refreshToken !== presentedHash) {
+  const storedBuf = Buffer.from(user.refreshToken || '', 'hex');
+  const presentedBuf = Buffer.from(presentedHash, 'hex');
+  const isMatch = storedBuf.length > 0 && storedBuf.length === presentedBuf.length && crypto.timingSafeEqual(storedBuf, presentedBuf);
+
+  if (!isMatch) {
     // Reuse of an old/revoked token — revoke the whole session.
     await prisma.user.update({
       where: { id: user.id },
@@ -543,7 +564,13 @@ async function sendPersonalEmailVerification(userId, personalEmail) {
       id: { not: userId },
       OR: [
         { email: normalized },
-        { personalEmail: { equals: normalized, mode: 'default' } },
+        {
+          personalEmail: { equals: normalized, mode: 'default' },
+          OR: [
+            { personalEmailVerified: true },
+            { emailVerifyExpiry: { gt: new Date() } },
+          ],
+        },
       ],
     },
     select: { id: true },

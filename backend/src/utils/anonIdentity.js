@@ -15,7 +15,7 @@ const env = require('../config/env');
 const SECRET_BYTES = 32;
 
 function pepper() {
-  return env.JWT_ACCESS_SECRET;
+  return env.ANON_IDENTITY_PEPPER || process.env.ANON_IDENTITY_PEPPER || env.JWT_ACCESS_SECRET;
 }
 
 /** Generate a fresh identity secret (given to the client exactly once). */

@@ -179,6 +179,7 @@ export default function ForgotPasswordPage() {
                     }
                   }}
                   placeholder="you@institution.edu"
+                  autoComplete="email"
                   required
                   autoFocus
                   className="pl-10"

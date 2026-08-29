@@ -135,7 +135,21 @@ router.get('/:userId', async (req, res, next) => {
  */
 router.post(
   '/:userId',
-  [body('content').trim().notEmpty().withMessage('Message content is required.')],
+  [
+    body('content').custom((value, { req }) => {
+      const hasText = typeof value === 'string' && value.trim().length > 0;
+      const hasFile = typeof req.body?.fileUrl === 'string' && req.body.fileUrl.length > 0;
+      if (!hasText && !hasFile) {
+        throw new Error('Message content or file attachment is required.');
+      }
+      if (typeof value === 'string' && value.length > 8000) {
+        throw new Error('Message cannot exceed 8,000 characters.');
+      }
+      return true;
+    }),
+    body('replyToId').optional({ nullable: true, checkFalsy: true }).isMongoId().withMessage('Invalid replyToId.'),
+    body('msgType').optional().isIn(['text', 'image', 'document', 'sticker', 'audio', 'video']).withMessage('Invalid msgType.'),
+  ],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -160,19 +174,24 @@ router.post(
 /**
  * PUT /api/v1/dm/messages/:msgId — Edit a DM (own messages only).
  */
-router.put('/messages/:msgId', [body('content').trim().notEmpty().withMessage('Message content is required.')], async (req, res, next) => {
-  try {
-    if (!ID_RE.test(req.params.msgId)) {
-      return error(res, 'VALIDATION_ERROR', 'Invalid message id.', 400);
-    }
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400, errors.array().map(e => ({ field: e.path, issue: e.msg })));
-    }
-    const result = await dmService.editDM(req.params.msgId, req.user.id, req.body.content);
-    return success(res, result);
-  } catch (err) {
-    if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+router.put(
+  '/messages/:msgId',
+  [
+    body('content').trim().notEmpty().withMessage('Message content is required.').isLength({ max: 8000 }).withMessage('Message cannot exceed 8,000 characters.')
+  ],
+  async (req, res, next) => {
+    try {
+      if (!ID_RE.test(req.params.msgId)) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid message id.', 400);
+      }
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400, errors.array().map(e => ({ field: e.path, issue: e.msg })));
+      }
+      const result = await dmService.editDM(req.params.msgId, req.user.id, req.body.content);
+      return success(res, result);
+    } catch (err) {
+      if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
     next(err);
   }
 });

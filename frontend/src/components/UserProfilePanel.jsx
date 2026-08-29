@@ -5,10 +5,12 @@
  */
 
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { userApi } from '../api/userApi';
 import { friendApi } from '../api/friendApi';
 import { storeApi } from '../api/storeApi';
 import Avatar from './Avatar';
+import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin', 'Manager', 'Elevated', 'Member'];
 
@@ -19,6 +21,19 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
   const [message, setMessage] = useState('');
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferAmount, setTransferAmount] = useState('');
+  const [badgeMap, setBadgeMap] = useState({});
+
+  useEffect(() => {
+    storeApi.getAllBadges()
+      .then((res) => {
+        const map = {};
+        (res.data?.data || []).forEach((b) => {
+          map[b.id] = b;
+        });
+        setBadgeMap(map);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!userId) return;
@@ -77,10 +92,15 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
 
   return (
     <div className="w-80 flex-shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex flex-col h-full overflow-y-auto">
-      {/* Close button */}
+      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
         <h3 className="font-semibold text-sm">User Profile</h3>
-        <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors text-lg">
+        <button
+          onClick={onClose}
+          className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors text-lg"
+          aria-label="Close profile panel"
+          type="button"
+        >
           ✕
         </button>
       </div>
@@ -108,8 +128,8 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
             {profile.username && (
               <p className="text-sm text-[var(--color-text-muted)]">@{profile.username}</p>
             )}
-            <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs text-white ring-badge-${Math.min(profile.globalRing, 3)}`}>
-              {RING_LABELS[profile.globalRing] || 'Restricted'}
+            <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs text-white ring-badge-${Math.min(profile.globalRing ?? 3, 3)}`}>
+              {RING_LABELS[profile.globalRing] || 'Member'}
             </span>
           </div>
 
@@ -125,16 +145,12 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
             {profile.cfHandle && (
               <div className="bg-[var(--color-bg-card)] rounded-xl p-3 text-center">
                 <p className="text-xs text-[var(--color-text-muted)] mb-1">Codeforces</p>
-                <p className="text-sm font-semibold">{profile.cfHandle}</p>
+                <p className="text-sm font-semibold truncate">{profile.cfHandle}</p>
                 {profile.cfRating && (
                   <p className="text-xs text-[var(--color-accent-light)]">{profile.cfRating}</p>
                 )}
               </div>
             )}
-            <div className="bg-[var(--color-bg-card)] rounded-xl p-3 text-center">
-              <p className="text-xs text-[var(--color-text-muted)] mb-1">Credits</p>
-              <p className="text-sm font-semibold">{profile.globalRing === 0 ? '∞' : (profile.creditBalance ?? 0)}</p>
-            </div>
             <div className="bg-[var(--color-bg-card)] rounded-xl p-3 text-center">
               <p className="text-xs text-[var(--color-text-muted)] mb-1">Joined</p>
               <p className="text-sm font-semibold">{new Date(profile.createdAt).toLocaleDateString()}</p>
@@ -159,42 +175,66 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
           {profile.displayBadges?.length > 0 && (
             <div>
               <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-2">Badges</p>
-              <div className="flex flex-wrap gap-1.5">
-                {profile.displayBadges.map((badge) => (
-                  <span key={badge} className="px-2 py-1 bg-[var(--color-bg-card)] rounded-full text-xs">
-                    {badge}
-                  </span>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {profile.displayBadges.map((badgeId) => {
+                  const badge = badgeMap[badgeId];
+                  return (
+                    <div
+                      key={badgeId}
+                      className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-full text-xs"
+                      title={badge?.description || badge?.name || 'Badge'}
+                    >
+                      {badge?.imageUrl ? (
+                        <img
+                          src={resolveAsset(badge.imageUrl)}
+                          alt={badge.name || ''}
+                          className="w-4 h-4 object-contain rounded-full"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span>🏅</span>
+                      )}
+                      <span className="font-medium text-[var(--color-text-primary)] truncate max-w-[100px]">
+                        {badge?.name || 'Badge'}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Message */}
+          {/* Message / Feedback Alert */}
           {message && (
             <div className={`text-xs p-2 rounded-lg text-center ${
-              message.includes('sent') || message.includes('accepted')
+              message.includes('sent') || message.includes('accepted') || message.includes('Successfully')
                 ? 'bg-[rgba(16,185,129,0.1)] text-green-400'
                 : 'bg-[rgba(239,68,68,0.1)] text-red-400'
             }`}>{message}</div>
           )}
 
-          {/* Friend Actions */}
+          {/* Friend Actions & Interaction */}
           {!isSelf && (
             <div className="space-y-2">
-              <a href={`/messages/${userId}`} className="btn btn-primary w-full text-center text-sm block">
+              <Link
+                to={`/messages/${userId}`}
+                onClick={onClose}
+                className="btn btn-primary w-full text-center text-sm block"
+              >
                 💬 Message
-              </a>
+              </Link>
               {profile.friendshipStatus === 'accepted' ? (
                 <button
                   onClick={() => handleFriendAction('remove')}
-                    disabled={actionLoading}
-                    className="btn btn-secondary w-full text-sm"
-                  >
-                    Unfriend
-                  </button>
+                  disabled={actionLoading}
+                  className="btn btn-secondary w-full text-sm"
+                  type="button"
+                >
+                  Unfriend
+                </button>
               ) : profile.friendshipStatus === 'pending' ? (
                 profile.isRequester ? (
-                  <button disabled className="btn btn-secondary w-full text-sm">
+                  <button disabled className="btn btn-secondary w-full text-sm" type="button">
                     ⏳ Request Sent
                   </button>
                 ) : (
@@ -202,6 +242,7 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
                     onClick={() => handleFriendAction('accept')}
                     disabled={actionLoading}
                     className="btn btn-primary w-full text-sm"
+                    type="button"
                   >
                     ✅ Accept Request
                   </button>
@@ -211,6 +252,7 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
                   onClick={() => handleFriendAction('send')}
                   disabled={actionLoading}
                   className="btn btn-primary w-full text-sm"
+                  type="button"
                 >
                   {actionLoading ? <span className="spinner" /> : '👋 Send Friend Request'}
                 </button>
@@ -219,15 +261,38 @@ export default function UserProfilePanel({ userId, onClose, currentUserId }) {
               <div className="pt-2 border-t border-[var(--color-border)]">
                 {showTransfer ? (
                   <div className="flex flex-col gap-2">
-                    <input type="number" placeholder="Amount..." min="1" value={transferAmount} onChange={e => setTransferAmount(e.target.value)}
-                           className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded text-sm focus:outline-[var(--color-accent)]" />
+                    <input
+                      type="number"
+                      placeholder="Amount..."
+                      min="1"
+                      value={transferAmount}
+                      onChange={(e) => setTransferAmount(e.target.value)}
+                      className="w-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-2 rounded text-sm focus:outline-[var(--color-accent)]"
+                    />
                     <div className="flex gap-2">
-                      <button onClick={handleTransfer} disabled={actionLoading} className="btn bg-[var(--color-success)] text-white w-full text-sm">Send</button>
-                      <button onClick={() => setShowTransfer(false)} className="btn btn-secondary w-full text-sm">Cancel</button>
+                      <button
+                        onClick={handleTransfer}
+                        disabled={actionLoading}
+                        className="btn bg-[var(--color-success)] text-white w-full text-sm"
+                        type="button"
+                      >
+                        Send
+                      </button>
+                      <button
+                        onClick={() => setShowTransfer(false)}
+                        className="btn btn-secondary w-full text-sm"
+                        type="button"
+                      >
+                        Cancel
+                      </button>
                     </div>
                   </div>
                 ) : (
-                  <button onClick={() => setShowTransfer(true)} className="btn btn-secondary w-full text-sm">
+                  <button
+                    onClick={() => setShowTransfer(true)}
+                    className="btn btn-secondary w-full text-sm"
+                    type="button"
+                  >
                     🪙 Send Credits
                   </button>
                 )}

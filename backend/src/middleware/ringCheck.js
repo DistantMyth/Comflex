@@ -62,8 +62,18 @@ function canActOnUser(actorRing, targetRing) {
  * @param {number} desiredRing
  * @returns {{ valid: boolean, reason?: string }}
  */
-function validateElevation(actorRing, targetCurrentRing, desiredRing) {
-  // Actor must outrank target
+function validateElevation(actorRing, targetCurrentRing, desiredRing, actorId = null, targetId = null) {
+  // Prevent self-demotion for admins
+  if (actorId && targetId && actorId === targetId && desiredRing > actorRing) {
+    return { valid: false, reason: 'Admins cannot demote their own account.' };
+  }
+
+  // Ring 0 (Admin) can modify any other user's ring level
+  if (actorRing === 0) {
+    return { valid: true };
+  }
+
+  // Non-root rings: Actor must outrank target
   if (actorRing >= targetCurrentRing) {
     return { valid: false, reason: 'You cannot modify the ring of someone at your level or above.' };
   }
@@ -74,7 +84,7 @@ function validateElevation(actorRing, targetCurrentRing, desiredRing) {
   }
 
   // Only Ring 0 can create Ring 0
-  if (desiredRing === 0 && actorRing !== 0) {
+  if (desiredRing === 0) {
     return { valid: false, reason: 'Only Ring 0 (Admin) can assign Ring 0.' };
   }
 

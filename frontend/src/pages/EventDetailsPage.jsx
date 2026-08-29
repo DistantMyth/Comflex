@@ -6,24 +6,41 @@ import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
 import Avatar from '../components/Avatar';
 
-const CountdownClock = ({ targetDate, label }) => {
+const toLocalISO = (d) => {
+  if (!d) return '';
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+
+const CountdownClock = ({ targetDate, label, onExpire }) => {
   const [timeLeft, setTimeLeft] = useState(0);
+  const expiredRef = React.useRef(false);
 
   useEffect(() => {
-    const calc = () => Math.max(0, new Date(targetDate).getTime() - new Date().getTime());
+    expiredRef.current = false;
+    const calc = () => {
+      const remaining = Math.max(0, new Date(targetDate).getTime() - new Date().getTime());
+      if (remaining === 0 && !expiredRef.current) {
+        expiredRef.current = true;
+        onExpire?.();
+      }
+      return remaining;
+    };
     setTimeLeft(calc());
     const t = setInterval(() => setTimeLeft(calc()), 1000);
     return () => clearInterval(t);
-  }, [targetDate]);
+  }, [targetDate, onExpire]);
 
   const h = Math.floor(timeLeft / 3600000);
   const m = Math.floor((timeLeft % 3600000) / 60000);
   const s = Math.floor((timeLeft % 60000) / 1000);
 
-  if (timeLeft === 0) return <div className="text-[var(--color-accent)] font-bold">{label} Reached!</div>;
+  if (timeLeft === 0) return <div className="text-[var(--color-accent)] font-bold text-center">{label} Reached!</div>;
 
   return (
-    <div className="flex flex-col items-center p-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl w-48 text-center shrinkage-0">
+    <div className="flex flex-col items-center p-3 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl w-48 text-center shrink-0">
       <span className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase mb-1">{label}</span>
       <div className="text-2xl font-mono font-bold font-variant-numeric text-[var(--color-text-primary)]">
         {h.toString().padStart(2, '0')}:{m.toString().padStart(2, '0')}:{s.toString().padStart(2, '0')}
@@ -91,7 +108,7 @@ export default function EventDetailsPage() {
       setEvent(ev);
       // init edit form
       setEditForm({
-        title: ev.title, description: ev.description || '', startDate: new Date(ev.startDate).toISOString().slice(0, 16),
+        title: ev.title, description: ev.description || '', startDate: toLocalISO(ev.startDate),
         durationHours: ev.durationHours, durationMinutes: ev.durationMinutes,
         taskViewMode: ev.taskViewMode, scoreMode: ev.scoreMode, wrongSubmissionPenalty: ev.wrongSubmissionPenalty,
         targetTags: ev.targetTags?.join(', ') || '',
@@ -231,6 +248,10 @@ export default function EventDetailsPage() {
 
   const handleUpdateEvent = async (e) => {
     e.preventDefault();
+    if (editForm.isTeamEvent && Number(editForm.minTeamSize) > Number(editForm.maxTeamSize)) {
+      setMessage('Minimum team size cannot be greater than maximum team size.');
+      return;
+    }
     setActionLoading(true);
     try {
       const payload = {
@@ -295,6 +316,7 @@ export default function EventDetailsPage() {
          basePoints: taskForm.basePoints,
          submissionType: taskForm.submissionType,
          isAutoEvaluated: taskForm.isAutoEvaluated,
+         isDynamicScore: Number(taskForm.decayPercentage) > 0,
          decayPercentage: taskForm.decayPercentage,
          wrongSubmissionPenalty: taskForm.wrongSubmissionPenalty,
          submissionConfig: buildTaskConfig(taskForm)
@@ -587,8 +609,8 @@ export default function EventDetailsPage() {
            </p>
 
            <div className="flex flex-col md:flex-row gap-6 mb-8 mt-4 justify-between items-start md:items-center">
-             {isUpcoming && <CountdownClock targetDate={start} label="Time until Start" />}
-             {isOngoing && <CountdownClock targetDate={end} label="Time Remaining" />}
+             {isUpcoming && <CountdownClock targetDate={start} label="Time until Start" onExpire={fetchEventData} />}
+             {isOngoing && <CountdownClock targetDate={end} label="Time Remaining" onExpire={fetchEventData} />}
              {isCompleted && <div className="text-xl font-bold text-[var(--color-text-muted)] py-4">Event has Ended.</div>}
 
              {isOrganizer && (

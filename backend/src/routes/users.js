@@ -97,7 +97,12 @@ router.patch(
     body('displayName').optional().trim().isLength({ min: 2, max: 50 }),
     body('bio').optional().isLength({ max: 500 }),
     body('displayBadges').optional().isArray({ max: 5 }),
-    body('cfHandle').optional().isString(),
+    body('cfHandle')
+      .optional({ values: 'null' })
+      .custom((value) =>
+        value === '' || value === null || (typeof value === 'string' && /^[a-zA-Z0-9._-]{2,24}$/.test(value.trim()))
+      )
+      .withMessage('Codeforces handle must be 2–24 characters (alphanumeric, dots, dashes, underscores).'),
     // personalEmail: valid email to (re)set, or null/'' to remove
     body('personalEmail')
       .optional({ values: 'null' })

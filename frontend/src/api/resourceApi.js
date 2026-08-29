@@ -13,11 +13,15 @@ export const resourceApi = {
   getResources: (subjectId) => {
     return api.get('/resources', { params: { subjectId } });
   },
-  uploadResource: (formData, onUploadProgress) => {
+  uploadResource: (formData, onUploadProgress, signal) => {
     return api.post('/resources/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress
+      onUploadProgress,
+      signal
     });
+  },
+  downloadResource: (id) => {
+    return api.get(`/resources/download/${id}`, { responseType: 'blob' });
   },
   deleteResource: (id) => {
     return api.delete(`/resources/${id}`);

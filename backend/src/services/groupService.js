@@ -468,16 +468,21 @@ async function setMemberRing(groupId, actorRing, actorUserId, actorGlobalRing, t
     throw Object.assign(new Error('Cannot modify ring of a user at your level or above.'), { statusCode: 403, code: 'RING_VIOLATION' });
   }
 
-  // HARDENING: never let an actor set anyone's ring to a level equal to or
-  // above their own — otherwise any moderator could promote a puppet to
-  // ring 0 (full group admin). Only the group creator or a global admin
-  // (ring 0) may assign ring 0.
+  // HARDENING: An actor can elevate up to their own ring level (e.g. Ring 1
+  // manager can elevate a member to Ring 1), but cannot elevate above their own level.
+  // Ring 0 (admin) is strictly reserved for the group creator or global admin.
   const actorIsCreator = group?.creatorId === actorUserId;
   const actorIsGlobalAdmin = actorGlobalRing === 0;
-  if (newRing <= actorRing && !actorIsCreator && !actorIsGlobalAdmin) {
+  if (newRing < actorRing && !actorIsCreator && !actorIsGlobalAdmin) {
     throw Object.assign(
-      new Error('You cannot assign a ring at or above your own level.'),
+      new Error('You cannot elevate someone above your own ring level.'),
       { statusCode: 403, code: 'RING_ESCALATION_BLOCKED' }
+    );
+  }
+  if (newRing === 0 && actorRing !== 0 && !actorIsCreator && !actorIsGlobalAdmin) {
+    throw Object.assign(
+      new Error('Only the group creator or a global admin can assign Ring 0.'),
+      { statusCode: 403, code: 'RING_0_RESERVED' }
     );
   }
 
@@ -501,8 +506,9 @@ async function getMemberPermissions(groupId, userId) {
 /**
  * Set a member's permissions.
  * Cannot modify permissions of the group creator.
+ * Actors cannot grant permissions they do not possess themselves.
  */
-async function setMemberPermissions(groupId, actorRing, targetUserId, permissions) {
+async function setMemberPermissions(groupId, actorRing, targetUserId, permissions, actorPermissions = {}, isCreatorOrAdmin = false) {
   const target = await getMembership(groupId, targetUserId);
 
   // Protect group creator
@@ -515,9 +521,21 @@ async function setMemberPermissions(groupId, actorRing, targetUserId, permission
     throw Object.assign(new Error('Cannot modify permissions of a user at your level or above.'), { statusCode: 403, code: 'RING_VIOLATION' });
   }
 
+  const cleaned = cleanPermissions(permissions);
+  if (!isCreatorOrAdmin && actorRing > 0) {
+    for (const [key, val] of Object.entries(cleaned)) {
+      if (val === true && !actorPermissions[key]) {
+        throw Object.assign(
+          new Error(`Cannot grant permission '${key}' that you do not possess.`),
+          { statusCode: 403, code: 'PERMISSION_ESCALATION' }
+        );
+      }
+    }
+  }
+
   return prisma.groupMember.update({
     where: { userId_groupId: { userId: targetUserId, groupId } },
-    data: { permissions: cleanPermissions(permissions) },
+    data: { permissions: cleaned },
   });
 }
 
@@ -852,6 +870,12 @@ async function claimAnonIdentity(groupId, userId, alias, avatarUrl) {
     throw Object.assign(new Error('This group is not anonymous.'), { statusCode: 400, code: 'NOT_ANONYMOUS' });
   }
 
+  // Word-ban check for alias
+  const bannedWord = containsBannedWord(cleanAlias, group.wordBanList);
+  if (bannedWord) {
+    throw Object.assign(new Error(`Alias contains a banned word ("${bannedWord}").`), { statusCode: 400, code: 'BANNED_WORD' });
+  }
+
   // Alias must be unique in the group case-insensitively (impersonation guard).
   const aliasKey = cleanAlias.toLowerCase();
   const clash = await prisma.anonymousIdentity.findFirst({
@@ -993,13 +1017,16 @@ async function hasAnonJoin(groupId, userId) {
   return !!join;
 }
 
-/** Word-ban filtering — case-insensitive substring match on each word. */
+/** Word-ban filtering — case-insensitive word-boundary match on each word. */
 function containsBannedWord(content, wordBanList) {
-  const words = (wordBanList || []).filter(Boolean).map(w => w.trim().toLowerCase());
-  if (words.length === 0 || !content) return null;
-  const lower = content.toLowerCase();
-  const hit = words.find(w => w && lower.includes(w));
-  return hit || null;
+  if (!wordBanList?.length || !content) return null;
+  for (const w of wordBanList) {
+    if (!w || !w.trim()) continue;
+    const escaped = w.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|\\W)${escaped}(?:$|\\W)`, 'i');
+    if (regex.test(content)) return w.trim();
+  }
+  return null;
 }
 
 /** Rename an identity / rotate its secret. Returns {secret} — new secret. */
@@ -1010,6 +1037,12 @@ async function renameAnonIdentity(identityId, secret, newAlias, avatarUrl) {
 
   const cleanAlias = sanitizeAlias(newAlias);
   if (!cleanAlias) throw Object.assign(new Error('An alias is required.'), { statusCode: 400, code: 'ALIAS_REQUIRED' });
+
+  const group = await prisma.cohortGroup.findUnique({ where: { id: identity.groupId }, select: { wordBanList: true } });
+  const bannedWord = containsBannedWord(cleanAlias, group?.wordBanList);
+  if (bannedWord) {
+    throw Object.assign(new Error(`Alias contains a banned word ("${bannedWord}").`), { statusCode: 400, code: 'BANNED_WORD' });
+  }
 
   const aliasKey = cleanAlias.toLowerCase();
   if (aliasKey !== identity.aliasKey) {

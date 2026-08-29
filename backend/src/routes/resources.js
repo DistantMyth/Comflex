@@ -55,6 +55,15 @@ const upload = multer({
   },
 });
 
+const { rateLimiter } = require('../middleware/rateLimit');
+
+const resourceUploadRateLimit = rateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: 'Upload rate limit exceeded. Please wait before uploading more files.',
+  keyPrefix: 'resource-upload',
+});
+
 router.use(authMiddleware);
 
 // ==========================================
@@ -66,13 +75,21 @@ router.get('/subjects', async (req, res, next) => {
   try {
     const { category, subCategory, yearGroup } = req.query;
     
+    if (subCategory && !enforceBatchAccess(req, subCategory, yearGroup)) {
+      return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
+    }
+
     const where = {};
     if (category) where.category = category;
     if (subCategory) where.subCategory = subCategory;
     if (yearGroup) where.yearGroup = yearGroup;
 
     const subjects = await prisma.resourceSubject.findMany({ where });
-    return success(res, subjects);
+    const filtered = req.user.globalRing === 0
+      ? subjects
+      : subjects.filter(s => enforceBatchAccess(req, s.subCategory, s.yearGroup));
+
+    return success(res, filtered);
   } catch (err) {
     next(err);
   }
@@ -94,7 +111,7 @@ router.post('/subjects', [
 
     const { name, category, subCategory, yearGroup } = req.body;
 
-    if (!enforceBatchAccess(req, subCategory)) {
+    if (!enforceBatchAccess(req, subCategory, yearGroup)) {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
@@ -137,11 +154,22 @@ router.delete('/subjects/:id', async (req, res, next) => {
     const subject = await prisma.resourceSubject.findUnique({ where: { id: req.params.id } });
     if (!subject) return error(res, 'NOT_FOUND', 'Subject not found', 404);
 
-    if (!enforceBatchAccess(req, subject.subCategory)) {
+    if (!enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
+    // Clean up physical files of associated resources
+    const resources = await prisma.resource.findMany({
+      where: { subjectId: req.params.id },
+      select: { fileUrl: true }
+    });
+
     await prisma.resourceSubject.delete({ where: { id: req.params.id } });
+
+    for (const r of resources) {
+      await deleteStoredFile(r.fileUrl).catch(() => {});
+    }
+
     return success(res, { message: 'Subject deleted' });
   } catch (err) {
     next(err);
@@ -162,9 +190,8 @@ router.get('/', async (req, res, next) => {
     const subject = await prisma.resourceSubject.findUnique({ where: { id: subjectId } });
     if (!subject) return error(res, 'NOT_FOUND', 'Subject not found', 404);
 
-    // Batch access applies to listing too — juniors must not enumerate
-    // seniors' notes.
-    if (!enforceBatchAccess(req, subject.subCategory)) {
+    // Batch access applies to listing too
+    if (!enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
       return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
@@ -183,7 +210,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // Upload a file
-router.post('/upload', upload.single('file'), async (req, res, next) => {
+router.post('/upload', resourceUploadRateLimit, upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) return error(res, 'VALIDATION', 'No file uploaded', 400);
     const { title, subjectId } = req.body;
@@ -195,15 +222,14 @@ router.post('/upload', upload.single('file'), async (req, res, next) => {
     const subject = await prisma.resourceSubject.findUnique({ where: { id: subjectId } });
     if (!subject) return error(res, 'NOT_FOUND', 'Subject not found', 404);
 
-    if (!enforceBatchAccess(req, subject.subCategory)) {
+    if (!enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
-    // Magic-byte check for image/PDF claims (documents are type-checked by
-    // extension; images must actually be images).
-    if (!validateStoredFile(req.file.path, req.file.mimetype)) {
+    // Magic-byte check for image/PDF/archive claims
+    if (!validateStoredFile(req.file.path, req.file.mimetype, req.file.originalname)) {
       try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
-      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file header does not match its type.', 400);
+      return error(res, 'INVALID_FILE_TYPE', 'The uploaded file header does not match its type or extension.', 400);
     }
 
     const fileUrl = await storeFile(req.file, { folder: 'comflex/resources', localUrlPrefix: '/uploads/resources' });
@@ -249,7 +275,7 @@ router.delete('/:id', async (req, res, next) => {
     }
 
     const subject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
-    if (subject && !enforceBatchAccess(req, subject.subCategory)) {
+    if (subject && !enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
        return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
@@ -275,7 +301,7 @@ router.get('/download/:id', async (req, res, next) => {
 
     // Batch access applies to downloads as well.
     const subject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
-    if (subject && !enforceBatchAccess(req, subject.subCategory)) {
+    if (subject && !enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
       return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
@@ -285,41 +311,61 @@ router.get('/download/:id', async (req, res, next) => {
 
     // Issue reward to the uploader if it's someone downloading another's notes
     if (rewardAmount > 0 && resource.uploaderId !== req.user.id) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
       await prisma.$transaction(async (tx) => {
-        // Prevent duplicate rewards per user per file (check if transaction already exists)
+        // Prevent duplicate rewards per user per file
         const existingTx = await tx.transaction.findFirst({
           where: {
             receiverId: resource.uploaderId,
             type: 'download_reward',
-            referenceId: `${resource.id}_${req.user.id}` // Note: track downloader in referenceId
+            referenceId: `${resource.id}_${req.user.id}`
           }
         });
         
         if (!existingTx) {
-          // Increment uploader's credits
-          await tx.user.update({
-            where: { id: resource.uploaderId },
-            data: { creditBalance: { increment: rewardAmount } }
-          });
-          
-          // Log transaction
-          await tx.transaction.create({
-            data: {
-              senderId: null, // system 
+          // Check daily limit on download rewards for the uploader (max 50 credits/day)
+          const dailyTotal = await tx.transaction.aggregate({
+            where: {
               receiverId: resource.uploaderId,
-              amount: rewardAmount,
               type: 'download_reward',
-              referenceId: `${resource.id}_${req.user.id}`
-            }
+              createdAt: { gte: todayStart }
+            },
+            _sum: { amount: true }
           });
+
+          if ((dailyTotal._sum.amount || 0) + rewardAmount <= 50) {
+            // Increment uploader's credits
+            await tx.user.update({
+              where: { id: resource.uploaderId },
+              data: { creditBalance: { increment: rewardAmount } }
+            });
+            
+            // Log transaction
+            await tx.transaction.create({
+              data: {
+                senderId: null, // system 
+                receiverId: resource.uploaderId,
+                amount: rewardAmount,
+                type: 'download_reward',
+                referenceId: `${resource.id}_${req.user.id}`
+              }
+            });
+          }
         }
       });
     }
 
     // Local file → stream from disk; Cloudinary URL → redirect to the CDN
-    const filePath = path.join(env.STORAGE_PATH, resource.fileUrl.replace('/uploads/', ''));
-    if (resource.fileUrl.startsWith('/uploads/') && fs.existsSync(filePath)) {
-      res.download(filePath, resource.fileName);
+    const cleanRelPath = resource.fileUrl.replace(/^\/uploads\/?/, '');
+    const resolvedPath = path.resolve(env.STORAGE_PATH, cleanRelPath);
+    if (!resolvedPath.startsWith(path.resolve(env.STORAGE_PATH))) {
+      return error(res, 'FORBIDDEN', 'Invalid file path.', 403);
+    }
+
+    if (resource.fileUrl.startsWith('/uploads/') && fs.existsSync(resolvedPath)) {
+      res.download(resolvedPath, resource.fileName);
     } else if (resource.fileUrl.startsWith('http')) {
       res.redirect(resource.fileUrl);
     } else {

@@ -20,8 +20,12 @@ export const storeApi = {
   // Admin Store
   adminCreateBadge: (data) => api.post('/store/admin/badges', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
   adminCreateListing: (data) => api.post('/store/admin/listings', data),
+  adminUpdateListing: (id, data) => api.patch(`/store/admin/listings/${id}`, data),
+  adminDeleteListing: (id) => api.delete(`/store/admin/listings/${id}`),
   mintCredits: (userId, amount) => api.post('/store/admin/mint-credits', { userId, amount }),
 
-  // Crypto
+  // Wallet Binding & Crypto
+  getWalletChallenge: () => api.post('/store/wallet/challenge'),
+  bindWallet: (data) => api.post('/store/wallet', data),
   buyCredits: (data) => api.post('/store/buy-credits', data)
 };

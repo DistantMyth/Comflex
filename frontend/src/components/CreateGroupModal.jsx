@@ -54,7 +54,8 @@ export default function CreateGroupModal({ onClose, onCreated }) {
     setError('');
 
     try {
-      const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const baseSlug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'group';
+      const slug = `${baseSlug}-${Math.random().toString(36).substring(2, 6)}`;
       const res = await groupApi.createGroup({
         name: slug,
         displayName: displayName.trim() || name.trim(),

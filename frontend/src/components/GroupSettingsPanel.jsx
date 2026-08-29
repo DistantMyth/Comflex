@@ -174,7 +174,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
     try {
       await groupApi.leaveGroup(groupId);
       // Wait a moment then redirect or let layout handle fallback
-      window.location.href = '/dashboard';
+      window.location.href = '/groups';
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to leave group.');
     }
@@ -184,7 +184,7 @@ export default function GroupSettingsPanel({ groupId, group, currentUserId, onCl
     if (!confirm('Are you sure you want to completely DELETE this group? This cannot be undone.')) return;
     try {
       await groupApi.deleteGroup(groupId);
-      window.location.href = '/dashboard';
+      window.location.href = '/groups';
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete group.');
     }

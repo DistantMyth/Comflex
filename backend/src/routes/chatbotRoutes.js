@@ -32,36 +32,55 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 5
 
 router.use(authMiddleware);
 
-// Middleware to daily-reset counters
+// Dedicated rate limiters
+const uploadRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Upload limit reached. Please wait a few minutes before uploading more notes.',
+  keyFn: (req) => req.user?.id || req.ip,
+  keyPrefix: 'chatbot-upload-user',
+});
+
+const chatRateLimiter = rateLimiter({
+  windowMs: 10 * 60 * 1000,
+  max: 40,
+  message: 'Too many chat requests. Please slow down.',
+  keyFn: (req) => req.user?.id || req.ip,
+  keyPrefix: 'chatbot-chat-user',
+});
+
+// Middleware to daily-reset counters with UTC boundary
 async function checkAndResetDailyLimits(req, res, next) {
-  let user = await prisma.user.findUnique({ where: { id: req.user.id } });
-  if (!user) return res.status(401).json({ error: 'User not found' });
+  try {
+    let user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user) return error(res, 'AUTH_ERROR', 'User not found.', 401);
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
 
-  const lastUpload = user.lastUploadDate || new Date(0);
+    const lastUpload = user.lastUploadDate ? new Date(user.lastUploadDate) : new Date(0);
 
-  if (lastUpload < todayStart) {
-    user = await prisma.user.update({
-      where: { id: user.id },
-      data: { dailyUploadCount: 0, dailyChatTokens: 20, lastUploadDate: new Date() }
-    });
+    if (lastUpload < todayStart) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { dailyUploadCount: 0, dailyChatTokens: 20, lastUploadDate: new Date() }
+      });
+    }
+    
+    // Apply null safety for older user records
+    user.chatbotStorageUsed = user.chatbotStorageUsed || 0;
+    user.dailyUploadCount = user.dailyUploadCount || 0;
+    user.dailyChatTokens = user.dailyChatTokens ?? 20;
+
+    req.dbUser = user;
+    next();
+  } catch (err) {
+    next(err);
   }
-  
-  // Apply null safety for old users
-  user.chatbotStorageUsed = user.chatbotStorageUsed || 0;
-  user.dailyUploadCount = user.dailyUploadCount || 0;
-  user.dailyChatTokens = user.dailyChatTokens ?? 20;
-
-  req.dbUser = user;
-  next();
 }
 
 const FREE_LIMITS = { uploads: 2, storage: 50 * 1024 * 1024 }; // 50MB total
 
-// text/html and image/svg+xml are deliberately excluded — they can carry
-// active content and are served from the same origin via /uploads.
 const ALLOWED_MIMES = ['application/pdf', 'application/rtf', 'text/csv', 'text/plain', 'text/markdown'];
 const ALLOWED_EXTENSIONS = ['.pdf', '.rtf', '.csv', '.txt', '.md', '.markdown'];
 function isMimeAllowed(mime) {
@@ -97,37 +116,50 @@ router.get('/limits', checkAndResetDailyLimits, (req, res) => {
 });
 
 // POST upload local file
-router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), async (req, res, next) => {
+router.post('/upload/local', uploadRateLimiter, checkAndResetDailyLimits, upload.single('file'), async (req, res, next) => {
+  let reserved = false;
+  let geminiData = null;
+  const tempPath = req.file ? req.file.path : null;
+
   try {
     const user = req.dbUser;
     if (!req.file) return error(res, 'VALIDATION', 'No file uploaded', 400);
 
-    const limit = FREE_LIMITS;
-    if (user.dailyUploadCount >= limit.uploads) {
-      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit reached.', 429);
-    }
-    if (user.chatbotStorageUsed + req.file.size > limit.storage) {
-      return error(res, 'LIMIT_EXCEEDED', 'Storage limit exceeded. Delete some notes first.', 429);
-    }
-
-    const { title } = req.body;
-    const finalTitle = title || req.file.originalname;
+    const rawTitle = (req.body.title || req.file.originalname || '').trim();
+    const finalTitle = rawTitle.slice(0, 100) || 'Untitled Note';
 
     if (!isMimeAllowed(req.file.mimetype) || !isExtAllowed(req.file.originalname)) {
       return error(res, 'UNSUPPORTED_FORMAT', 'Unsupported file format. Please upload PDF, TXT, CSV, or Markdown files.', 400);
     }
 
-    // Header check — a file can't claim to be a PDF and be something else.
+    // Header check — magic bytes
     if (!validateStoredFile(req.file.path, req.file.mimetype)) {
-      try { fs.unlinkSync(req.file.path); } catch { /* ignore */ }
       return error(res, 'UNSUPPORTED_FORMAT', 'The uploaded file header does not match its type.', 400);
     }
 
     const existingNote = await prisma.chatbotNote.findFirst({ where: { userId: user.id, title: finalTitle } });
     if (existingNote) return error(res, 'ALREADY_EXISTS', 'A note with this name already exists.', 409);
 
+    // Atomically reserve quota to prevent race conditions
+    const updateResult = await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        dailyUploadCount: { lt: FREE_LIMITS.uploads },
+        chatbotStorageUsed: { lte: FREE_LIMITS.storage - req.file.size }
+      },
+      data: {
+        dailyUploadCount: { increment: 1 },
+        chatbotStorageUsed: { increment: req.file.size }
+      }
+    });
+
+    if (updateResult.count === 0) {
+      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit (2/day) or storage limit (50MB) reached.', 429);
+    }
+    reserved = true;
+
     // Upload to Gemini
-    const geminiData = await uploadFileToGemini(req.file.path, req.file.mimetype, finalTitle);
+    geminiData = await uploadFileToGemini(req.file.path, req.file.mimetype, finalTitle);
 
     const note = await prisma.chatbotNote.create({
       data: {
@@ -140,63 +172,117 @@ router.post('/upload/local', checkAndResetDailyLimits, upload.single('file'), as
       }
     });
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { 
-        dailyUploadCount: { increment: 1 },
-        chatbotStorageUsed: { increment: req.file.size }
-      }
-    });
-
-    // Cleanup local temp file — one copy is enough (Gemini holds the original)
-    try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
-
     return success(res, note, 201);
   } catch (err) {
+    if (reserved) {
+      try {
+        await prisma.user.update({
+          where: { id: req.user.id },
+          data: {
+            dailyUploadCount: { decrement: 1 },
+            chatbotStorageUsed: { decrement: req.file ? req.file.size : 0 }
+          }
+        });
+      } catch { /* ignore */ }
+    }
+    if (geminiData?.name) {
+      deleteGeminiFile(geminiData.name).catch(() => {});
+    }
     next(err);
+  } finally {
+    if (tempPath && fs.existsSync(tempPath)) {
+      try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
+    }
   }
 });
 
 // POST upload from resource
-router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').notEmpty(), async (req, res, next) => {
+router.post('/upload/resource', uploadRateLimiter, checkAndResetDailyLimits, [
+  body('resourceId').notEmpty().isString()
+], async (req, res, next) => {
+  let reserved = false;
+  let geminiData = null;
+  let physicalPath = null;
+  let isTempRemoteFile = false;
+
   try {
     const errs = validationResult(req);
     if (!errs.isEmpty() || !ID_RE.test(req.body.resourceId)) return error(res, 'VALIDATION', 'Invalid resourceId', 400);
 
     const user = req.dbUser;
-    const limit = FREE_LIMITS;
-
-    if (user.dailyUploadCount >= limit.uploads) {
-      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit reached.', 429);
-    }
 
     const resource = await prisma.resource.findUnique({ where: { id: req.body.resourceId } });
     if (!resource) return error(res, 'NOT_FOUND', 'Resource not found', 404);
 
-    // A chatbot resource upload forwards the file to Gemini — enforce the
-    // same batch access rules as the resources module so juniors can't
-    // exfiltrate seniors' notes to a third party.
     const resSubject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
-    if (!resSubject || !enforceBatchAccess(req, resSubject.subCategory)) {
+    if (!resSubject || !enforceBatchAccess(req, resSubject.subCategory, resSubject.yearGroup)) {
       return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
-    if (user.chatbotStorageUsed + resource.fileSize > limit.storage) {
-      return error(res, 'LIMIT_EXCEEDED', 'Storage limit exceeded. Delete or upgrade.', 429);
+    if (!isMimeAllowed(resource.mimetype) || !isExtAllowed(resource.fileName)) {
+      return error(res, 'UNSUPPORTED_FORMAT', 'Resource format not supported by Gemini (use PDF, TXT, CSV, MD).', 400);
     }
 
-    const physicalPath = path.join(__dirname, '../../', resource.fileUrl);
-    if (!fs.existsSync(physicalPath)) return error(res, 'FILE_MISSING', 'Physical resource file missing', 404);
+    const rawTitle = (resource.title || resource.fileName || '').trim();
+    const finalTitle = rawTitle.slice(0, 100) || 'Untitled Resource Note';
 
-    if (!isMimeAllowed(resource.mimetype)) {
-      return error(res, 'UNSUPPORTED_FORMAT', 'Resource format not supported by Gemini (use PDF, TXT, CSV).', 400);
-    }
-
-    const finalTitle = resource.title || resource.fileName;
     const existingNote = await prisma.chatbotNote.findFirst({ where: { userId: user.id, title: finalTitle } });
     if (existingNote) return error(res, 'ALREADY_EXISTS', 'This resource has already been added to your notes.', 409);
 
-    const geminiData = await uploadFileToGemini(physicalPath, resource.mimetype, resource.fileName);
+    // Atomically reserve quota
+    const updateResult = await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        dailyUploadCount: { lt: FREE_LIMITS.uploads },
+        chatbotStorageUsed: { lte: FREE_LIMITS.storage - resource.fileSize }
+      },
+      data: {
+        dailyUploadCount: { increment: 1 },
+        chatbotStorageUsed: { increment: resource.fileSize }
+      }
+    });
+
+    if (updateResult.count === 0) {
+      return error(res, 'LIMIT_EXCEEDED', 'Daily upload limit (2/day) or storage limit (50MB) reached.', 429);
+    }
+    reserved = true;
+
+    // Resolve physical file path (local or remote Cloudinary)
+    if (resource.fileUrl.startsWith('http://') || resource.fileUrl.startsWith('https://')) {
+      const https = require('https');
+      const http = require('http');
+      const tempPath = path.join(uploadDir, `res-temp-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(resource.fileName || '')}`);
+      const client = resource.fileUrl.startsWith('https') ? https : http;
+      
+      await new Promise((resolve, reject) => {
+        client.get(resource.fileUrl, (resp) => {
+          if (resp.statusCode !== 200) {
+            return reject(new Error(`Failed to fetch remote resource: ${resp.statusCode}`));
+          }
+          const fileStream = fs.createWriteStream(tempPath);
+          resp.pipe(fileStream);
+          fileStream.on('finish', () => {
+            fileStream.close();
+            resolve();
+          });
+          fileStream.on('error', reject);
+        }).on('error', reject);
+      });
+      physicalPath = tempPath;
+      isTempRemoteFile = true;
+    } else {
+      physicalPath = path.resolve(env.STORAGE_PATH, resource.fileUrl.replace(/^\/?uploads\//, ''));
+      if (!fs.existsSync(physicalPath)) {
+        const altPath = path.join(__dirname, '../../', resource.fileUrl);
+        if (fs.existsSync(altPath)) {
+          physicalPath = altPath;
+        } else {
+          return error(res, 'FILE_MISSING', 'Physical resource file missing on server.', 404);
+        }
+      }
+    }
+
+    geminiData = await uploadFileToGemini(physicalPath, resource.mimetype, resource.fileName);
 
     const note = await prisma.chatbotNote.create({
       data: {
@@ -209,21 +295,31 @@ router.post('/upload/resource', checkAndResetDailyLimits, body('resourceId').not
       }
     });
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { 
-        dailyUploadCount: { increment: 1 },
-        chatbotStorageUsed: { increment: resource.fileSize }
-      }
-    });
-
     return success(res, note, 201);
   } catch (err) {
+    if (reserved) {
+      try {
+        await prisma.user.update({
+          where: { id: req.user.id },
+          data: {
+            dailyUploadCount: { decrement: 1 },
+            chatbotStorageUsed: { decrement: resource ? resource.fileSize : 0 }
+          }
+        });
+      } catch { /* ignore */ }
+    }
+    if (geminiData?.name) {
+      deleteGeminiFile(geminiData.name).catch(() => {});
+    }
     next(err);
+  } finally {
+    if (isTempRemoteFile && physicalPath && fs.existsSync(physicalPath)) {
+      try { fs.unlinkSync(physicalPath); } catch { /* ignore */ }
+    }
   }
 });
 
-// DELETE
+// DELETE /:id
 router.delete('/:id', async (req, res, next) => {
   try {
     if (!ID_RE.test(req.params.id)) {
@@ -232,7 +328,7 @@ router.delete('/:id', async (req, res, next) => {
     const note = await prisma.chatbotNote.findFirst({
       where: { id: req.params.id, userId: req.user.id }
     });
-    if (!note) return error(res, 'NOT_FOUND', 'Note not found', 404);
+    if (!note) return error(res, 'NOT_FOUND', 'Note not found.', 404);
 
     await deleteGeminiFile(note.geminiFileName);
     await prisma.chatbotNote.delete({ where: { id: note.id } });
@@ -241,45 +337,64 @@ router.delete('/:id', async (req, res, next) => {
       data: { chatbotStorageUsed: { decrement: note.fileSize } }
     });
 
-    return success(res, { message: 'Note deleted' });
+    return success(res, { message: 'Note deleted.' });
   } catch (err) {
     next(err);
   }
 });
 
 // POST /chat
-router.post('/chat', rateLimiter({
-  windowMs: 10 * 60 * 1000,
-  max: 30,
-  message: 'Too many chat requests. Please slow down.',
-  keyPrefix: 'chatbot-chat-ip',
-}), checkAndResetDailyLimits, [
-  body('noteId').notEmpty(),
-  body('query').notEmpty()
+router.post('/chat', chatRateLimiter, checkAndResetDailyLimits, [
+  body('noteId').notEmpty().isString(),
+  body('query').notEmpty().isString(),
+  body('history').optional().isArray()
 ], async (req, res, next) => {
+  let tokenDeducted = false;
   try {
     const errs = validationResult(req);
     if (!errs.isEmpty() || !ID_RE.test(req.body.noteId)) return error(res, 'VALIDATION', 'Invalid data', 400);
 
     const user = req.dbUser;
-    if (user.dailyChatTokens <= 0) {
+
+    // Atomically decrement 1 chat token
+    const updateResult = await prisma.user.updateMany({
+      where: { id: user.id, dailyChatTokens: { gt: 0 } },
+      data: { dailyChatTokens: { decrement: 1 } }
+    });
+
+    if (updateResult.count === 0) {
       return error(res, 'LIMIT_EXCEEDED', 'You are out of chat tokens today. Please try again tomorrow.', 403);
     }
+    tokenDeducted = true;
 
     const note = await prisma.chatbotNote.findFirst({
       where: { id: req.body.noteId, userId: req.user.id }
     });
-    if (!note) return error(res, 'NOT_FOUND', 'Linked note not found.', 404);
+    if (!note) {
+      // Refund token
+      await prisma.user.update({ where: { id: user.id }, data: { dailyChatTokens: { increment: 1 } } });
+      tokenDeducted = false;
+      return error(res, 'NOT_FOUND', 'Linked note not found.', 404);
+    }
 
-    const answer = await chatWithContext({ fileUri: note.geminiFileUri, mimeType: note.mimetype }, req.body.query);
+    const answer = await chatWithContext(
+      { fileUri: note.geminiFileUri, mimeType: note.mimetype },
+      req.body.query,
+      req.body.history || []
+    );
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { dailyChatTokens: { decrement: 1 } }
-    });
+    const freshUser = await prisma.user.findUnique({ where: { id: user.id }, select: { dailyChatTokens: true } });
 
-    return success(res, { answer, remainingTokens: user.dailyChatTokens - 1 });
+    return success(res, { answer, remainingTokens: freshUser?.dailyChatTokens ?? (user.dailyChatTokens - 1) });
   } catch (err) {
+    if (tokenDeducted) {
+      try {
+        await prisma.user.update({
+          where: { id: req.user.id },
+          data: { dailyChatTokens: { increment: 1 } }
+        });
+      } catch { /* ignore */ }
+    }
     next(err);
   }
 });

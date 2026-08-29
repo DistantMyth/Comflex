@@ -186,15 +186,22 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'Not a member of this group.' });
         }
 
-        // Check permissions — member overrides merged with ring config
-        // permissions (mirrors groupPermission middleware).
+        // Check permissions — member overrides > ring config > default ring permissions
         const memberPerms = membership?.permissions || {};
         const ringPerms = membership?.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
-        const canSend =
-          socket.user.globalRing === 0 ||
-          membership?.group?.creatorId === socket.user.id ||
-          memberPerms.can_send_messages === true ||
-          ringPerms.can_send_messages === true;
+        const defaultPerms = groupService.getDefaultPermissions(membership.ring);
+
+        let canSend = false;
+        if (socket.user.globalRing === 0 || membership?.group?.creatorId === socket.user.id) {
+          canSend = true;
+        } else if (memberPerms.can_send_messages !== undefined) {
+          canSend = memberPerms.can_send_messages === true;
+        } else if (ringPerms.can_send_messages !== undefined) {
+          canSend = ringPerms.can_send_messages === true;
+        } else {
+          canSend = defaultPerms.can_send_messages === true;
+        }
+
         if (!canSend) {
           return callback?.({ error: 'You do not have permission to send messages.' });
         }
@@ -263,16 +270,23 @@ function initSocket(httpServer, frontendUrl) {
 
     // ── typing:start (groups) ────────────────────────────
     let lastTypingAt = 0;
-    socket.on('typing:start', ({ groupId }) => {
+    socket.on('typing:start', async ({ groupId }) => {
       if (groupId) {
         // Throttle: typing events are ephemeral UI state — flooding them
         // costs the room broadcaster bandwidth for no gain.
         const now = Date.now();
         if (now - lastTypingAt < 2000) return;
         lastTypingAt = now;
+
         // Typing indicators are suppressed in anonymous groups — the payload
         // would carry the real user's id/displayName.
         if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
+        const grp = await prisma.cohortGroup.findUnique({
+          where: { id: groupId },
+          select: { isAnonymous: true },
+        });
+        if (grp?.isAnonymous) return;
+
         // The user must actually be a verified room member (socket rooms are
         // joined only after a membership check on the handshake).
         if (!socket.rooms?.has(groupId)) return;
@@ -285,9 +299,15 @@ function initSocket(httpServer, frontendUrl) {
     });
 
     // ── typing:stop (groups) ─────────────────────────────
-    socket.on('typing:stop', ({ groupId }) => {
+    socket.on('typing:stop', async ({ groupId }) => {
       if (groupId) {
         if (socket.anonSessions?.some(s => s.groupId === groupId)) return;
+        const grp = await prisma.cohortGroup.findUnique({
+          where: { id: groupId },
+          select: { isAnonymous: true },
+        });
+        if (grp?.isAnonymous) return;
+
         if (!socket.rooms?.has(groupId)) return;
         socket.to(groupId).emit('typing:stop', {
           userId: socket.user.id,
@@ -300,23 +320,24 @@ function initSocket(httpServer, frontendUrl) {
     socket.on('dm:send', async (data, callback) => {
       try {
         const { receiverId, content } = data;
-        if (!receiverId || !content?.trim()) {
-          return callback?.({ error: 'receiverId and content are required.' });
+        const hasText = typeof content === 'string' && content.trim().length > 0;
+        const hasFile = typeof data.fileUrl === 'string' && data.fileUrl.length > 0;
+        if (!receiverId || (!hasText && !hasFile)) {
+          return callback?.({ error: 'receiverId and content or file attachment are required.' });
         }
         if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) {
           return callback?.({ error: 'Invalid receiverId.' });
         }
 
-        const message = await dmService.sendDM(socket.user.id, receiverId, { content: content.trim() });
-
-        // Deliver to receiver's personal room
-        io.to(`user:${receiverId}`).emit('dm:new', {
-          ...message,
-          senderDisplayName: socket.user.displayName,
+        const message = await dmService.sendDM(socket.user.id, receiverId, {
+          content: content ? content.trim() : '',
+          replyToId: data.replyToId,
+          forwarded: data.forwarded,
+          msgType: data.msgType,
+          fileUrl: data.fileUrl,
+          fileName: data.fileName,
+          fileSize: data.fileSize,
         });
-
-        // Also echo back to sender
-        socket.emit('dm:new', message);
 
         callback?.({ success: true, message });
       } catch (err) {
@@ -342,12 +363,6 @@ function initSocket(httpServer, frontendUrl) {
 
         await dmService.markAsRead(socket.user.id, otherUserId);
 
-        // Notify the other user that their messages were read
-        io.to(`user:${otherUserId}`).emit('dm:readUpdate', {
-          readByUserId: socket.user.id,
-          readAt: new Date().toISOString(),
-        });
-
         callback?.({ success: true });
       } catch (err) {
         console.error('[WS] dm:read error:', err.message);
@@ -356,11 +371,16 @@ function initSocket(httpServer, frontendUrl) {
     });
 
     // ── dm:typing:start ──────────────────────────────────
+    socket.lastDmTyping = socket.lastDmTyping || new Map();
     socket.on('dm:typing:start', async ({ receiverId }, callback) => {
       if (receiverId) {
-        // Grandstanding check: only friends may show typing presence.
+        if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) return callback?.({ error: 'Invalid receiverId.' });
+        const now = Date.now();
+        const last = socket.lastDmTyping.get(receiverId) || 0;
+        if (now - last < 2000) return callback?.({ success: true, throttled: true });
+        socket.lastDmTyping.set(receiverId, now);
+
         try {
-          if (!/^[0-9a-fA-F]{24}$/.test(receiverId)) return callback?.({ error: 'Invalid receiverId.' });
           await dmService.requireFriendship(socket.user.id, receiverId);
         } catch {
           return callback?.({ error: 'Not friends with this user.' });
@@ -452,4 +472,36 @@ function emitToUser(userId, event, data) {
   if (io) io.to(`user:${userId}`).emit(event, data);
 }
 
-module.exports = { initSocket, getIO, emitToGroup, emitToUser };
+/**
+ * Evict a user from a group's socket room (called when kicked or leaving).
+ */
+function evictUserFromGroup(userId, groupId) {
+  if (io) {
+    try {
+      io.in(`user:${userId}`).socketsLeave(groupId);
+    } catch (err) {
+      console.error(`[WS] Failed to evict user ${userId} from room ${groupId}:`, err.message);
+    }
+  }
+}
+
+/**
+ * Evict an anonymous identity from a group's socket room (called when banned).
+ */
+function evictAnonIdentityFromGroup(identityId, groupId) {
+  if (io) {
+    try {
+      for (const [, socket] of io.of('/').sockets) {
+        if (socket.anonSessions?.some((s) => s.identityId === identityId && s.groupId === groupId)) {
+          socket.leave(groupId);
+          socket.emit('anon:banned', { groupId, identityId });
+          socket.anonSessions = socket.anonSessions.filter((s) => s.identityId !== identityId);
+        }
+      }
+    } catch (err) {
+      console.error(`[WS] Failed to evict anon identity ${identityId} from room ${groupId}:`, err.message);
+    }
+  }
+}
+
+module.exports = { initSocket, getIO, emitToGroup, emitToUser, evictUserFromGroup, evictAnonIdentityFromGroup };

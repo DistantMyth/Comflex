@@ -18,7 +18,7 @@ const RING_LABELS = ['Admin', 'Manager', 'Elevated Member', 'Member'];
 const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}s`);
 
 export default function ProfilePage() {
-  const { user, setUser, refreshProfile } = useAuth();
+  const { user, setUser, refreshProfile, setUsername } = useAuth();
   const fileInputRef = useRef(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ displayName: '', bio: '', cfHandle: '' });
@@ -42,7 +42,6 @@ export default function ProfilePage() {
   const [peLimit, setPeLimit] = useState(null); // { remaining, retryAfterMs, maxSends } from backend
 
   // Username editing
-  const { setUsername } = useAuth();
   const [unEditing, setUnEditing] = useState(false);
   const [unValue, setUnValue] = useState('');
   const [unAvailable, setUnAvailable] = useState(null);
@@ -235,9 +234,10 @@ export default function ProfilePage() {
     setSaving(true);
     setMessage('');
     try {
-      await userApi.updateProfile(form);
-      const isSame = JSON.stringify(selectedBadges) === JSON.stringify(user?.displayBadges || []);
-      if (!isSame) await storeApi.setDisplayBadges(selectedBadges);
+      await userApi.updateProfile({
+        ...form,
+        displayBadges: selectedBadges,
+      });
       await refreshProfile();
       setEditing(false);
       setMessage('Profile updated successfully!');
@@ -268,6 +268,7 @@ export default function ProfilePage() {
     } catch {
       setMessage('Failed to upload avatar.');
     } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setUploadingAvatar(false);
     }
   };

@@ -60,9 +60,13 @@ export const adminApi = {
   createTestUser: (data) =>
     client.post('/admin/users/create-test', data),
 
+  // System Diagnostics
+  getDiagnostics: () =>
+    client.get('/admin/system/diagnostics'),
+
   // Database Management
   backupDatabase: () =>
     client.get('/admin/database/backup', { responseType: 'blob' }),
-  clearDatabase: () =>
-    client.delete('/admin/database/clear'),
+  clearDatabase: (adminPassword) =>
+    client.delete('/admin/database/clear', { data: { adminPassword } }),
 };

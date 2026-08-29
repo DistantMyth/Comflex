@@ -9,6 +9,15 @@ const router = express.Router();
 // All routes require authentication
 router.use(authMiddleware);
 
+const { rateLimiter } = require('../middleware/rateLimit');
+
+const taskSubmitRateLimit = rateLimiter({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: 'Too many submissions. Please wait a minute.',
+  keyPrefix: 'task-submit',
+});
+
 // Middleware to validate request
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -84,6 +93,14 @@ router.post('/',
     body('category').trim().notEmpty().withMessage('Category is required.'),
     body('durationHours').optional().isInt({ min: 0 }).withMessage('Must be non-negative integer.'),
     body('durationMinutes').optional().isInt({ min: 0, max: 59 }).withMessage('Must be 0-59.'),
+    body('minTeamSize').optional().isInt({ min: 1 }).withMessage('minTeamSize must be >= 1.'),
+    body('maxTeamSize').optional().isInt({ min: 1 }).withMessage('maxTeamSize must be >= 1.'),
+    body('maxTeamSize').optional().custom((value, { req }) => {
+      if (req.body.minTeamSize && value < parseInt(req.body.minTeamSize, 10)) {
+        throw new Error('maxTeamSize must be greater than or equal to minTeamSize.');
+      }
+      return true;
+    }),
   ],
   validate,
   eventController.createEvent
@@ -94,7 +111,17 @@ router.post('/',
  * Update an event.
  */
 router.patch('/:id',
-  [param('id').isMongoId().withMessage('Invalid Event ID.')],
+  [
+    param('id').isMongoId().withMessage('Invalid Event ID.'),
+    body('minTeamSize').optional().isInt({ min: 1 }).withMessage('minTeamSize must be >= 1.'),
+    body('maxTeamSize').optional().isInt({ min: 1 }).withMessage('maxTeamSize must be >= 1.'),
+    body('maxTeamSize').optional().custom((value, { req }) => {
+      if (req.body.minTeamSize && value < parseInt(req.body.minTeamSize, 10)) {
+        throw new Error('maxTeamSize must be greater than or equal to minTeamSize.');
+      }
+      return true;
+    }),
+  ],
   validate,
   eventController.updateEvent
 );
@@ -298,6 +325,7 @@ router.delete('/:id/tasks/:taskId',
 // ==========================================
 
 router.post('/:id/tasks/:taskId/submit',
+  taskSubmitRateLimit,
   [
     param('id').isMongoId().withMessage('Invalid Event ID.'),
     param('taskId').isMongoId().withMessage('Invalid Task ID.'),

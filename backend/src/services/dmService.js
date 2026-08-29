@@ -49,6 +49,11 @@ async function requireFriendship(userId, otherUserId) {
   return friendship;
 }
 
+// Lazy-require chatSocketService to prevent circular dependency issues
+function getSocketService() {
+  return require('./chatSocketService');
+}
+
 /**
  * Send a direct message to a user.
  * Requires an accepted friendship between the two users — EXCEPT for
@@ -85,6 +90,27 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
     },
   });
 
+  // Fetch sender details to attach full author object to real-time event
+  const sender = await prisma.user.findUnique({
+    where: { id: senderId },
+    select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true, displayBadges: true },
+  });
+
+  const payload = {
+    ...message,
+    author: sender,
+    senderDisplayName: sender?.displayName,
+  };
+
+  // Broadcast real-time Socket.IO event to both participants
+  try {
+    const socketService = getSocketService();
+    socketService.emitToUser(receiverId, 'dm:new', payload);
+    socketService.emitToUser(senderId, 'dm:new', payload);
+  } catch (err) {
+    console.error('[DM] Socket emission failed:', err.message);
+  }
+
   // Notify the receiver — one bell item per unread burst (skip if an
   // unread DM notification from this sender already exists). Serialized
   // per pair to avoid duplicate creations under concurrent sends.
@@ -96,10 +122,6 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
       });
       if (existingUnread) return;
 
-      const sender = await prisma.user.findUnique({
-        where: { id: senderId },
-        select: { id: true, displayName: true, avatarUrl: true },
-      });
       const preview = (message.content || '').slice(0, 120);
       await notificationService.createNotification(receiverId, {
         type: 'dm',
@@ -113,7 +135,7 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
     console.error('[DM] Notification failed:', err.message);
   }
 
-  return message;
+  return payload;
 }
 
 /**
@@ -131,7 +153,6 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
         { senderId: userId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: userId },
       ],
-      isDeleted: false,
     },
     orderBy: { createdAt: 'desc' },
     skip,
@@ -147,6 +168,17 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
 
   const messagesWithAuthor = messages.map(msg => {
     const author = senders.find(s => s.id === msg.senderId);
+    if (msg.isDeleted) {
+      return {
+        ...msg,
+        content: '[Message deleted]',
+        fileUrl: null,
+        fileName: null,
+        fileSize: null,
+        mimetype: null,
+        author,
+      };
+    }
     return { ...msg, author };
   });
 
@@ -156,7 +188,6 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
         { senderId: userId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: userId },
       ],
-      isDeleted: false,
     },
   });
 
@@ -253,6 +284,16 @@ async function markAsRead(userId, otherUserId) {
     data: { isRead: true, readAt: new Date() },
   });
 
+  try {
+    const socketService = getSocketService();
+    socketService.emitToUser(otherUserId, 'dm:readUpdate', {
+      readByUserId: userId,
+      readAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[DM] Socket readUpdate emission failed:', err.message);
+  }
+
   return { message: 'Messages marked as read.' };
 }
 
@@ -272,6 +313,14 @@ async function deleteDM(messageId, userId) {
     where: { id: messageId },
     data: { isDeleted: true },
   });
+
+  try {
+    const socketService = getSocketService();
+    socketService.emitToUser(message.receiverId, 'dm:delete', { messageId, senderId: userId });
+    socketService.emitToUser(message.senderId, 'dm:delete', { messageId, senderId: userId });
+  } catch (err) {
+    console.error('[DM] Socket delete emission failed:', err.message);
+  }
 
   return { message: 'Message deleted.' };
 }
@@ -295,6 +344,14 @@ async function editDM(messageId, userId, newContent) {
     where: { id: messageId },
     data: { content: newContent, editedAt: new Date() },
   });
+
+  try {
+    const socketService = getSocketService();
+    socketService.emitToUser(message.receiverId, 'dm:edit', updated);
+    socketService.emitToUser(message.senderId, 'dm:edit', updated);
+  } catch (err) {
+    console.error('[DM] Socket edit emission failed:', err.message);
+  }
 
   return updated;
 }

@@ -98,29 +98,47 @@ router.get('/institution', async (req, res, next) => {
  * PATCH /api/v1/admin/institution
  * Update institution settings.
  */
-router.patch('/institution', async (req, res, next) => {
-  try {
-    const config = await prisma.institutionConfig.findFirst();
-    if (!config) return error(res, 'CONFIG_MISSING', 'InstitutionConfig not found.', 500);
+router.patch(
+  '/institution',
+  [
+    body('name').optional().trim().isLength({ min: 1, max: 100 }).withMessage('Name must be 1-100 characters.'),
+    body('domain').optional().trim().notEmpty().withMessage('Domain cannot be empty.'),
+    body('logoUrl').optional({ nullable: true }).isString().withMessage('logoUrl must be a string.'),
+    body('defaultCredits').optional().isInt({ min: 0, max: 1000000 }).withMessage('defaultCredits must be a positive integer.'),
+    body('notesDownloadReward').optional().isInt({ min: 0, max: 100000 }).withMessage('notesDownloadReward must be a positive integer.'),
+    body('creditConfig').optional().isObject().withMessage('creditConfig must be an object.'),
+  ],
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400,
+          errors.array().map(e => ({ field: e.path, issue: e.msg }))
+        );
+      }
 
-    const allowed = {};
-    if (req.body.name !== undefined) allowed.name = req.body.name;
-    if (req.body.domain !== undefined) allowed.domain = req.body.domain;
-    if (req.body.logoUrl !== undefined) allowed.logoUrl = req.body.logoUrl;
-    if (req.body.defaultCredits !== undefined) allowed.defaultCredits = parseInt(req.body.defaultCredits, 10);
-    if (req.body.notesDownloadReward !== undefined) allowed.notesDownloadReward = parseInt(req.body.notesDownloadReward, 10);
-    if (req.body.creditConfig !== undefined) allowed.creditConfig = req.body.creditConfig;
+      const config = await prisma.institutionConfig.findFirst();
+      if (!config) return error(res, 'CONFIG_MISSING', 'InstitutionConfig not found.', 500);
 
-    const updated = await prisma.institutionConfig.update({
-      where: { id: config.id },
-      data: allowed,
-    });
+      const allowed = {};
+      if (req.body.name !== undefined) allowed.name = req.body.name;
+      if (req.body.domain !== undefined) allowed.domain = req.body.domain;
+      if (req.body.logoUrl !== undefined) allowed.logoUrl = req.body.logoUrl;
+      if (req.body.defaultCredits !== undefined) allowed.defaultCredits = parseInt(req.body.defaultCredits, 10);
+      if (req.body.notesDownloadReward !== undefined) allowed.notesDownloadReward = parseInt(req.body.notesDownloadReward, 10);
+      if (req.body.creditConfig !== undefined) allowed.creditConfig = req.body.creditConfig;
 
-    return success(res, updated);
-  } catch (err) {
-    next(err);
+      const updated = await prisma.institutionConfig.update({
+        where: { id: config.id },
+        data: allowed,
+      });
+
+      return success(res, updated);
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 // ============================================================
 // COHORT CONFIG (EMAIL PARSING RULES + BRANCH DETECTION)
@@ -523,7 +541,9 @@ router.patch(
       const validation = validateElevation(
         req.user.globalRing,
         targetUser.globalRing,
-        req.body.ring
+        req.body.ring,
+        req.user.id,
+        req.params.id
       );
 
       if (!validation.valid) {
@@ -727,22 +747,32 @@ router.delete('/users/:id', async (req, res, next) => {
       return error(res, 'USER_NOT_FOUND', 'User not found.', 404);
     }
 
-    // Cannot delete another admin
+    // Cannot delete another admin directly without demoting first
     if (user.globalRing === 0 && userId !== req.user.id) {
       return error(res, 'ADMIN_DELETE', 'Cannot delete another admin. Demote them first.', 403);
     }
 
-    // Delete all associated data
+    // Delete all associated data in correct dependency order
     await prisma.$transaction([
       prisma.groupMember.deleteMany({ where: { userId } }),
-      // Group invites have raw userId/invitedBy fields (no FK) — clear both
-      // directions so no orphaned reference to a deleted account remains.
       prisma.groupInvite.deleteMany({ where: { OR: [{ userId }, { invitedBy: userId }] } }),
       prisma.eventTeamInvite.deleteMany({ where: { OR: [{ invitedUserId: userId }, { invitedBy: userId }] } }),
+      prisma.eventTeamMember.deleteMany({ where: { userId } }),
+      prisma.eventOrganizer.deleteMany({ where: { userId } }),
+      prisma.eventSubmission.updateMany({ where: { evaluatedById: userId }, data: { evaluatedById: null } }),
+      prisma.teamPointAdjustment.deleteMany({ where: { awardedById: userId } }),
+      prisma.eventRewardGrant.deleteMany({ where: { userId } }),
+      prisma.event.deleteMany({ where: { creatorId: userId } }),
       prisma.message.deleteMany({ where: { authorId: userId } }),
       prisma.directMessage.deleteMany({ where: { OR: [{ senderId: userId }, { receiverId: userId }] } }),
       prisma.friendship.deleteMany({ where: { OR: [{ requesterId: userId }, { addresseeId: userId }] } }),
       prisma.muteRecord.deleteMany({ where: { userId } }),
+      prisma.userBadge.deleteMany({ where: { userId } }),
+      prisma.transaction.deleteMany({ where: { OR: [{ senderId: userId }, { receiverId: userId }] } }),
+      prisma.resource.deleteMany({ where: { uploaderId: userId } }),
+      prisma.chatbotNote.deleteMany({ where: { userId } }),
+      prisma.notification.deleteMany({ where: { userId } }),
+      prisma.anonGroupJoin.deleteMany({ where: { userId } }),
       prisma.user.delete({ where: { id: userId } }),
     ]);
 
@@ -753,8 +783,47 @@ router.delete('/users/:id', async (req, res, next) => {
 });
 
 // ============================================================
-// DATABASE MANAGEMENT
+// DATABASE & SYSTEM DIAGNOSTICS
 // ============================================================
+
+/**
+ * GET /api/v1/admin/system/diagnostics
+ * Telemetry and system statistics.
+ */
+router.get('/system/diagnostics', async (req, res, next) => {
+  try {
+    const [userCount, groupCount, msgCount, eventCount, resourceCount, txCount] = await Promise.all([
+      prisma.user.count(),
+      prisma.cohortGroup.count(),
+      prisma.message.count(),
+      prisma.event.count(),
+      prisma.resource.count(),
+      prisma.transaction.count(),
+    ]);
+
+    const memory = process.memoryUsage();
+    return success(res, {
+      status: 'healthy',
+      uptime: Math.round(process.uptime()),
+      nodeVersion: process.version,
+      memoryUsage: {
+        rssMb: Math.round(memory.rss / (1024 * 1024)),
+        heapUsedMb: Math.round(memory.heapUsed / (1024 * 1024)),
+        heapTotalMb: Math.round(memory.heapTotal / (1024 * 1024)),
+      },
+      counts: {
+        users: userCount,
+        groups: groupCount,
+        messages: msgCount,
+        events: eventCount,
+        resources: resourceCount,
+        transactions: txCount,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * GET /api/v1/admin/database/backup
@@ -763,8 +832,7 @@ router.delete('/users/:id', async (req, res, next) => {
 router.get('/database/backup', async (req, res, next) => {
   try {
     const users = await prisma.user.findMany();
-    // Strip credential material from the dump — the backup should never be
-    // a password-hash / token exfiltration tool, even in admin hands.
+    // Strip credential material from the dump
     const sanitizedUsers = users.map((u) => {
       const {
         password, refreshToken, resetToken, resetTokenExpiry,
@@ -781,7 +849,6 @@ router.get('/database/backup', async (req, res, next) => {
       groupMembers: await prisma.groupMember.findMany(),
       groupInvites: await prisma.groupInvite.findMany(),
       messages: await prisma.message.findMany(),
-      messageReadReceipts: await prisma.messageReadReceipt.findMany(),
       muteRecords: await prisma.muteRecord.findMany(),
       friendships: await prisma.friendship.findMany(),
       directMessages: await prisma.directMessage.findMany(),
@@ -790,6 +857,10 @@ router.get('/database/backup', async (req, res, next) => {
       eventTeams: await prisma.eventTeam.findMany(),
       eventTeamMembers: await prisma.eventTeamMember.findMany(),
       eventTeamInvites: await prisma.eventTeamInvite.findMany(),
+      badges: await prisma.badge.findMany(),
+      storeListings: await prisma.storeListing.findMany(),
+      resourceSubjects: await prisma.resourceSubject.findMany(),
+      resources: await prisma.resource.findMany(),
     };
 
     res.setHeader('Content-Type', 'application/json');
@@ -803,19 +874,31 @@ router.get('/database/backup', async (req, res, next) => {
 /**
  * DELETE /api/v1/admin/database/clear
  * Danger zone: Delete all data except InstitutionConfig and the calling Admin User.
+ * Requires admin password verification.
  */
 router.delete('/database/clear', async (req, res, next) => {
   try {
     const adminId = req.user.id;
+    const { adminPassword } = req.body;
+    if (!adminPassword) {
+      return error(res, 'AUTH_REQUIRED', 'Admin password is required to clear the database.', 400);
+    }
 
-    // IMPORTANT — ordering invariant: MongoDB emulates referential integrity in the
-    // Prisma client, so any model referencing User WITHOUT `onDelete: Cascade`
-    // (e.g. Transaction, UserBadge) MUST be deleted BEFORE `user.deleteMany` below,
-    // otherwise the delete fails with a "required relation" violation. Add new
-    // user-referencing models to this list ahead of the final user deletion.
+    const adminUser = await prisma.user.findUnique({ where: { id: adminId } });
+    if (!adminUser || !adminUser.password) {
+      return error(res, 'AUTH_REQUIRED', 'Password verification failed.', 403);
+    }
+
+    const { verifyPassword } = require('../utils/password');
+    const validPw = await verifyPassword(adminPassword, adminUser.password);
+    if (!validPw) {
+      return error(res, 'INVALID_CREDENTIALS', 'Incorrect admin password.', 403);
+    }
+
+    // Complete cleanup of all data models
     await prisma.$transaction([
-      // Event & team data (event cascades to organizers, teams, tasks,
-      // submissions, point adjustments, invites)
+      prisma.anonReport.deleteMany(),
+      prisma.anonGroupJoin.deleteMany(),
       prisma.teamPointAdjustment.deleteMany(),
       prisma.eventSubmission.deleteMany(),
       prisma.eventTeamInvite.deleteMany(),
@@ -823,30 +906,24 @@ router.delete('/database/clear', async (req, res, next) => {
       prisma.eventTeam.deleteMany(),
       prisma.eventOrganizer.deleteMany(),
       prisma.eventTask.deleteMany(),
+      prisma.eventRewardGrant.deleteMany(),
+      prisma.eventRewardRule.deleteMany(),
       prisma.event.deleteMany(),
-      // Messaging & friendships
       prisma.directMessage.deleteMany(),
       prisma.friendship.deleteMany(),
       prisma.muteRecord.deleteMany(),
-      prisma.messageReadReceipt.deleteMany(),
       prisma.message.deleteMany(),
-      // Groups
       prisma.groupInvite.deleteMany(),
       prisma.groupMember.deleteMany(),
       prisma.cohortGroup.deleteMany(),
-      // Badges & store (standalone models not tied to user directly)
       prisma.storeListing.deleteMany(),
       prisma.badge.deleteMany(),
-      // Resources & chatbots
       prisma.resource.deleteMany(),
       prisma.resourceSubject.deleteMany(),
       prisma.chatbotNote.deleteMany(),
-      // Notifications (cascade on user, but safe to clear explicitly)
       prisma.notification.deleteMany(),
-      // Ledger & badges (reference user via required relations WITHOUT cascade)
       prisma.transaction.deleteMany(),
       prisma.userBadge.deleteMany(),
-      // Delete all non-admin users (cascade takes care of remaining FK)
       prisma.user.deleteMany({ where: { id: { not: adminId } } }),
     ]);
 

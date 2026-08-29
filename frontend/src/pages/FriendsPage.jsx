@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { friendApi } from '../api/friendApi';
 import { userApi } from '../api/userApi';
 import resolveAsset from '../utils/resolveAsset';
@@ -160,7 +161,7 @@ export default function FriendsPage() {
             {friends.map(f => (
               <UserCard key={f.friendshipId} user={f} actions={
                 <>
-                  <a href={`/messages/${f.id}`} className="btn btn-primary text-xs py-1.5 px-3">Message</a>
+                  <Link to={`/messages/${f.id}`} className="btn btn-primary text-xs py-1.5 px-3">Message</Link>
                   <button
                     onClick={() => handleAction('remove', f.friendshipId)}
                     className="btn btn-secondary text-xs py-1.5 px-3"
@@ -239,9 +240,11 @@ export default function FriendsPage() {
               {searchResults.map(u => (
                 <UserCard key={u.id} user={u} actions={
                   <>
-                    <a href={`/messages/${u.id}`} className="btn btn-secondary text-[var(--color-accent)] text-xs py-1.5 px-3">
-                      Message
-                    </a>
+                    {u.friendshipStatus === 'accepted' && (
+                      <Link to={`/messages/${u.id}`} className="btn btn-secondary text-[var(--color-accent)] text-xs py-1.5 px-3">
+                        Message
+                      </Link>
+                    )}
                     {u.friendshipStatus === 'accepted' ? (
                       <button
                         onClick={() => handleAction('remove', u.friendshipId)}

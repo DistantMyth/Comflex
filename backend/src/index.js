@@ -65,7 +65,7 @@ app.use(cors({
   origin: env.NODE_ENV === 'development' ? true : env.FRONTEND_URL,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Anon-Identity'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Anon-Identity', 'X-Anon-Sessions'],
 }));
 
 // Parse JSON and URL-encoded bodies
@@ -96,7 +96,7 @@ app.use('/uploads/resources', authMiddleware, async (req, res, next) => {
     if (!resource) return res.status(404).json({ error: 'File not found.' });
 
     const subject = await prisma.resourceSubject.findUnique({ where: { id: resource.subjectId } });
-    if (subject && !enforceBatchAccess(req, subject.subCategory)) {
+    if (subject && !enforceBatchAccess(req, subject.subCategory, subject.yearGroup)) {
       return res.status(403).json({ error: 'You only have access to your own batch and your immediate juniors.' });
     }
     next();
