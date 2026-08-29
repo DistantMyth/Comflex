@@ -105,8 +105,10 @@ client.interceptors.response.use(
         return client(originalRequest);
       } catch {
         // Refresh failed — session over, redirect to login (only if we're
-        // not already on an auth page)
-        if (!['/login', '/register', '/forgot-password'].includes(window.location.pathname)) {
+        // not already on an auth or public page)
+        const PUBLIC_PREFIXES = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email'];
+        const isPublicPage = window.location.pathname === '/' || PUBLIC_PREFIXES.some((p) => window.location.pathname.startsWith(p));
+        if (!isPublicPage) {
           window.location.href = '/login';
         }
         return Promise.reject(error);

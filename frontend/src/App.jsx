@@ -16,6 +16,7 @@
 
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { SocketProvider } from './context/SocketContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import PageTransition from './components/PageTransition';
@@ -41,6 +42,7 @@ import ResourcesPage from './pages/ResourcesPage';
 import StorePage from './pages/StorePage';
 import FloatingChatbot from './components/FloatingChatbot';
 import Homepage from './pages/Homepage';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Public pages get a subtle enter animation.
 const tr = (el) => <PageTransition>{el}</PageTransition>;
@@ -62,7 +64,7 @@ function AppRoutes() {
 
       {/* Authenticated app shell — Layout persists across all of these routes,
           so the sidebar/nav never remounts when switching between pages. */}
-      <Route element={<Layout><Outlet /></Layout>}>
+      <Route element={<ProtectedRoute><Layout><Outlet /></Layout></ProtectedRoute>}>
         <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute maxRing={0}><AdminDashboard /></ProtectedRoute>} />
         <Route path="/groups" element={<ProtectedRoute><GroupsPage /></ProtectedRoute>} />
@@ -88,10 +90,14 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-        <FloatingChatbot />
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <SocketProvider>
+            <AppRoutes />
+            <FloatingChatbot />
+          </SocketProvider>
+        </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

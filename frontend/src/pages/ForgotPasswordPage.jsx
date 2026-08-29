@@ -8,6 +8,7 @@ import { motion } from 'framer-motion';
 import { Mail, Send, ArrowLeft, Loader2, MailCheck } from 'lucide-react';
 import { authApi } from '../api/authApi';
 import { useAuth } from '../hooks/useAuth';
+import { useTheme } from '../context/ThemeContext';
 import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import AuthShell from '../components/AuthShell';
 
@@ -19,6 +20,7 @@ const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
   const { googleLogin } = useAuth();
+  const { theme } = useTheme();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -132,16 +134,18 @@ export default function ForgotPasswordPage() {
             <div className="mb-6">
               <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
                 <div className="flex justify-center">
-                  <GoogleLogin
-                    onSuccess={handleGoogleSuccess}
-                    onError={() => setError('Google login failed.')}
-                    useOneTap={false}
-                    text="continue_with"
-                    shape="pill"
-                    size="large"
-                    width={300}
-                    theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
-                  />
+                  <div className="rounded-xl overflow-hidden shadow-sm">
+                    <GoogleLogin
+                      onSuccess={handleGoogleSuccess}
+                      onError={() => setError('Google login failed.')}
+                      useOneTap={false}
+                      text="continue_with"
+                      shape="rectangular"
+                      size="large"
+                      width={320}
+                      theme={theme === 'dark' ? 'filled_black' : 'outline'}
+                    />
+                  </div>
                 </div>
               </GoogleOAuthProvider>
               <div className="flex items-center gap-3 my-6">

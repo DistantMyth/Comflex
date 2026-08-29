@@ -5,5 +5,5 @@
     var stored = localStorage.getItem('comflex-theme');
     var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
     if (dark) document.documentElement.classList.add('dark');
-  } catch (e) {}
+  } catch {}
 })();

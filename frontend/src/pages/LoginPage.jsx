@@ -8,6 +8,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Mail, Lock, LogIn, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { useTheme } from '../context/ThemeContext';
 import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import AuthShell from '../components/AuthShell';
 
@@ -15,6 +16,7 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 export default function LoginPage() {
   const { login, googleLogin, isAuthenticated, systemStatus, loading: authLoading } = useAuth();
+  const { theme } = useTheme();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -76,16 +78,18 @@ export default function LoginPage() {
         <div className="mb-6">
           <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
             <div className="flex justify-center">
-              <GoogleLogin
-                onSuccess={handleGoogleSuccess}
-                onError={() => setError('Google login failed.')}
-                useOneTap={false}
-                text="signin_with"
-                shape="pill"
-                size="large"
-                width={300}
-                theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
-              />
+              <div className="rounded-xl overflow-hidden shadow-sm">
+                <GoogleLogin
+                  onSuccess={handleGoogleSuccess}
+                  onError={() => setError('Google login failed.')}
+                  useOneTap={false}
+                  text="signin_with"
+                  shape="rectangular"
+                  size="large"
+                  width={320}
+                  theme={theme === 'dark' ? 'filled_black' : 'outline'}
+                />
+              </div>
             </div>
           </GoogleOAuthProvider>
           <div className="flex items-center gap-3 my-6">

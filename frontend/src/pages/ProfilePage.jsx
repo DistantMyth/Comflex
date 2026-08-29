@@ -18,7 +18,7 @@ const RING_LABELS = ['Admin', 'Manager', 'Elevated Member', 'Member'];
 const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}s`);
 
 export default function ProfilePage() {
-  const { user, refreshProfile } = useAuth();
+  const { user, setUser, refreshProfile } = useAuth();
   const fileInputRef = useRef(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ displayName: '', bio: '', cfHandle: '' });
@@ -258,9 +258,13 @@ export default function ProfilePage() {
     setUploadingAvatar(true);
     setMessage('');
     try {
-      await userApi.uploadAvatar(file);
+      const res = await userApi.uploadAvatar(file);
+      const updatedUser = res?.data?.data;
+      if (updatedUser) {
+        setUser(updatedUser);
+      }
       await refreshProfile();
-      setMessage('Avatar updated!');
+      setMessage('Avatar updated successfully!');
     } catch {
       setMessage('Failed to upload avatar.');
     } finally {

@@ -1,8 +1,8 @@
 /**
  * Layout — Main app shell.
  * Desktop: animated glass sidebar with lucide icons + sliding active pill.
- * Mobile: top bar + slide-over drawer.
- * Shows unread badges on Groups/Messages nav, live from socket events.
+ * Mobile: top bar + slide-over drawer with Escape key support and focus management.
+ * Shows unread badges on Groups/Messages/Friends nav, live from socket events.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -18,8 +18,8 @@ import { useTheme } from '../context/ThemeContext';
 import { groupApi } from '../api/groupApi';
 import { dmApi } from '../api/dmApi';
 import Avatar from './Avatar';
-import resolveAsset from '../utils/resolveAsset';
 import { notificationsApi } from '../api/notificationsApi';
+import ErrorBoundary from './ErrorBoundary';
 
 const RING_LABELS = {
   0: { label: 'Admin', color: 'ring-badge-0' },
@@ -29,7 +29,7 @@ const RING_LABELS = {
 };
 
 const Logo = () => (
-  <Link to="/" className="flex items-center gap-2.5 px-4 py-5">
+  <Link to="/" className="flex items-center gap-2.5 px-4 py-5" aria-label="Comflex Home">
     <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--color-accent-light)] via-[var(--color-accent)] to-[#2563eb] flex items-center justify-center text-white shadow-[0_6px_20px_-4px_rgba(124,58,237,0.6)]">
       <Zap size={18} strokeWidth={2.5} className="animate-pulse-glow" />
     </div>
@@ -41,7 +41,7 @@ const Logo = () => (
 );
 
 const NavList = ({ navItems, isActive, onNavigate }) => (
-  <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto">
+  <nav className="flex-1 px-3 py-3 space-y-1 overflow-y-auto" aria-label="Main Navigation">
     {navItems.map((item) => {
       const Icon = item.icon;
       const active = isActive(item.path);
@@ -50,13 +50,14 @@ const NavList = ({ navItems, isActive, onNavigate }) => (
           key={item.path}
           to={item.path}
           onClick={onNavigate}
+          aria-current={active ? 'page' : undefined}
           className={`relative flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors duration-200 ${
             active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)]'
           }`}
         >
           {active && (
             <motion.span
-              key="active-nav-pill"
+              layoutId="active-nav-pill"
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
@@ -66,7 +67,7 @@ const NavList = ({ navItems, isActive, onNavigate }) => (
           <Icon size={18} className="relative z-10 flex-shrink-0" strokeWidth={active ? 2.4 : 2} />
           <span className="relative z-10 flex-1 truncate">{item.label}</span>
           {item.badge > 0 && (
-            <span className="relative z-10 bg-[var(--color-danger)] text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
+            <span className="relative z-10 bg-[var(--color-danger)] text-white text-[11px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 animate-scale-in">
               {item.badge > 99 ? '99+' : item.badge}
             </span>
           )}
@@ -80,7 +81,7 @@ const UserCard = ({ user, ringInfo, connected, theme, onToggleTheme, onLogout })
   <div className="p-3 border-t border-[var(--color-border)]">
     <div className="flex items-center gap-3 px-1 mb-3">
       <Avatar
-        src={resolveAsset(user?.avatarUrl)}
+        src={user?.avatarUrl}
         name={user?.displayName}
         className="w-10 h-10 rounded-full object-cover avatar-glow ring-2 ring-[var(--color-border)]"
       />
@@ -99,17 +100,17 @@ const UserCard = ({ user, ringInfo, connected, theme, onToggleTheme, onLogout })
       </div>
       <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
         connected ? 'text-[var(--color-success)] bg-[var(--color-success)]/10' : 'text-[var(--color-warning)] bg-[var(--color-warning)]/10'
-      }`} title={connected ? 'Live' : 'Reconnecting'}>
+      }`} title={connected ? 'Live' : 'Connecting'}>
         <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1 ${connected ? 'bg-[var(--color-success)] animate-pulse' : 'bg-[var(--color-warning)]'}`} />
         {connected ? 'Live' : 'Off'}
       </span>
     </div>
     <div className="flex gap-2">
-      <button onClick={onToggleTheme} className="btn btn-secondary flex-1 text-xs py-2" title="Toggle theme">
+      <button onClick={onToggleTheme} className="btn btn-secondary flex-1 text-xs py-2" title="Toggle theme" type="button">
         {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
         {theme === 'dark' ? 'Light' : 'Dark'}
       </button>
-      <button onClick={onLogout} className="btn btn-secondary flex-1 text-xs py-2 text-[var(--color-danger)]" title="Log out">
+      <button onClick={onLogout} className="btn btn-secondary flex-1 text-xs py-2 text-[var(--color-danger)]" title="Log out" type="button">
         <LogOut size={14} /> Logout
       </button>
     </div>
@@ -133,6 +134,7 @@ export default function Layout({ children }) {
 
   // Debounced fetch to avoid rapid re-fetching
   const fetchUnread = useCallback(async () => {
+    if (!user) return;
     try {
       const [groupRes, dmRes, notifRes] = await Promise.all([
         groupApi.listGroups().catch(() => ({ data: { data: [] } })),
@@ -142,8 +144,6 @@ export default function Layout({ children }) {
       const groups = groupRes.data?.data || [];
       const dms = dmRes.data?.data || [];
       const notifications = notifRes.data?.data?.notifications || [];
-      // Friend requests surface as unread friendship notifications; the
-      // count is shown next to the Friends nav item.
       const friendUnread = notifications.filter(
         (n) => (n.type === 'friend_request' || n.type === 'friend_accept') && !n.isRead
       ).length;
@@ -153,7 +153,7 @@ export default function Layout({ children }) {
         friends: friendUnread,
       });
     } catch { /* ignore unread refresh errors */ }
-  }, []);
+  }, [user]);
 
   const debouncedFetchUnread = useCallback(() => {
     clearTimeout(fetchTimeoutRef.current);
@@ -161,13 +161,14 @@ export default function Layout({ children }) {
   }, [fetchUnread]);
 
   useEffect(() => {
+    if (!user) return;
     fetchUnread();
     const interval = setInterval(fetchUnread, 30000);
     return () => {
       clearInterval(interval);
       clearTimeout(fetchTimeoutRef.current);
     };
-  }, [fetchUnread]);
+  }, [user, fetchUnread]);
 
   useEffect(() => {
     debouncedFetchUnread();
@@ -192,19 +193,39 @@ export default function Layout({ children }) {
     if (m) notificationsApi.markReadByFilter({ type: 'dm', actorId: m[1] }).catch(() => {});
   }, [location.pathname, user]);
 
-  // Visiting the Friends page clears friendship notifications so the
-  // badge doesn't linger after the request has been handled
+  // Visiting the Friends page clears friendship notifications
   useEffect(() => {
     if (!user) return;
     if (location.pathname === '/friends') {
       notificationsApi.markReadByFilter({ type: 'friend_request' }).catch(() => {});
+      notificationsApi.markReadByFilter({ type: 'friend_accept' }).catch(() => {});
     }
   }, [location.pathname, user]);
 
-  // Reset scroll position on route change so content never appears mid-scroll
+  // Auto-close mobile drawer on route change & reset scroll position
   useEffect(() => {
+    setDrawerOpen(false);
     window.scrollTo(0, 0);
   }, [location.pathname]);
+
+  // Handle Escape key to close mobile drawer & body scroll lock
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && drawerOpen) {
+        setDrawerOpen(false);
+      }
+    };
+    if (drawerOpen) {
+      document.body.style.overflow = 'hidden';
+      window.addEventListener('keydown', handleKeyDown);
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [drawerOpen]);
 
   const ringInfo = RING_LABELS[user?.globalRing] || RING_LABELS[3];
 
@@ -249,6 +270,9 @@ export default function Layout({ children }) {
             onClick={() => setDrawerOpen(true)}
             className="p-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-primary)]"
             aria-label="Open menu"
+            aria-expanded={drawerOpen}
+            aria-controls="mobile-drawer"
+            type="button"
           >
             <Menu size={20} />
           </button>
@@ -265,13 +289,18 @@ export default function Layout({ children }) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setDrawerOpen(false)}
+              aria-hidden="true"
             />
             <motion.aside
+              id="mobile-drawer"
               className="lg:hidden fixed inset-y-0 left-0 z-50 w-[280px] glass-panel flex flex-col"
               initial={{ x: -300 }}
               animate={{ x: 0 }}
               exit={{ x: -300 }}
               transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation Menu"
             >
               <div className="flex items-center justify-between pr-3">
                 <Logo />
@@ -279,6 +308,7 @@ export default function Layout({ children }) {
                   onClick={() => setDrawerOpen(false)}
                   className="p-2 rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                   aria-label="Close menu"
+                  type="button"
                 >
                   <X size={20} />
                 </button>
@@ -297,18 +327,19 @@ export default function Layout({ children }) {
         )}
       </AnimatePresence>
 
-      {/* Main content — animate only this area on route change so the
-          sidebar/nav stays mounted and route switches never flash or remount */}
+      {/* Main content — animate only this area on route change */}
       <main className="flex-1 lg:ml-[264px] min-h-screen overflow-x-hidden">
-        <motion.div
-          key={location.pathname}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
-          className="px-4 sm:px-6 lg:px-10 pt-20 lg:pt-8 pb-16 max-w-7xl mx-auto"
-        >
-          {children}
-        </motion.div>
+        <ErrorBoundary>
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.15, ease: [0.22, 1, 0.36, 1] }}
+            className="px-4 sm:px-6 lg:px-10 pt-20 lg:pt-8 pb-16 max-w-7xl mx-auto"
+          >
+            {children}
+          </motion.div>
+        </ErrorBoundary>
       </main>
     </div>
   );

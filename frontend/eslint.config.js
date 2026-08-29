@@ -6,7 +6,7 @@ import react from 'eslint-plugin-react'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'public']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -34,6 +34,12 @@ export default defineConfig([
       // intentional here; keep it off to avoid noise on accepted patterns.
       'react-hooks/set-state-in-effect': 'off',
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+  {
+    files: ['*.config.js'],
+    languageOptions: {
+      globals: globals.node,
     },
   },
 ])

@@ -9,12 +9,14 @@ import { motion } from 'framer-motion';
 import { Loader2, GraduationCap } from 'lucide-react';
 import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import { useAuth } from '../hooks/useAuth';
+import { useTheme } from '../context/ThemeContext';
 import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
 export default function RegisterPage() {
   const { googleLogin, systemStatus } = useAuth();
+  const { theme } = useTheme();
   const navigate = useNavigate();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -69,16 +71,18 @@ export default function RegisterPage() {
       <div className="flex flex-col items-center gap-5 py-2">
         {GOOGLE_CLIENT_ID ? (
           <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-            <GoogleLogin
-              onSuccess={handleGoogleSuccess}
-              onError={() => setError('Google login failed. Please try again.')}
-              useOneTap={false}
-              text="signup_with"
-              shape="pill"
-              size="large"
-              width={300}
-              theme={document.documentElement.classList.contains('dark') ? 'filled_black' : 'filled_blue'}
-            />
+            <div className="rounded-xl overflow-hidden shadow-sm">
+              <GoogleLogin
+                onSuccess={handleGoogleSuccess}
+                onError={() => setError('Google login failed. Please try again.')}
+                useOneTap={false}
+                text="signup_with"
+                shape="rectangular"
+                size="large"
+                width={320}
+                theme={theme === 'dark' ? 'filled_black' : 'outline'}
+              />
+            </div>
           </GoogleOAuthProvider>
         ) : (
           <div className="alert alert-warning text-center">

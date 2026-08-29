@@ -200,9 +200,11 @@ export default function SetPasswordPage() {
             {loading ? 'Setting...' : 'Set Password & Continue'}
           </button>
 
-          <button type="button" className="btn btn-secondary w-full text-sm" onClick={() => navigate('/profile')}>
-            Skip for now
-          </button>
+          {user?.hasPassword && (
+            <button type="button" className="btn btn-secondary w-full text-sm" onClick={() => navigate('/profile')}>
+              Cancel
+            </button>
+          )}
         </form>
       )}
     </AuthShell>

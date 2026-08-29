@@ -13,7 +13,7 @@ import { createContext, useState, useEffect, useCallback } from 'react';
 import { authApi } from '../api/authApi';
 import { userApi } from '../api/userApi';
 import { adminApi } from '../api/adminApi';
-import { getAccessToken, setAccessToken, clearAccessToken } from '../api/client';
+import { getAccessToken, setAccessToken, clearAccessToken, refreshAccessToken } from '../api/client';
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext(null);
@@ -26,20 +26,20 @@ export function AuthProvider({ children }) {
   // Check if user is currently authenticated (on mount)
   useEffect(() => {
     const init = async () => {
+      // 1. Fetch system status (non-fatal if it fails)
       try {
-        // Check system status first
         const statusRes = await adminApi.getSystemStatus();
         setSystemStatus(statusRes.data.data);
+      } catch {
+        // Non-critical: system status not loaded
+      }
 
-        // Existing access token in memory → just load the profile.
-        // Otherwise attempt a silent refresh via the httpOnly cookie so a
-        // fresh session survives page reloads without re-login.
+      // 2. Authenticate session
+      try {
         let token = getAccessToken();
         if (!token) {
           try {
-            const refreshRes = await authApi.refreshToken();
-            setAccessToken(refreshRes.data.data.accessToken);
-            token = getAccessToken();
+            token = await refreshAccessToken();
           } catch {
             token = null;
           }
@@ -110,11 +110,14 @@ export function AuthProvider({ children }) {
 
   const refreshProfile = useCallback(async () => {
     const res = await userApi.getProfile();
-    setUser(res.data.data);
+    const updated = res.data.data;
+    setUser(updated);
+    return updated;
   }, []);
 
   const value = {
     user,
+    setUser,
     loading,
     systemStatus,
     isAuthenticated: !!user,

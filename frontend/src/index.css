@@ -279,7 +279,7 @@ select:focus,
 }
 
 /* Inputs with leading/trailing icons (e.g. login email/password): Tailwind's
-   pl-*/pr-* utilities live inside a CSS layer, so the unlayered base input
+   pl-* and pr-* utilities live inside a CSS layer, so the unlayered base input
    padding above wins and the icon overlaps the placeholder. Re-assert the
    icon padding here (specificity equal to input[type=...], defined later). */
 input.pl-9  { padding-left: 2.25rem; }

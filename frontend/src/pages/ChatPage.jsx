@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Settings, Users } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
@@ -25,6 +25,7 @@ import resolveAsset from '../utils/resolveAsset';
 
 export default function ChatPage() {
   const { id: groupId } = useParams();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { connected, sendMessage: wsSendMessage, startTyping, stopTyping, markRead, onEvent, joinAnonGroup } = useSocket();
 
@@ -121,10 +122,13 @@ export default function ChatPage() {
           friendApi.listFriends().catch(() => ({ data: { data: [] } })),
           storeApi.getAllBadges().catch(() => ({ data: { data: [] } })),
         ]);
-        const grp = groupRes.data.data;
+        const grp = groupRes?.data?.data;
         setGroup(grp);
-        setMessages(msgsRes.data.data.messages.reverse()); // oldest first
-        setFriendIds(friendsRes.data.data.map(f => f.id));
+        const msgList = Array.isArray(msgsRes?.data?.data?.messages)
+          ? msgsRes.data.data.messages
+          : (Array.isArray(msgsRes?.data?.data) ? msgsRes.data.data : []);
+        setMessages([...msgList].reverse()); // oldest first
+        setFriendIds((friendsRes?.data?.data || []).map(f => f.id));
 
         const bMap = {};
         (badgesRes.data?.data || []).forEach(b => bMap[b.id] = b);
@@ -203,9 +207,12 @@ export default function ChatPage() {
         groupApi.getGroup(groupId),
         groupApi.getMessages(groupId, 1, 50),
       ]);
-      setGroup(groupRes.data.data);
+      setGroup(groupRes?.data?.data);
       setMyIdentity(getAnonSessions()[groupId]);
-      setMessages(msgsRes.data.data.messages.reverse());
+      const msgList = Array.isArray(msgsRes?.data?.data?.messages)
+        ? msgsRes.data.data.messages
+        : (Array.isArray(msgsRes?.data?.data) ? msgsRes.data.data : []);
+      setMessages([...msgList].reverse());
     } catch (err) {
       const apiErr = err.response?.data?.error;
       setRestoreError(apiErr?.message || 'Restore failed. Check your key.');
@@ -623,6 +630,27 @@ export default function ChatPage() {
             to="/groups"
             className="btn btn-secondary w-full mt-5"
           >
+            Back to My Groups
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!group) {
+    return (
+      <div className="max-w-md mx-auto mt-16">
+        <div className="glass-card p-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center justify-center">
+            <span className="text-2xl">💬</span>
+          </div>
+          <h2 className="font-display text-xl font-bold mb-1">
+            Group Not Found
+          </h2>
+          <p className="text-sm text-[var(--color-text-secondary)] mt-2">
+            This group could not be loaded or you do not have permission to view it.
+          </p>
+          <Link to="/groups" className="btn btn-secondary w-full mt-5">
             Back to My Groups
           </Link>
         </div>
