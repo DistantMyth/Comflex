@@ -17,11 +17,17 @@ const env = require('../config/env');
 let cloudinary = null;
 let cloudinaryReady = false;
 
+function cleanEnvString(val) {
+  if (!val) return '';
+  return String(val).replace(/^["']|["']$/g, '').trim();
+}
+
 /**
  * Resolve Cloudinary credentials from any standard environment format.
  */
 function getCloudinaryConfig() {
-  const url = process.env.CLOUDINARY_URL || env.CLOUDINARY_URL;
+  const rawUrl = process.env.CLOUDINARY_URL || env.CLOUDINARY_URL;
+  const url = cleanEnvString(rawUrl);
   if (url && url.startsWith('cloudinary://')) {
     try {
       const parsed = new URL(url);
@@ -36,9 +42,9 @@ function getCloudinaryConfig() {
     }
   }
 
-  const cloud_name = env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME;
-  const api_key = env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY;
-  const api_secret = env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET;
+  const cloud_name = cleanEnvString(env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME);
+  const api_key = cleanEnvString(env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY);
+  const api_secret = cleanEnvString(env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET);
 
   if (cloud_name && api_key && api_secret) {
     return { cloud_name, api_key, api_secret, secure: true };
@@ -60,7 +66,7 @@ function getCloudinary() {
     cloudinary = require('cloudinary').v2;
     cloudinary.config(config);
     cloudinaryReady = true;
-    console.log(`[fileStorage] ✅ Cloudinary enabled for cloud "${config.cloud_name || 'custom'}" — uploads go to Cloudinary.`);
+    console.log(`[fileStorage] ✅ Cloudinary enabled for cloud "${config.cloud_name || 'custom'}" — uploads go to Cloudinary CDN.`);
   } catch (err) {
     console.error('[fileStorage] ❌ Cloudinary initialization failed:', err.message);
     cloudinaryReady = true;
@@ -96,12 +102,12 @@ async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads'
       return result.secure_url;
     } catch (err) {
       console.error('[fileStorage] ❌ Cloudinary upload failed:', err.message);
-      if (env.NODE_ENV === 'production') {
-        throw Object.assign(new Error(`Failed to upload media to Cloudinary: ${err.message}`), {
-          statusCode: 502,
-          code: 'CLOUD_STORAGE_ERROR',
-        });
-      }
+      // Clean up local temp file before throwing
+      try { fs.unlinkSync(file.path); } catch { /* ignore */ }
+      throw Object.assign(new Error(`Failed to upload media to Cloudinary: ${err.message}`), {
+        statusCode: 502,
+        code: 'CLOUD_STORAGE_ERROR',
+      });
     }
   }
 
