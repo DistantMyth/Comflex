@@ -7,7 +7,16 @@
  */
 
 const dotenv = require('dotenv');
+const fs = require('fs');
+const path = require('path');
+
+// Try loading from standard locations
 dotenv.config();
+try { dotenv.config({ path: path.resolve(process.cwd(), '.env') }); } catch {}
+try { dotenv.config({ path: path.resolve(__dirname, '../../.env') }); } catch {}
+try { dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); } catch {}
+try { if (fs.existsSync('/etc/secrets/.env')) dotenv.config({ path: '/etc/secrets/.env' }); } catch {}
+try { if (fs.existsSync('/etc/secrets/comflex-backend.env')) dotenv.config({ path: '/etc/secrets/comflex-backend.env' }); } catch {}
 
 function cleanEnvString(val) {
   if (!val) return '';
@@ -43,7 +52,7 @@ const env = {
   EMAIL_PROVIDER: cleanEnvString(process.env.EMAIL_PROVIDER) || 'console',
   EMAIL_FROM: cleanEnvString(process.env.EMAIL_FROM) || 'noreply@comflex.dev',
 
-  // SMTP config (only used when EMAIL_PROVIDER=smtp)
+  // SMTP Settings
   SMTP_HOST: cleanEnvString(process.env.SMTP_HOST),
   SMTP_PORT: parseInt(process.env.SMTP_PORT, 10) || 587,
   SMTP_USER: cleanEnvString(process.env.SMTP_USER),
@@ -53,13 +62,13 @@ const env = {
   EMAIL_API_KEY: cleanEnvString(process.env.EMAIL_API_KEY),
 
   // File Storage Path (local dev only — Render wipes /tmp)
-  STORAGE_PATH: cleanEnvString(process.env.STORAGE_PATH) || require('path').join(__dirname, '../../uploads'),
+  STORAGE_PATH: cleanEnvString(process.env.STORAGE_PATH) || path.join(__dirname, '../../uploads'),
 
   // Cloudinary (optional locally, required on Render/Vercel)
   CLOUDINARY_URL: cleanEnvString(process.env.CLOUDINARY_URL),
-  CLOUDINARY_CLOUD_NAME: cleanEnvString(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME),
-  CLOUDINARY_API_KEY: cleanEnvString(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY),
-  CLOUDINARY_API_SECRET: cleanEnvString(process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET),
+  CLOUDINARY_CLOUD_NAME: cleanEnvString(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || process.env.CLOUD_NAME),
+  CLOUDINARY_API_KEY: cleanEnvString(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || process.env.API_KEY),
+  CLOUDINARY_API_SECRET: cleanEnvString(process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || process.env.API_SECRET),
 
   // Google Gemini AI
   GEMINI_API_KEY: cleanEnvString(process.env.GEMINI_API_KEY),

@@ -42,9 +42,9 @@ function getCloudinaryConfig() {
     }
   }
 
-  const cloud_name = cleanEnvString(env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME);
-  const api_key = cleanEnvString(env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY);
-  const api_secret = cleanEnvString(env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET);
+  const cloud_name = cleanEnvString(env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUDINARY_NAME || process.env.CLOUD_NAME);
+  const api_key = cleanEnvString(env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || process.env.API_KEY);
+  const api_secret = cleanEnvString(env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || process.env.API_SECRET);
 
   if (cloud_name && api_key && api_secret) {
     return { cloud_name, api_key, api_secret, secure: true };
