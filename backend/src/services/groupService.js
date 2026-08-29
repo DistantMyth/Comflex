@@ -582,15 +582,15 @@ async function acceptInvite(inviteId, userId, alias, avatarUrl) {
     throw Object.assign(new Error('This invite is no longer pending.'), { statusCode: 400, code: 'NOT_PENDING' });
   }
 
-  // Update invite status
-  await prisma.groupInvite.update({
-    where: { id: inviteId },
-    data: { status: 'accepted' },
-  });
-
-  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: invite.groupId }, select: { isAnonymous: true } });
+  const groupInfo = await prisma.cohortGroup.findUnique({ where: { id: invite.groupId }, select: { isAnonymous: true, ringConfig: true } });
   if (groupInfo?.isAnonymous) {
-    return claimAnonIdentity(invite.groupId, userId, alias, avatarUrl);
+    const anonResult = await claimAnonIdentity(invite.groupId, userId, alias, avatarUrl);
+    // Only mark invite accepted once alias claim succeeded
+    await prisma.groupInvite.update({
+      where: { id: inviteId },
+      data: { status: 'accepted' },
+    });
+    return anonResult;
   }
 
   const joinRing = groupInfo?.ringConfig?.defaultRing !== undefined ? groupInfo.ringConfig.defaultRing : 3;
@@ -599,6 +599,12 @@ async function acceptInvite(inviteId, userId, alias, avatarUrl) {
   const permissions = getDefaultPermissions(joinRing);
   const member = await prisma.groupMember.create({
     data: { userId, groupId: invite.groupId, ring: joinRing, permissions },
+  });
+
+  // Update invite status
+  await prisma.groupInvite.update({
+    where: { id: inviteId },
+    data: { status: 'accepted' },
   });
 
   return member;
@@ -993,6 +999,7 @@ async function restoreAnonIdentity(groupId, key, userId) {
   }
 
   return {
+    groupId: identity.groupId,
     identityId: identity.id,
     secret,             // the preserved key — unchanged by restore
     alias: identity.alias,
@@ -1047,7 +1054,7 @@ async function renameAnonIdentity(identityId, secret, newAlias, avatarUrl) {
   const aliasKey = cleanAlias.toLowerCase();
   if (aliasKey !== identity.aliasKey) {
     const clash = await prisma.anonymousIdentity.findFirst({
-      where: { groupId: identity.groupId, aliasKey, id: { not: identityId } },
+      where: { groupId: identity.groupId, aliasKey, id: { not: identityId }, ...NOT_BANNED },
       select: { id: true },
     });
     if (clash) throw Object.assign(new Error('That alias is already taken in this group.'), { statusCode: 409, code: 'ALIAS_TAKEN' });
@@ -1067,7 +1074,7 @@ async function renameAnonIdentity(identityId, secret, newAlias, avatarUrl) {
     },
   });
 
-  return { secret: newSecret, alias: cleanAlias, aliasTag: identity.aliasTag, avatarUrl: cleanAvatar === undefined ? identity.avatarUrl : cleanAvatar };
+  return { groupId: identity.groupId, identityId: identity.id, secret: newSecret, alias: cleanAlias, aliasTag: identity.aliasTag, avatarUrl: cleanAvatar === undefined ? identity.avatarUrl : cleanAvatar };
 }
 
 module.exports = {

@@ -122,129 +122,235 @@ client.interceptors.response.use(
 export default client;
 
 // ============================================================
-// Anonymous group identity sessions
+// Anonymous group identity sessions (Account-Scoped)
 // ============================================================
-// Per-device keys for anonymous groups (one per group). The user is shown
-// the key once when they join ("identityId.secret") and advised to save it.
-// We ALSO persist sessions to a cookie so they survive — but the server only
-// ever sees Verifiable hashes; nothing on the server maps a key to an account.
-// localStorage is kept as a mirror so the session works even where cookies
-// are blocked; reads prefer the cookie.
+// Cryptographic keys for anonymous groups are stored per-user account on
+// this device. When switching accounts, each account retains its own
+// identity and keys for each group without cross-account collisions.
 const ANON_STORAGE_KEY = 'comflex-anon-sessions';
 const ANON_COOKIE_NAME = 'comflex_anon_sessions';
 
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
 
-function readCookieSessions() {
+function safeGroupKey(groupId) {
+  return typeof groupId === 'string' && OBJECT_ID_RE.test(groupId) ? groupId : null;
+}
+
+function safeUserKey(userId) {
+  if (!userId || typeof userId !== 'string') return null;
+  if (userId === '__proto__' || userId === 'constructor' || userId === 'prototype') return null;
+  return userId;
+}
+
+/**
+ * Extracts the user id (sub) from the active in-memory JWT access token.
+ */
+export function getCurrentUserId() {
+  if (!accessToken) return 'global';
   try {
-    const match = document.cookie
-      .split(';')
-      .map(c => c.trim())
-      .find(c => c.startsWith(`${ANON_COOKIE_NAME}=`));
-    if (!match) return null;
-    return JSON.parse(decodeURIComponent(match.slice(ANON_COOKIE_NAME.length + 1)));
+    const parts = accessToken.split('.');
+    if (parts.length < 2) return 'global';
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.sub || 'global';
   } catch {
-    return null;
+    return 'global';
   }
 }
 
-function writeCookieSessions(all) {
+/**
+ * Normalizes raw session storage into an account-scoped map:
+ * { [userId]: { [groupId]: session } }
+ * Handles both account-scoped and legacy flat structures without data loss.
+ */
+function normalizeSessionsStore(raw) {
+  const result = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
+
+  const currentUid = safeUserKey(getCurrentUserId()) || 'global';
+
+  for (const k of Object.keys(raw)) {
+    const val = raw[k];
+    if (!val || typeof val !== 'object' || Array.isArray(val)) continue;
+
+    // Case 1: Legacy flat entry — val is directly a session object { identityId, secret, ... }
+    if (val.identityId && val.secret) {
+      if (safeGroupKey(k)) {
+        result[currentUid] = result[currentUid] || {};
+        result[currentUid][k] = {
+          identityId: String(val.identityId),
+          secret: String(val.secret),
+          alias: val.alias || null,
+          aliasTag: val.aliasTag || null,
+          avatarUrl: val.avatarUrl || null,
+        };
+      }
+      continue;
+    }
+
+    // Case 2: Account-scoped entry — k is a userId (or 'global'), val is { [groupId]: session }
+    const validUid = safeUserKey(k);
+    if (!validUid) continue;
+
+    for (const gid of Object.keys(val)) {
+      if (!safeGroupKey(gid)) continue;
+      const s = val[gid];
+      if (!s || typeof s !== 'object' || Array.isArray(s)) continue;
+      if (s.identityId && s.secret) {
+        result[validUid] = result[validUid] || {};
+        result[validUid][gid] = {
+          identityId: String(s.identityId),
+          secret: String(s.secret),
+          alias: s.alias || null,
+          aliasTag: s.aliasTag || null,
+          avatarUrl: s.avatarUrl || null,
+        };
+      }
+    }
+  }
+
+  return result;
+}
+
+function readAllSessions() {
+  let store = {};
+
+  // 1. Read from localStorage (primary)
   try {
-    const value = encodeURIComponent(JSON.stringify(all));
-    // Secure when served over HTTPS so plaintext copies of anon keys never
-    // travel on the wire or sit in non-TLS cookies.
+    const raw = localStorage.getItem(ANON_STORAGE_KEY);
+    if (raw) {
+      store = normalizeSessionsStore(JSON.parse(raw));
+    }
+  } catch { /* ignore */ }
+
+  // 2. Read and merge from cookie (secondary / fallback for missing keys)
+  try {
+    const match = document.cookie
+      .split(';')
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(`${ANON_COOKIE_NAME}=`));
+    if (match) {
+      const parsed = JSON.parse(decodeURIComponent(match.slice(ANON_COOKIE_NAME.length + 1)));
+      const cookieStore = normalizeSessionsStore(parsed);
+      for (const uid of Object.keys(cookieStore)) {
+        store[uid] = store[uid] || {};
+        for (const gid of Object.keys(cookieStore[uid])) {
+          if (!store[uid][gid]) {
+            store[uid][gid] = cookieStore[uid][gid];
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  return store;
+}
+
+function writeAllSessions(store) {
+  try {
+    localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(store));
+  } catch { /* ignore */ }
+  try {
+    const value = encodeURIComponent(JSON.stringify(store));
     const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
     document.cookie = `${ANON_COOKIE_NAME}=${value}; Path=/; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE}${secure}`;
   } catch { /* ignore */ }
 }
 
-// Group ids come from the server, but a malicious/buggy caller could still
-// pass "__proto__"/"constructor"/"prototype" and turn the sessions map into a
-// prototype pollution primitive. Reject those keys outright.
-const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
-function safeGroupKey(groupId) {
-  return typeof groupId === 'string' && OBJECT_ID_RE.test(groupId) ? groupId : null;
-}
+export function getAnonSessions(targetUserId) {
+  const uid = safeUserKey(targetUserId) || getCurrentUserId();
+  const all = readAllSessions();
 
-export function getAnonSessions() {
-  const fromCookie = readCookieSessions();
-  let merged = fromCookie && typeof fromCookie === 'object' ? { ...fromCookie } : {};
-  try {
-    const raw = localStorage.getItem(ANON_STORAGE_KEY);
-    if (raw) {
-      const local = JSON.parse(raw);
-      if (!local || typeof local !== 'object' || Array.isArray(local)) throw new Error('bad');
-      for (const key of Object.keys(local)) {
-        if (!safeGroupKey(key)) continue;
-        if (!local[key] || typeof local[key] !== 'object') continue;
-        const session = {
-          identityId: typeof local[key].identityId === 'string' && OBJECT_ID_RE.test(local[key].identityId) ? local[key].identityId : '',
-          secret: typeof local[key].secret === 'string' ? local[key].secret : '',
-          alias: typeof local[key].alias === 'string' ? local[key].alias : null,
-          aliasTag: typeof local[key].aliasTag === 'string' ? local[key].aliasTag : null,
-          avatarUrl: typeof local[key].avatarUrl === 'string' ? local[key].avatarUrl : null,
-        };
-        // Cookie wins (it is the user's stated persistence of choice), but
-        // merge in local-only sessions so nothing already joined is lost.
-        if (session.identityId && session.secret) merged[key] = session;
+  // If we have an active authenticated user and sessions exist in 'global',
+  // seamlessly migrate them to this user so cold-boot / pre-token sessions aren't stranded.
+  if (uid !== 'global' && all['global'] && Object.keys(all['global']).length > 0) {
+    all[uid] = all[uid] || {};
+    let migrated = false;
+    for (const gid of Object.keys(all['global'])) {
+      if (!all[uid][gid]) {
+        all[uid][gid] = all['global'][gid];
+        migrated = true;
       }
     }
-  } catch { /* ignore */ }
-  return merged;
+    delete all['global'];
+    if (migrated) {
+      writeAllSessions(all);
+    }
+  }
+
+  return all[uid] || {};
 }
 
-export function setAnonSession(groupId, session) {
-  const key = safeGroupKey(groupId);
-  if (!key || !session?.identityId || !session?.secret || !OBJECT_ID_RE.test(session.identityId)) return;
-  const all = getAnonSessions();
-  all[key] = {
+export function setAnonSession(groupId, session, targetUserId) {
+  const gid = safeGroupKey(groupId);
+  if (!gid || !session?.identityId || !session?.secret || !OBJECT_ID_RE.test(session.identityId)) return;
+  const uid = safeUserKey(targetUserId) || getCurrentUserId();
+  const all = readAllSessions();
+  all[uid] = all[uid] || {};
+  all[uid][gid] = {
     identityId: String(session.identityId),
     secret: String(session.secret),
     alias: session.alias || null,
     aliasTag: session.aliasTag || null,
     avatarUrl: session.avatarUrl || null,
   };
-  writeCookieSessions(all);
-  try {
-    localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(all));
-  } catch { /* ignore */ }
+  if (uid !== 'global' && all['global']?.[gid]) {
+    delete all['global'][gid];
+  }
+  writeAllSessions(all);
 }
 
-export function updateAnonSession(groupId, patch) {
-  const key = safeGroupKey(groupId);
-  const all = getAnonSessions();
-  if (!key || !all[key]) return;
-  Object.assign(all[key], patch);
-  writeCookieSessions(all);
-  try {
-    localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(all));
-  } catch { /* ignore */ }
+export function updateAnonSession(groupId, patch, targetUserId) {
+  const gid = safeGroupKey(groupId);
+  if (!gid || !patch || typeof patch !== 'object') return;
+  const uid = safeUserKey(targetUserId) || getCurrentUserId();
+  const all = readAllSessions();
+  if (!all[uid] || !all[uid][gid]) {
+    if (uid !== 'global' && all['global']?.[gid]) {
+      all[uid] = all[uid] || {};
+      all[uid][gid] = all['global'][gid];
+      delete all['global'][gid];
+    } else {
+      return;
+    }
+  }
+  Object.assign(all[uid][gid], patch);
+  writeAllSessions(all);
 }
 
-export function removeAnonSession(groupId) {
-  const key = safeGroupKey(groupId);
-  const all = getAnonSessions();
-  if (!key || !all[key]) return;
-  delete all[key];
-  writeCookieSessions(all);
-  try {
-    localStorage.setItem(ANON_STORAGE_KEY, JSON.stringify(all));
-  } catch { /* ignore */ }
+export function removeAnonSession(groupId, targetUserId) {
+  const gid = safeGroupKey(groupId);
+  if (!gid) return;
+  const uid = safeUserKey(targetUserId) || getCurrentUserId();
+  const all = readAllSessions();
+  let changed = false;
+  if (all[uid] && all[uid][gid]) {
+    delete all[uid][gid];
+    changed = true;
+  }
+  if (all['global'] && all['global'][gid]) {
+    delete all['global'][gid];
+    changed = true;
+  }
+  if (changed) {
+    writeAllSessions(all);
+  }
 }
 
 /** Attach the X-Anon-Identity secret header for a group to a request config. */
-export function withAnonIdentity(config, groupId) {
-  const session = getAnonSessions()[groupId];
+export function withAnonIdentity(config = {}, groupId, targetUserId) {
+  const cfg = config || {};
+  const session = getAnonSessions(targetUserId)[groupId];
   if (session?.identityId && session?.secret) {
-    config.headers = config.headers || {};
-    config.headers['X-Anon-Identity'] = `${session.identityId}.${session.secret}`;
+    cfg.headers = cfg.headers || {};
+    cfg.headers['X-Anon-Identity'] = `${session.identityId}.${session.secret}`;
   }
-  return config;
+  return cfg;
 }
 
 /** Header carrying all anon sessions for the group-list endpoint. */
-export function anonSessionsHeaderValue() {
-  const all = getAnonSessions();
+export function anonSessionsHeaderValue(targetUserId) {
+  const all = getAnonSessions(targetUserId);
   const arr = Object.entries(all)
     .filter(([groupId, s]) => safeGroupKey(groupId) && s?.identityId && OBJECT_ID_RE.test(s.identityId) && s?.secret)
     .map(([groupId, s]) => ({ groupId, identityId: s.identityId, secret: s.secret }));

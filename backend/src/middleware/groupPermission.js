@@ -61,6 +61,7 @@ async function requireGroupMember(req, res, next) {
       select: { id: true, isAnonymous: true, creatorId: true, ringConfig: true },
     });
     if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+    req.group = group;
 
     if (group.isAnonymous) {
       // Zero-knowledge path: prove possession of the identity secret.
@@ -75,6 +76,7 @@ async function requireGroupMember(req, res, next) {
             }
             req.anonIdentity = {
               identityId: identity.id,
+              secret,
               alias: identity.alias,
               aliasTag: identity.aliasTag,
               avatarUrl: identity.avatarUrl,
@@ -159,7 +161,8 @@ function requireGroupPermission(permissionKey) {
       hasPermission = defaultPerms[permissionKey] === true;
     }
 
-    if (!hasPermission && membership.group?.creatorId !== req.user.id) {
+    const isCreator = req.group?.creatorId === req.user.id || membership.group?.creatorId === req.user.id;
+    if (!hasPermission && !isCreator) {
       return error(res, 'PERMISSION_DENIED', `You do not have the "${permissionKey}" permission in this group.`, 403);
     }
 

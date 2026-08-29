@@ -388,7 +388,7 @@ router.post('/:id/avatar', requireGroupMember, requireAnonCreator, requireGroupP
 /**
  * DELETE /api/v1/groups/:id — Delete group (Platform Admin, Group Creator, or Highest Ring Level 0).
  */
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requireMongoParams, async (req, res, next) => {
   try {
     const group = await prisma.cohortGroup.findUnique({
       where: { id: req.params.id },
@@ -633,7 +633,7 @@ router.post(
  * POST /api/v1/groups/:id/invites/:inviteId/accept — Accept a group invite.
  * Anonymous groups: acceptance mints an identity; alias is required.
  */
-router.post('/:id/invites/:inviteId/accept', [
+router.post('/:id/invites/:inviteId/accept', requireMongoParams, [
   body('alias').optional().trim(),
   body('avatarUrl').optional().trim(),
 ], async (req, res, next) => {
@@ -650,7 +650,7 @@ router.post('/:id/invites/:inviteId/accept', [
 /**
  * POST /api/v1/groups/:id/invites/:inviteId/reject — Reject a group invite.
  */
-router.post('/:id/invites/:inviteId/reject', async (req, res, next) => {
+router.post('/:id/invites/:inviteId/reject', requireMongoParams, async (req, res, next) => {
   try {
     const result = await groupService.rejectInvite(req.params.inviteId, req.user.id);
     return success(res, result);
@@ -667,7 +667,7 @@ router.post('/:id/invites/:inviteId/reject', async (req, res, next) => {
  */
 async function requireAnonCreator(req, res, next) {
   try {
-    const group = await prisma.cohortGroup.findUnique({
+    const group = req.group || await prisma.cohortGroup.findUnique({
       where: { id: req.params.id },
       select: { creatorId: true, isAnonymous: true },
     });
@@ -984,9 +984,10 @@ router.post('/:id/anons/rename', requireGroupMember, [
       );
     }
     if (!req.anonIdentity) return error(res, 'NOT_ANONYMOUS', 'This group is not anonymous.', 400);
+    const secret = req.anonIdentity.secret || req.headers['x-anon-identity']?.split('.')[1];
     const result = await groupService.renameAnonIdentity(
       req.anonIdentity.identityId,
-      req.headers['x-anon-identity']?.split('.')[1],
+      secret,
       req.body.alias,
       req.body.avatarUrl
     );
@@ -1401,9 +1402,11 @@ router.patch(
         );
       }
 
-      const muteStatus = await groupService.isMuted(req.params.id, req.user.id);
-      if (muteStatus) {
-        return error(res, 'USER_MUTED', `You are muted until ${muteStatus.mutedUntil.toISOString()}.`, 403);
+      if (!req.anonIdentity) {
+        const muteStatus = await groupService.isMuted(req.params.id, req.user.id);
+        if (muteStatus) {
+          return error(res, 'USER_MUTED', `You are muted until ${muteStatus.mutedUntil.toISOString()}.`, 403);
+        }
       }
       const grp = await prisma.cohortGroup.findUnique({
         where: { id: req.params.id },

@@ -170,9 +170,23 @@ export default function ChatPage() {
           // local storage.
           const identity = getAnonSessions()[groupId] || null;
           setMyIdentity(identity);
-          setAnonGate(null); // session present — no gate
+          if (!identity) {
+            // No session on this device — prompt for saved recovery key
+            try {
+              const enterRes = await groupApi.anonEnterCheck(groupId);
+              const enter = enterRes.data?.data;
+              setAnonGate({ joined: !!enter?.joined, group: enter || grp });
+            } catch {
+              setAnonGate({ joined: true, group: grp });
+            }
+          } else {
+            setAnonGate(null); // session present — no gate
+          }
           setMembers([]);
           setMembership(null);
+          if (connected && joinAnonGroup && identity?.identityId && identity?.secret) {
+            joinAnonGroup(groupId, identity.identityId, identity.secret).catch(() => {});
+          }
         } else {
           // Get members for mention autocomplete
           try {
@@ -210,7 +224,7 @@ export default function ChatPage() {
     };
 
     loadData();
-  }, [groupId, user?.id, connected, markRead]);
+  }, [groupId, user?.id, connected, markRead, joinAnonGroup]);
 
   // Restore an anonymous identity with the user's saved key
   const handleRestoreKey = async () => {
@@ -228,6 +242,9 @@ export default function ChatPage() {
         aliasTag: idn.aliasTag,
         avatarUrl: idn.avatarUrl,
       });
+      if (joinAnonGroup && idn.identityId && idn.secret) {
+        joinAnonGroup(groupId, idn.identityId, idn.secret).catch(() => {});
+      }
       setAnonGate(null);
       setRestoreKey('');
       // Reload chat with the restored identity
@@ -321,6 +338,12 @@ export default function ChatPage() {
           navigate('/groups');
         }
       }),
+      onEvent('anon:identityChanged', ({ identityId: iid }) => {
+        const fresh = getAnonSessions()[groupId];
+        if (fresh && (!iid || fresh.identityId === iid)) {
+          setMyIdentity(fresh);
+        }
+      }),
       onEvent('anon:moderation', ({ type, identityId: iid, groupId: gid }) => {
         if (gid === groupId && type === 'ban') {
           // If the banned identity is in local view, hide their messages
@@ -329,8 +352,19 @@ export default function ChatPage() {
       }),
     ];
 
-    return () => cleanups.forEach((fn) => fn?.());
-  }, [connected, onEvent, groupId, user?.id, markRead, navigate, myIdentity?.identityId]);
+    const handleStorage = (e) => {
+      if (e.key === 'comflex-anon-sessions' && isAnon) {
+        const fresh = getAnonSessions()[groupId];
+        if (fresh) setMyIdentity(fresh);
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      cleanups.forEach((fn) => fn?.());
+    };
+  }, [connected, onEvent, groupId, user?.id, markRead, navigate, myIdentity?.identityId, isAnon]);
 
   // Auto-scroll to bottom on new messages if user is already near bottom
   useEffect(() => {
@@ -474,7 +508,17 @@ export default function ChatPage() {
       } else {
         // Standard payload via WebSocket or REST
         if (connected) {
-          const newMsg = await wsSendMessage(groupId, content, mentionIds, replyingTo?.id, false, 'text', isAnon ? myIdentity?.identityId : undefined);
+          const currentAnon = isAnon ? (getAnonSessions()[groupId] || myIdentity || null) : null;
+          const newMsg = await wsSendMessage(
+            groupId,
+            content,
+            mentionIds,
+            replyingTo?.id,
+            false,
+            'text',
+            currentAnon?.identityId,
+            currentAnon?.secret
+          );
           if (newMsg) {
             setMessages((prev) => {
               if (prev.some(m => m.id === newMsg.id)) return prev;
@@ -1018,6 +1062,12 @@ export default function ChatPage() {
               myIdentity={myIdentity}
               isCreator={isAnonCreator}
               onLeft={handleAnonLeft}
+              onIdentityUpdated={(updatedIdentity) => {
+                setMyIdentity(updatedIdentity);
+                if (joinAnonGroup && updatedIdentity?.identityId && updatedIdentity?.secret) {
+                  joinAnonGroup(groupId, updatedIdentity.identityId, updatedIdentity.secret).catch(() => {});
+                }
+              }}
             />
           )}
           {showSidebar && !selectedUserId && !isAnon && (

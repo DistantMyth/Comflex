@@ -98,6 +98,7 @@ function initSocket(httpServer, frontendUrl) {
             socket.emit('anon:banned', { groupId: identity.groupId, identityId: identity.id });
             continue;
           }
+          socket.anonSessions = (socket.anonSessions || []).filter(s => s.groupId !== session.groupId);
           socket.anonSessions.push({
             groupId: session.groupId,
             identityId: identity.id,
@@ -145,13 +146,23 @@ function initSocket(httpServer, frontendUrl) {
 
         if (group.isAnonymous) {
           // ── Anonymous path: prove identity secret ─────────────
-          const anon = socket.anonSessions?.find(s => s.groupId === groupId && s.identityId === (data.anonIdentityId || ''));
-          if (!anon) return callback?.({ error: 'Not a member of this group.' });
+          let identityId = data.anonIdentityId;
+          let secret = data.anonSecret;
 
-          // Re-verify against the DB on EVERY send — a ban issued after the
-          // socket connected must take effect immediately (the in-memory
-          // session alone would let a freshly-banned identity keep posting).
-          const freshIdentity = await groupService.resolveAnonIdentity(anon.identityId, anon.secret);
+          // If secret was not provided in data payload, look up from in-memory socket session
+          if (!secret) {
+            const session = socket.anonSessions?.find(s => s.groupId === groupId && (!identityId || s.identityId === identityId));
+            if (session) {
+              identityId = session.identityId;
+              secret = session.secret;
+            }
+          }
+
+          if (!identityId || !secret) return callback?.({ error: 'Not a member of this group.' });
+
+          // Re-verify against the DB on EVERY send — a ban or key rotation issued after the
+          // socket connected must take effect immediately.
+          const freshIdentity = await groupService.resolveAnonIdentity(identityId, secret);
           if (!freshIdentity || freshIdentity.groupId !== groupId) {
             return callback?.({ error: 'Not a member of this group.' });
           }
@@ -159,6 +170,18 @@ function initSocket(httpServer, frontendUrl) {
             socket.emit('anon:banned', { groupId: freshIdentity.groupId, identityId: freshIdentity.id });
             return callback?.({ error: 'This identity is banned from the group.' });
           }
+
+          // Keep socket room membership and in-memory session updated with this valid session
+          socket.join(groupId);
+          socket.anonSessions = (socket.anonSessions || []).filter(s => s.groupId !== groupId);
+          socket.anonSessions.push({
+            groupId,
+            identityId: freshIdentity.id,
+            secret,
+            alias: freshIdentity.alias,
+            aliasTag: freshIdentity.aliasTag,
+            avatarUrl: freshIdentity.avatarUrl,
+          });
 
           const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
           if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
@@ -257,6 +280,14 @@ function initSocket(httpServer, frontendUrl) {
 
         // Anonymous groups have no per-user unread tracking.
         if (socket.anonSessions?.some(s => s.groupId === groupId)) {
+          return callback?.({ success: true, anonSkipped: true });
+        }
+
+        const grp = await prisma.cohortGroup.findUnique({
+          where: { id: groupId },
+          select: { isAnonymous: true },
+        });
+        if (grp?.isAnonymous) {
           return callback?.({ success: true, anonSkipped: true });
         }
 
@@ -426,7 +457,7 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'This identity is banned from the group.' });
         }
         socket.join(groupId);
-        socket.anonSessions = socket.anonSessions || [];
+        socket.anonSessions = (socket.anonSessions || []).filter(s => s.groupId !== groupId);
         socket.anonSessions.push({
           groupId,
           identityId: identity.id,

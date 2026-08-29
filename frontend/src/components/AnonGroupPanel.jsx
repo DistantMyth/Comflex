@@ -11,9 +11,11 @@ import { useState, useEffect } from 'react';
 import { Shield, Flag, Trash2, UserRoundCog, Link2, Copy, Check, Loader2 } from 'lucide-react';
 import { groupApi } from '../api/groupApi';
 import { updateAnonSession, removeAnonSession } from '../api/client';
+import { useSocket } from '../hooks/useSocket';
 import resolveAsset from '../utils/resolveAsset';
 
-export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft }) {
+export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft, onIdentityUpdated }) {
+  const { joinAnonGroup } = useSocket() || {};
   const [aliasInput, setAliasInput] = useState(myIdentity?.alias || '');
   const [renaming, setRenaming] = useState(false);
   const [reports, setReports] = useState([]);
@@ -24,6 +26,12 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copyingLink, setCopyingLink] = useState(false);
+
+  useEffect(() => {
+    if (myIdentity?.alias) {
+      setAliasInput(myIdentity.alias);
+    }
+  }, [myIdentity?.alias]);
 
   const flash = (msg) => {
     setActionMsg(msg);
@@ -71,12 +79,18 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
     setRenaming(true);
     try {
       const res = await groupApi.renameAnonIdentity(groupId, aliasInput.trim());
-      updateAnonSession(groupId, {
+      const updatedIdentity = {
+        identityId: myIdentity?.identityId,
         secret: res.data.data.secret,
         alias: res.data.data.alias,
         aliasTag: res.data.data.aliasTag,
         avatarUrl: res.data.data.avatarUrl,
-      });
+      };
+      updateAnonSession(groupId, updatedIdentity);
+      if (joinAnonGroup && updatedIdentity.identityId && updatedIdentity.secret) {
+        joinAnonGroup(groupId, updatedIdentity.identityId, updatedIdentity.secret).catch(() => {});
+      }
+      onIdentityUpdated?.(updatedIdentity);
       flash('Alias updated — your old name is gone forever.');
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Rename failed.');

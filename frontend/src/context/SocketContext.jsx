@@ -62,7 +62,10 @@ export function SocketProvider({ children }) {
       if (/token|auth|unauthorized/i.test(err.message || '')) {
         try {
           const freshToken = await refreshAccessToken();
-          socket.auth = { ...(socket.auth || {}), token: freshToken };
+          const currentAnon = Object.entries(getAnonSessions())
+            .filter(([, s]) => s?.identityId && s?.secret)
+            .map(([groupId, s]) => ({ groupId, identityId: s.identityId, secret: s.secret }));
+          socket.auth = { ...(socket.auth || {}), token: freshToken, anon: currentAnon };
           socket.disconnect();
           socket.connect();
         } catch {
@@ -71,10 +74,21 @@ export function SocketProvider({ children }) {
       }
     });
 
+    const handleStorage = (e) => {
+      if (e.key === 'comflex-anon-sessions' && socketRef.current) {
+        const currentAnon = Object.entries(getAnonSessions())
+          .filter(([, s]) => s?.identityId && s?.secret)
+          .map(([groupId, s]) => ({ groupId, identityId: s.identityId, secret: s.secret }));
+        socketRef.current.auth = { ...(socketRef.current.auth || {}), anon: currentAnon };
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
     socketRef.current = socket;
     setSocketInstance(socket);
 
     return () => {
+      window.removeEventListener('storage', handleStorage);
       socket.disconnect();
       socketRef.current = null;
       setConnected(false);
@@ -82,12 +96,12 @@ export function SocketProvider({ children }) {
     };
   }, [isAuthenticated]);
 
-  const sendMessage = useCallback((groupId, content, mentions = [], replyToId, forwarded = false, msgType = 'text', anonIdentityId) => {
+  const sendMessage = useCallback((groupId, content, mentions = [], replyToId, forwarded = false, msgType = 'text', anonIdentityId, anonSecret) => {
     return new Promise((resolve, reject) => {
       if (!socketRef.current?.connected) {
         return reject(new Error('Not connected'));
       }
-      socketRef.current.emit('message:send', { groupId, content, mentions, replyToId, forwarded, msgType, anonIdentityId }, (response) => {
+      socketRef.current.emit('message:send', { groupId, content, mentions, replyToId, forwarded, msgType, anonIdentityId, anonSecret }, (response) => {
         if (response?.error) reject(new Error(response.error));
         else resolve(response?.message);
       });
@@ -96,6 +110,11 @@ export function SocketProvider({ children }) {
 
   const joinAnonGroup = useCallback((groupId, identityId, secret) => {
     return new Promise((resolve, reject) => {
+      if (socketRef.current) {
+        const currentAnon = (socketRef.current.auth?.anon || []).filter(s => s.groupId !== groupId);
+        currentAnon.push({ groupId, identityId, secret });
+        socketRef.current.auth = { ...(socketRef.current.auth || {}), anon: currentAnon };
+      }
       if (!socketRef.current?.connected) {
         return reject(new Error('Not connected'));
       }

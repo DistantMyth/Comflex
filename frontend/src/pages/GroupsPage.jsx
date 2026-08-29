@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { groupApi } from '../api/groupApi';
-import { setAnonSession } from '../api/client';
+import { setAnonSession, removeAnonSession } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { Mail, MessagesSquare, Users, KeyRound, Trash2 } from 'lucide-react';
 import CreateGroupModal from '../components/CreateGroupModal';
@@ -137,6 +137,9 @@ export default function GroupsPage() {
     if (!confirm(`Delete "${name}" permanently? This cannot be undone.`)) return;
     try {
       await groupApi.deleteGroup(group.id);
+      if (group.isAnonymous) {
+        removeAnonSession(group.id);
+      }
       setGroups(prev => prev.filter(g => g.id !== group.id));
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete group.');
