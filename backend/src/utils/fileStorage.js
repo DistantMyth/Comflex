@@ -29,6 +29,15 @@ function getCloudinaryConfig() {
   const rawUrl = process.env.CLOUDINARY_URL || env.CLOUDINARY_URL;
   const url = cleanEnvString(rawUrl);
   if (url && url.startsWith('cloudinary://')) {
+    const match = url.match(/^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/);
+    if (match) {
+      return {
+        api_key: decodeURIComponent(match[1]),
+        api_secret: decodeURIComponent(match[2]),
+        cloud_name: match[3].replace(/\/+$/, ''),
+        secure: true,
+      };
+    }
     try {
       const parsed = new URL(url);
       return {
@@ -38,7 +47,7 @@ function getCloudinaryConfig() {
         secure: true,
       };
     } catch {
-      return { url, secure: true };
+      // Fallback
     }
   }
 
@@ -58,7 +67,7 @@ function isCloudinaryConfigured() {
 }
 
 function getCloudinary() {
-  if (cloudinaryReady) return cloudinary;
+  if (cloudinaryReady && cloudinary) return cloudinary;
   const config = getCloudinaryConfig();
   if (!config) return null;
 
@@ -69,7 +78,7 @@ function getCloudinary() {
     console.log(`[fileStorage] ✅ Cloudinary enabled for cloud "${config.cloud_name || 'custom'}" — uploads go to Cloudinary CDN.`);
   } catch (err) {
     console.error('[fileStorage] ❌ Cloudinary initialization failed:', err.message);
-    cloudinaryReady = true;
+    cloudinaryReady = false;
   }
   return cloudinary;
 }
@@ -122,7 +131,7 @@ async function storeFile(file, { folder = 'comflex', localUrlPrefix = '/uploads'
 /**
  * Delete a stored file.
  * - Local files are removed from disk.
- * - Cloudinary files are destroyed by public id.
+ * - Cloudinary files are destroyed by public id (handles image, raw, video).
  */
 async function deleteStoredFile(url) {
   if (!url) return;
@@ -135,13 +144,15 @@ async function deleteStoredFile(url) {
     return;
   }
 
-  // Cloudinary URL → destroy by public id
+  // Cloudinary URL → destroy by public id & resource type
   if (url.includes('res.cloudinary.com')) {
     try {
-      const match = url.match(/\/image\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i);
-      if (match && match[1]) {
+      const match = url.match(/\/(image|raw|video)\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z0-9]+)?$/i);
+      if (match && match[2]) {
+        const resourceType = match[1].toLowerCase();
+        const publicId = match[2];
         const cld = getCloudinary();
-        await cld?.uploader.destroy(match[1]);
+        await cld?.uploader.destroy(publicId, { resource_type: resourceType });
       }
     } catch { /* ignore */ }
   }

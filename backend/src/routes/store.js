@@ -279,12 +279,16 @@ router.post('/admin/badges', upload.single('image'), [
     if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
     
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
+    if (!errors.isEmpty()) {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
+      return error(res, 'VALIDATION', 'Invalid data', 400, errors.array());
+    }
 
     const { name, description, isEventBadge } = req.body;
 
     const existingBadge = await prisma.badge.findUnique({ where: { name } });
     if (existingBadge) {
+      if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
       return error(res, 'CONFLICT', 'A badge with this name already exists.', 409);
     }
 
