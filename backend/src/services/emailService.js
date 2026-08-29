@@ -74,6 +74,43 @@ function getTransporter() {
   return _transporter;
 }
 
+async function sendMailWithFallback(mailOptions) {
+  if (env.EMAIL_PROVIDER !== 'smtp') {
+    const transporter = getTransporter();
+    return transporter.sendMail(mailOptions);
+  }
+
+  const nodemailer = require('nodemailer');
+  const portsToTry = [env.SMTP_PORT, env.SMTP_PORT === 465 ? 587 : 465];
+
+  let lastErr = null;
+  for (const port of portsToTry) {
+    try {
+      const isSsl = port === 465;
+      const transporter = nodemailer.createTransport({
+        host: env.SMTP_HOST,
+        port,
+        secure: isSsl,
+        auth: {
+          user: env.SMTP_USER,
+          pass: env.SMTP_PASS,
+        },
+        connectionTimeout: 8000,
+        greetingTimeout: 8000,
+        socketTimeout: 12000,
+        tls: { rejectUnauthorized: false }
+      });
+
+      return await transporter.sendMail(mailOptions);
+    } catch (err) {
+      console.warn(`[emailService] ⚠️ SMTP send failed on port ${port}:`, err.message);
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error('Failed to send email through SMTP');
+}
+
 /**
  * Send a password reset email.
  *
@@ -82,8 +119,7 @@ function getTransporter() {
  */
 async function sendPasswordReset(to, resetUrl) {
   await recipientLimiter.check(normalizeEmailKey(to));
-  const transporter = getTransporter();
-  await transporter.sendMail({
+  return sendMailWithFallback({
     from: env.EMAIL_FROM,
     to,
     subject: 'Comflex — Reset Your Password',
@@ -107,8 +143,7 @@ async function sendPasswordReset(to, resetUrl) {
  */
 async function sendEmailVerification(to, verifyUrl) {
   await recipientLimiter.check(normalizeEmailKey(to));
-  const transporter = getTransporter();
-  await transporter.sendMail({
+  return sendMailWithFallback({
     from: env.EMAIL_FROM,
     to,
     subject: 'Comflex — Verify Your Personal Email',
