@@ -802,10 +802,12 @@ router.get('/system/diagnostics', async (req, res, next) => {
     ]);
 
     const memory = process.memoryUsage();
+    const { isCloudinaryConfigured } = require('../utils/fileStorage');
     return success(res, {
       status: 'healthy',
       uptime: Math.round(process.uptime()),
       nodeVersion: process.version,
+      storageProvider: isCloudinaryConfigured() ? 'cloudinary' : 'local_ephemeral',
       memoryUsage: {
         rssMb: Math.round(memory.rss / (1024 * 1024)),
         heapUsedMb: Math.round(memory.heapUsed / (1024 * 1024)),

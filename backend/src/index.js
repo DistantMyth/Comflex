@@ -181,6 +181,10 @@ async function startServer() {
       // Seed the admin user on first boot (idempotent)
       await seedAdmin();
 
+      // Initialize Cloudinary storage layer early and log status
+      const { getCloudinary, isCloudinaryConfigured } = require('./utils/fileStorage');
+      getCloudinary();
+
       // Initialize Socket.IO for real-time chat + DMs
       initSocket(httpServer, env.FRONTEND_URL);
 
@@ -189,7 +193,8 @@ async function startServer() {
         console.log(`   Environment: ${env.NODE_ENV}`);
         console.log(`   Frontend URL: ${env.FRONTEND_URL}`);
         console.log(`   WebSocket: enabled`);
-        console.log(`   Email: ${env.EMAIL_PROVIDER} mode\n`);
+        console.log(`   Email: ${env.EMAIL_PROVIDER} mode`);
+        console.log(`   Media Storage: ${isCloudinaryConfigured() ? 'Cloudinary CDN (persistent)' : 'Local Ephemeral Disk (dev only)'}\n`);
       });
       return;
     } catch (err) {
