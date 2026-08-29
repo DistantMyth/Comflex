@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Shield, Flag, Trash2, UserRoundCog } from 'lucide-react';
+import { Shield, Flag, Trash2, UserRoundCog, Link2, Copy, Check, Loader2 } from 'lucide-react';
 import { groupApi } from '../api/groupApi';
 import { updateAnonSession, removeAnonSession } from '../api/client';
 import resolveAsset from '../utils/resolveAsset';
@@ -22,10 +22,30 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
   const [actionMsg, setActionMsg] = useState('');
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copyingLink, setCopyingLink] = useState(false);
 
   const flash = (msg) => {
     setActionMsg(msg);
     setTimeout(() => setActionMsg(''), 2500);
+  };
+
+  const handleCopyInviteLink = async () => {
+    setCopyingLink(true);
+    try {
+      const res = await groupApi.getInviteLink(groupId);
+      const token = res.data?.data?.token;
+      if (!token) throw new Error('No invite token returned');
+      const url = `${window.location.origin}/join/${token}`;
+      await navigator.clipboard.writeText(url);
+      setCopiedLink(true);
+      flash('Invite link copied to clipboard!');
+      setTimeout(() => setCopiedLink(false), 3000);
+    } catch (err) {
+      alert(err.response?.data?.error?.message || 'Failed to generate invite link.');
+    } finally {
+      setCopyingLink(false);
+    }
   };
 
   const handleDeleteGroup = async () => {
@@ -117,6 +137,34 @@ export default function AnonGroupPanel({ groupId, myIdentity, isCreator, onLeft 
       <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
         No one here — not even the creator — can see who wrote any message.
       </p>
+
+      {/* Invite link */}
+      {isCreator && (
+        <div className="p-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-[var(--color-text-primary)] flex items-center gap-1.5">
+              <Link2 size={13} className="text-[var(--color-accent)]" /> Invite Link
+            </span>
+          </div>
+          <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+            Share this link to invite others. Anyone with the link chooses an alias and joins anonymously.
+          </p>
+          <button
+            onClick={handleCopyInviteLink}
+            disabled={copyingLink}
+            className="btn btn-secondary text-xs w-full py-1.5 flex items-center justify-center gap-1.5"
+          >
+            {copyingLink ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : copiedLink ? (
+              <Check size={13} className="text-[var(--color-success)]" />
+            ) : (
+              <Copy size={13} />
+            )}
+            {copiedLink ? 'Copied Link!' : 'Copy Invite Link'}
+          </button>
+        </div>
+      )}
 
       {/* My identity */}
       <div className="p-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
