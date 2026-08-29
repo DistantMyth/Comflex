@@ -21,6 +21,7 @@ router.get('/status', async (req, res, next) => {
   try {
     const config = await prisma.institutionConfig.findFirst();
     const fs = require('fs');
+    const path = require('path');
     const { isCloudinaryConfigured } = require('../utils/fileStorage');
 
     const envKeys = Object.keys(process.env).sort();

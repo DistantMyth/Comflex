@@ -16,31 +16,49 @@ try { dotenv.config({ path: path.resolve(process.cwd(), '.env') }); } catch {}
 try { dotenv.config({ path: path.resolve(__dirname, '../../.env') }); } catch {}
 try { dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); } catch {}
 
-// Render /etc/secrets loader (supports Environment Groups & Secret Files)
-function loadEnvFromDirectory(dirPath) {
+// Render /etc/secrets loader (supports Environment Groups, Secret Files, & single-value secrets)
+function loadEnvFromDirectory(dirPath, visited = new Set()) {
   if (!fs.existsSync(dirPath)) return;
   try {
+    const realDir = fs.realpathSync(dirPath);
+    if (visited.has(realDir)) return;
+    visited.add(realDir);
+
     const entries = fs.readdirSync(dirPath);
     for (const entry of entries) {
+      if (entry.startsWith('..') && entry !== '..data') continue;
       const fullPath = path.join(dirPath, entry);
       try {
         const stat = fs.statSync(fullPath);
-        if (stat.isFile()) {
-          const content = fs.readFileSync(fullPath, 'utf8');
-          const parsed = dotenv.parse(content);
-          for (const [k, v] of Object.entries(parsed)) {
-            if (!process.env[k]) {
-              process.env[k] = v;
+        if (stat.isDirectory()) {
+          loadEnvFromDirectory(fullPath, visited);
+        } else if (stat.isFile()) {
+          const raw = fs.readFileSync(fullPath, 'utf8');
+          const trimmed = raw.trim();
+          if (!trimmed) continue;
+
+          // Try standard dotenv parse first (multi-line KEY=VAL format)
+          const parsed = dotenv.parse(raw);
+          const parsedKeys = Object.keys(parsed);
+          if (parsedKeys.length > 0) {
+            for (const [k, v] of Object.entries(parsed)) {
+              if (!process.env[k]) {
+                process.env[k] = v;
+              }
+            }
+          } else if (/^[A-Z0-9_]+$/.test(entry) && !trimmed.includes('\n')) {
+            // Single-value secret file named after the env var (e.g. /etc/secrets/CLOUDINARY_API_KEY)
+            if (!process.env[entry]) {
+              process.env[entry] = trimmed;
             }
           }
         }
-      } catch {}
+      } catch (err) {}
     }
-  } catch {}
+  } catch (err) {}
 }
 
 loadEnvFromDirectory('/etc/secrets');
-loadEnvFromDirectory('/etc/secrets/..data');
 
 function cleanEnvString(val) {
   if (!val) return '';
