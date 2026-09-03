@@ -5,16 +5,10 @@
  * (or absolute Cloudinary URLs when configured). On Vercel the frontend is on
  * a different origin than the Render backend, so relative paths must be
  * prefixed with the backend origin to render.
- *
- * Usage: <img src={resolveAsset(user.avatarUrl)} />
  */
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 
-// Only schemes we can safely render: http(s), backend-relative /uploads &
-// /api paths, and inline base64 data: images (avatars/badges only). Anything
-// else — javascript:, file:, data: non-image, protocol-relative, etc. — is
-// rejected so a stored avatarUrl can never become an <img src=...> gadget.
 const IMAGE_DATA_RE = /^data:image\/(png|jpe?g|gif|webp|avif);base64,/i;
 
 export function resolveAsset(url) {

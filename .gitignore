@@ -21,3 +21,8 @@ dist-ssr/
 
 # OS
 .DS_Store
+
+# Local database data
+.db_data/
+backend/.db_data/
+backend/test-mongo.js

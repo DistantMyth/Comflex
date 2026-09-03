@@ -1,12 +1,7 @@
 /**
  * SocketContext — Shared Socket.IO client provider for real-time features.
- *
- * Maintains a single, shared Socket.IO connection across the entire app.
- * Connects when authenticated, auto-disconnects on logout.
- * Exposes: socket instance (via state/getter), connected status, and helper methods.
  */
 
-/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../hooks/useAuth';
@@ -69,7 +64,7 @@ export function SocketProvider({ children }) {
           socket.disconnect();
           socket.connect();
         } catch {
-          // Token refresh failed; auth interceptor handles redirection
+          // Refresh failed
         }
       }
     });
@@ -185,10 +180,4 @@ export function SocketProvider({ children }) {
   );
 }
 
-export function useSocket() {
-  const context = useContext(SocketContext);
-  if (!context) {
-    throw new Error('useSocket must be used within a SocketProvider');
-  }
-  return context;
-}
+export default SocketContext;

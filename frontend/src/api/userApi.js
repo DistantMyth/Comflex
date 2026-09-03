@@ -1,7 +1,3 @@
-/**
- * User API — Profile and user-related API calls.
- */
-
 import client from './client';
 
 export const userApi = {
@@ -34,3 +30,5 @@ export const userApi = {
   getUserProfile: (userId) =>
     client.get(`/users/${userId}/profile`),
 };
+
+export default userApi;

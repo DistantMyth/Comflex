@@ -1,22 +1,51 @@
-/**
- * LoginPage — Email/password + Google OAuth login.
- * Redirects to /setup if the system is not configured.
- */
-
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Mail, Lock, LogIn, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, LogIn, Loader2, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { useTheme } from '../context/ThemeContext';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import { useGoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import AuthShell from '../components/AuthShell';
+import GoogleAuthButton from '../components/GoogleAuthButton';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
+function GoogleButtonTrigger({ onSuccess, onError, loading }) {
+  const triggerLogin = useGoogleLogin({
+    onSuccess,
+    onError: () => onError('Google login was interrupted or failed.'),
+    flow: 'implicit',
+  });
+
+  return (
+    <GoogleAuthButton
+      onClick={() => triggerLogin()}
+      isLoading={loading}
+      text="Continue with Google"
+      loadingText="Signing in with Google..."
+    />
+  );
+}
+
+function GoogleButtonWrapper({ clientId, onSuccess, onError, loading }) {
+  if (!clientId) {
+    return (
+      <GoogleAuthButton
+        onClick={() => onError('Google Sign-In is not configured in client environment. Please enter your email and password below.')}
+        isLoading={loading}
+        text="Continue with Google"
+      />
+    );
+  }
+
+  return (
+    <GoogleOAuthProvider clientId={clientId}>
+      <GoogleButtonTrigger onSuccess={onSuccess} onError={onError} loading={loading} />
+    </GoogleOAuthProvider>
+  );
+}
+
 export default function LoginPage() {
   const { login, googleLogin, isAuthenticated, systemStatus, loading: authLoading } = useAuth();
-  const { theme } = useTheme();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -37,7 +66,7 @@ export default function LoginPage() {
       const result = await login(email, password);
       navigate(result?.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result?.needsUsername } });
     } catch (err) {
-      setError(err.response?.data?.error?.message || err.response?.data?.message || 'Login failed. Please try again.');
+      setError(err.response?.data?.error?.message || err.response?.data?.message || 'Login failed. Please verify credentials.');
     } finally {
       setLoading(false);
     }
@@ -59,52 +88,48 @@ export default function LoginPage() {
   return (
     <AuthShell
       title="Welcome back"
-      subtitle={systemStatus?.institutionName || 'Sign in to your community'}
+      subtitle={systemStatus?.institutionName || 'Sign in to access your campus community'}
       footer={
         <>
           Don&apos;t have an account?{' '}
           <Link to="/register" className="text-[var(--color-accent)] font-semibold hover:underline">
-            Register
+            Register with College Email
           </Link>
         </>
       }
     >
       {error && (
-        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="alert alert-danger mb-5">
-          {error}
+        <motion.div
+          initial={{ opacity: 0, y: -6 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-5 p-3.5 rounded-2xl bg-[var(--color-danger)]/12 border border-[var(--color-danger)]/25 text-[var(--color-danger)] text-xs font-semibold flex items-center gap-2"
+        >
+          <AlertCircle size={16} className="flex-shrink-0" />
+          <span>{error}</span>
         </motion.div>
       )}
 
-      {GOOGLE_CLIENT_ID && (
-        <div className="mb-6">
-          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-            <div className="flex justify-center">
-              <div className="rounded-xl overflow-hidden shadow-sm">
-                <GoogleLogin
-                  onSuccess={handleGoogleSuccess}
-                  onError={() => setError('Google login failed.')}
-                  useOneTap={false}
-                  text="signin_with"
-                  shape="rectangular"
-                  size="large"
-                  width={320}
-                  theme={theme === 'dark' ? 'filled_black' : 'outline'}
-                />
-              </div>
-            </div>
-          </GoogleOAuthProvider>
-          <div className="flex items-center gap-3 my-6">
-            <div className="flex-1 h-px bg-[var(--color-border)]" />
-            <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">or sign in with email</span>
-            <div className="flex-1 h-px bg-[var(--color-border)]" />
-          </div>
+      {/* Continue with Google */}
+      <div className="mb-6">
+        <GoogleButtonWrapper
+          clientId={GOOGLE_CLIENT_ID}
+          onSuccess={handleGoogleSuccess}
+          onError={setError}
+          loading={loading}
+        />
+        <div className="flex items-center gap-3 my-6">
+          <div className="flex-1 h-px bg-[var(--color-border)]" />
+          <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">
+            or sign in with password
+          </span>
+          <div className="flex-1 h-px bg-[var(--color-border)]" />
         </div>
-      )}
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="login-email" className="block text-sm text-[var(--color-text-secondary)] mb-1.5 font-medium">
-            Email
+          <label htmlFor="login-email" className="block text-xs text-[var(--color-text-secondary)] mb-1.5 font-bold uppercase tracking-wider">
+            Email Address
           </label>
           <div className="relative">
             <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
@@ -113,17 +138,17 @@ export default function LoginPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@institution.edu"
+              placeholder="rollno@institution.edu"
               autoComplete="email"
               required
               autoFocus
-              className="pl-10"
+              className="matte-input pl-10"
             />
           </div>
         </div>
 
         <div>
-          <label htmlFor="login-password" className="block text-sm text-[var(--color-text-secondary)] mb-1.5 font-medium">
+          <label htmlFor="login-password" className="block text-xs text-[var(--color-text-secondary)] mb-1.5 font-bold uppercase tracking-wider">
             Password
           </label>
           <div className="relative">
@@ -137,12 +162,12 @@ export default function LoginPage() {
               autoComplete="current-password"
               required
               minLength={8}
-              className="pl-10 pr-10"
+              className="matte-input pl-10 pr-10"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -151,14 +176,14 @@ export default function LoginPage() {
         </div>
 
         <div className="text-right">
-          <Link to="/forgot-password" className="text-xs text-[var(--color-accent)] hover:underline">
-            Forgot your password?
+          <Link to="/forgot-password" className="text-xs text-[var(--color-accent)] font-semibold hover:underline">
+            Forgot password?
           </Link>
         </div>
 
-        <button type="submit" disabled={loading} className="btn btn-primary w-full mt-1">
+        <button type="submit" disabled={loading} className="btn btn-primary w-full py-3 mt-2 shadow-md">
           {loading ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />}
-          {loading ? 'Signing in...' : 'Sign In'}
+          <span>{loading ? 'Signing in...' : 'Sign In'}</span>
         </button>
       </form>
     </AuthShell>

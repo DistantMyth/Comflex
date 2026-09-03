@@ -1,14 +1,11 @@
 /**
- * ThemeContext — Light/Dark theme with persistence.
- * Persists to localStorage, defaults to the OS preference.
- * Toggles the `dark` class on <html> (also set pre-React in index.html).
+ * ThemeContext — Light/Dark theme with persistence and palette synchronization.
  */
 
 import { createContext, useState, useEffect, useCallback, useContext } from 'react';
 
 const STORAGE_KEY = 'comflex-theme';
 
-// eslint-disable-next-line react-refresh/only-export-components
 export const ThemeContext = createContext(null);
 
 function getInitialTheme() {
@@ -29,9 +26,8 @@ export function ThemeProvider({ children }) {
     root.classList.toggle('dark', theme === 'dark');
     localStorage.setItem(STORAGE_KEY, theme);
 
-    // Keep the browser chrome in sync
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', theme === 'dark' ? '#07070f' : '#f3f4fa');
+    if (meta) meta.setAttribute('content', theme === 'dark' ? '#151114' : '#fcf9f6');
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
@@ -45,9 +41,10 @@ export function ThemeProvider({ children }) {
   );
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function useTheme() {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error('useTheme must be used within ThemeProvider');
   return ctx;
 }
+
+export default ThemeContext;

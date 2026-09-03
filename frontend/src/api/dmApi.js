@@ -1,7 +1,3 @@
-/**
- * DM API — Centralized direct-messaging API calls.
- */
-
 import client from './client';
 
 export const dmApi = {
@@ -31,3 +27,5 @@ export const dmApi = {
   deleteMessage: (msgId) =>
     client.delete(`/dm/messages/${msgId}`),
 };
+
+export default dmApi;

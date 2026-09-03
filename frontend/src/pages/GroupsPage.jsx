@@ -1,21 +1,19 @@
-/**
- * GroupsPage — Lists all groups the user belongs to.
- * Shows unread badges, group avatars, and "Create Group" button.
- * Shows pending group invites.
- */
-
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Mail, MessagesSquare, Users, KeyRound, Trash2, Plus, Search,
+  GraduationCap, Sparkles, AlertCircle, ArrowRight, Loader2
+} from 'lucide-react';
 import { groupApi } from '../api/groupApi';
 import { setAnonSession, removeAnonSession } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
-import { Mail, MessagesSquare, Users, KeyRound, Trash2 } from 'lucide-react';
 import CreateGroupModal from '../components/CreateGroupModal';
 import CreateCohortGroupModal from '../components/CreateCohortGroupModal';
 import BackupKeyModal from '../components/BackupKeyModal';
 import resolveAsset from '../utils/resolveAsset';
 
-const TYPE_LABELS = { primary: 'Cohort', 'cross-year': 'Cross-Year', custom: 'Custom' };
+const TYPE_LABELS = { primary: 'Academic Cohort', 'cross-year': 'Cross-Cohort', custom: 'Community Squad' };
 const TYPE_ICONS = { primary: '🎓', 'cross-year': '🔗', custom: '✨' };
 
 export default function GroupsPage() {
@@ -25,8 +23,8 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateCohort, setShowCreateCohort] = useState(false);
-  const [aliasGroupId, setAliasGroupId] = useState(null); // anon invite awaiting alias
-  const [pendingAnon, setPendingAnon] = useState(null); // { inviteId, groupId, identity }
+  const [aliasGroupId, setAliasGroupId] = useState(null);
+  const [pendingAnon, setPendingAnon] = useState(null);
   const [aliasInput, setAliasInput] = useState('');
   const [loadingAliasInvite, setLoadingAliasInvite] = useState(null);
   const { user } = useAuth();
@@ -42,7 +40,7 @@ export default function GroupsPage() {
       ]);
       setGroups(groupsRes?.data?.data || groupsRes?.data || []);
       setInvites(invitesRes?.data?.data || invitesRes?.data || []);
-    } catch { /* ignore list errors */ }
+    } catch { /* ignore */ }
     setLoading(false);
   }, []);
 
@@ -51,9 +49,8 @@ export default function GroupsPage() {
   const handleAcceptInvite = async (groupId, inviteId) => {
     try {
       const res = await groupApi.acceptInvite(groupId, inviteId);
-      const payload = res.data.data;
+      const payload = res.data?.data;
       if (payload?.identityId && payload?.secret) {
-        // Save session immediately so it's not lost on modal close
         setAnonSession(groupId, {
           identityId: payload.identityId,
           secret: payload.secret,
@@ -89,7 +86,7 @@ export default function GroupsPage() {
     setLoadingAliasInvite(inviteId);
     try {
       const res = await groupApi.acceptInvite(groupId, inviteId, aliasInput.trim());
-      const payload = res.data.data;
+      const payload = res.data?.data;
       setAliasGroupId(null);
       setAliasInput('');
       if (payload?.identityId && payload?.secret) {
@@ -134,7 +131,7 @@ export default function GroupsPage() {
     e.preventDefault();
     e.stopPropagation();
     const name = group.displayName || group.name;
-    if (!confirm(`Delete "${name}" permanently? This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete "${name}"? This action cannot be undone.`)) return;
     try {
       await groupApi.deleteGroup(group.id);
       if (group.isAnonymous) {
@@ -146,194 +143,228 @@ export default function GroupsPage() {
     }
   };
 
+  const filteredGroups = groups.filter(g =>
+    (g.displayName || g.name || '').toLowerCase().includes(search.toLowerCase())
+  );
+
   return (
-    <>
-    <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">Groups</h1>
-          <div className="flex items-center gap-3">
-            {isAdmin && (
-              <span className="text-xs px-2.5 py-1 rounded-full chip-accent">
-                Admin View — All Groups
-              </span>
-            )}
-            {user?.canCreateGroups && (
-               <button onClick={() => setShowCreateCohort(true)} className="btn btn-secondary text-sm px-4 py-2 border border-[var(--color-accent)]">
-                 + Create Cohort Group
-               </button>
-            )}
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary text-sm px-4 py-2">
-              + Create Group
-            </button>
-            <span className="text-sm text-[var(--color-text-muted)]">{groups.length} groups</span>
-          </div>
+    <div className="max-w-4xl mx-auto pb-12">
+      {/* Top Header & Actions */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold font-display text-[var(--color-text-primary)] flex items-center gap-2">
+            <MessagesSquare size={24} className="text-[var(--color-accent)]" />
+            <span>Campus Groups</span>
+          </h1>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+            Cohort communities, academic study hubs, and anonymous spaces
+          </p>
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap">
+          {isAdmin && (
+            <span className="text-[10px] px-2.5 py-1 rounded-full font-bold bg-[var(--palette-teal)]/15 text-[var(--palette-teal)] border border-[var(--palette-teal)]/30">
+              Administrator View
+            </span>
+          )}
+          {user?.canCreateGroups && (
+            <button
+              onClick={() => setShowCreateCohort(true)}
+              className="btn btn-secondary text-xs py-2 px-3.5 shadow-xs flex items-center gap-1.5"
+            >
+              <GraduationCap size={14} />
+              <span>Create Cohort</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="btn btn-primary text-xs py-2 px-4 shadow-sm flex items-center gap-1.5"
+          >
+            <Plus size={15} />
+            <span>Create Group</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Search Input */}
+      <div className="relative mb-6">
+        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
         <input
           type="text"
-          placeholder="Search groups by name..."
+          placeholder="Filter groups by name or topic..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full mb-6 bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[var(--color-accent)]"
+          className="matte-input pl-10 text-xs sm:text-sm py-2.5"
         />
+      </div>
 
-        {/* Pending Invites */}
-        {invites.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-sm font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">
-              <span className="inline-flex items-center gap-1.5"><Mail size={14} /> Pending Invites ({invites.length})</span>
-            </h2>
-            <div className="space-y-2">
-              {invites.map(inv => (
-                <div key={inv.id} className="glass-card p-4 flex items-center gap-4 border border-[var(--color-warning)] border-opacity-30">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--color-warning)] to-[var(--color-accent)] flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
+      {/* Pending Invitations Section */}
+      {invites.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-3 flex items-center gap-1.5">
+            <Mail size={13} className="text-[var(--color-accent)]" />
+            <span>Pending Group Invites ({invites.length})</span>
+          </h2>
+          <div className="space-y-2.5">
+            {invites.map(inv => (
+              <div
+                key={inv.id}
+                className="glass-card p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border border-[var(--palette-teal)]/30 bg-[var(--palette-teal)]/5"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[var(--palette-teal)] to-[var(--palette-plum)] flex items-center justify-center text-white text-base font-bold flex-shrink-0 shadow-sm">
                     {inv.group?.avatarUrl ? (
-                      <img src={resolveAsset(inv.group.avatarUrl)} alt="" className="w-full h-full rounded-xl object-cover" />
+                      <img src={resolveAsset(inv.group.avatarUrl)} alt="" className="w-full h-full rounded-2xl object-cover" />
                     ) : (
                       inv.group?.displayName?.charAt(0) || '#'
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold truncate">{inv.group?.displayName || inv.group?.name}</h3>
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      Invited by {inv.invitedByUser?.displayName} · {inv.group?.memberCount} members
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-xs sm:text-sm text-[var(--color-text-primary)] truncate">
+                      {inv.group?.displayName || inv.group?.name}
+                    </h3>
+                    <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
+                      Invited by {inv.invitedByUser?.displayName || 'Peer'} • {inv.group?.memberCount || 0} members
                     </p>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleAcceptInvite(inv.groupId, inv.id)}
-                      disabled={loadingAliasInvite === inv.id}
-                      className="btn btn-primary text-xs px-3 py-1.5"
-                    >
-                      {loadingAliasInvite === inv.id ? 'Joining...' : 'Accept'}
-                    </button>
-                      {aliasGroupId === inv.groupId && (
-                        <input
-                          autoFocus
-                          type="text"
-                          placeholder="Choose an anonymous alias..."
-                          value={aliasInput}
-                          maxLength={32}
-                          onChange={e => setAliasInput(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') acceptAnonWithAlias(inv.groupId, inv.id);
-                          }}
-                          className="input !w-44 !py-1.5 !text-xs"
-                        />
-                      )}
-                    <button
-                      onClick={() => handleRejectInvite(inv.groupId, inv.id)}
-                      className="btn btn-secondary text-xs px-3 py-1.5"
-                    >
-                      Decline
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => <div key={i} className="skeleton h-20 w-full rounded-xl" />)}
-          </div>
-        ) : groups.length === 0 ? (
-          <div className="glass-card p-8 text-center">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center justify-center">
-              <MessagesSquare size={30} className="text-[var(--color-accent)]" />
-            </div>
-            <h2 className="text-lg font-semibold mb-2 font-display">No Groups Yet</h2>
-            <p className="text-[var(--color-text-secondary)] text-sm mb-4">
-              Create a group to start chatting with your friends!
-            </p>
-            <button onClick={() => setShowCreate(true)} className="btn btn-primary">
-              Create Your First Group
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {groups.filter(g => (g.displayName || g.name || '').toLowerCase().includes(search.toLowerCase())).map((group) => (
-              <Link
-                key={group.id}
-                to={`/groups/${group.id}`}
-                className="glass-card p-4 flex items-center gap-4 hover:border-[var(--color-accent)] border border-transparent transition-all"
-              >
-                {/* Group avatar */}
-                {group.avatarUrl ? (
-                  <img src={resolveAsset(group.avatarUrl)} alt="" className="w-12 h-12 rounded-xl object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[var(--color-accent)] to-[var(--color-accent-light)] flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
-                    {group.displayName?.charAt(0) || group.name?.charAt(0)?.toUpperCase() || '#'}
-                  </div>
-                )}
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold truncate">{group.displayName || group.name}</h3>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-xs text-[var(--color-text-muted)]">
-                      {TYPE_ICONS[group.type] || '✨'} {TYPE_LABELS[group.type] || group.type}
-                    </span>
-                    <span className="text-xs text-[var(--color-text-muted)]">
-                      <Users size={11} className="inline mr-0.5" /> {group.memberCount || group._count?.members || 0} members
-                    </span>
-                    {group.description && (
-                      <span className="text-xs text-[var(--color-text-muted)] truncate hidden md:inline">
-                        {group.description}
-                      </span>
-                    )}
-                  </div>
                 </div>
 
-                {/* Unread badge */}
-                {group.unreadCount > 0 && (
-                  <span className="bg-[var(--color-danger)] text-white text-xs rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 font-bold">
-                    {group.unreadCount > 99 ? '99+' : group.unreadCount}
-                  </span>
-                )}
-
-                {/* Needs key restore badge */}
-                {group.needsKeyRestore && (
-                  <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border border-[var(--color-warning)] text-[var(--color-warning)]"
-                    title="Your anonymous identity key for this group was removed from this device. Click to restore it."
+                <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                  {aliasGroupId === inv.groupId && (
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Choose anonymous alias..."
+                      value={aliasInput}
+                      maxLength={32}
+                      onChange={e => setAliasInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') acceptAnonWithAlias(inv.groupId, inv.id);
+                      }}
+                      className="matte-input text-xs py-1.5 w-44"
+                    />
+                  )}
+                  <button
+                    onClick={() => handleAcceptInvite(inv.groupId, inv.id)}
+                    disabled={loadingAliasInvite === inv.id}
+                    className="btn btn-primary text-xs py-1.5 px-3.5 shadow-xs"
                   >
-                    <KeyRound size={12} /> Restore key
-                  </span>
-                )}
+                    {loadingAliasInvite === inv.id ? 'Joining...' : 'Accept'}
+                  </button>
+                  <button
+                    onClick={() => handleRejectInvite(inv.groupId, inv.id)}
+                    className="btn btn-secondary text-xs py-1.5 px-3"
+                  >
+                    Decline
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-                {/* Ring / Anon badge */}
+      {/* Groups List */}
+      {loading ? (
+        <div className="py-16 flex justify-center items-center gap-2 text-xs text-[var(--color-text-muted)]">
+          <Loader2 size={18} className="animate-spin text-[var(--color-accent)]" />
+          <span>Synchronizing campus channels...</span>
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="glass-card p-12 text-center border border-[var(--color-border)]">
+          <MessagesSquare size={36} className="mx-auto text-[var(--color-text-muted)] mb-3 opacity-50" />
+          <h3 className="text-base font-bold font-display text-[var(--color-text-primary)]">No Groups Found</h3>
+          <p className="text-xs text-[var(--color-text-secondary)] mt-1 max-w-sm mx-auto mb-5">
+            You are not enrolled in any groups yet. Create a group or join via an invite link.
+          </p>
+          <button onClick={() => setShowCreate(true)} className="btn btn-primary text-xs py-2 px-4 shadow-sm">
+            Create First Group
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredGroups.map((group) => (
+            <Link
+              key={group.id}
+              to={`/groups/${group.id}`}
+              className="glass-card p-4 px-5 flex items-center gap-4 border border-[var(--color-border)] hover-lift transition-all group"
+            >
+              {/* Group Avatar */}
+              {group.avatarUrl ? (
+                <img src={resolveAsset(group.avatarUrl)} alt="" className="w-12 h-12 rounded-2xl object-cover flex-shrink-0 ring-1 ring-[var(--color-border)] shadow-xs" />
+              ) : (
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[var(--palette-teal)] to-[var(--palette-plum)] flex items-center justify-center text-white text-base font-bold flex-shrink-0 shadow-xs">
+                  {group.displayName?.charAt(0) || group.name?.charAt(0)?.toUpperCase() || '#'}
+                </div>
+              )}
+
+              {/* Group Details */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm text-[var(--color-text-primary)] group-hover:text-[var(--color-accent)] transition-colors truncate">
+                    {group.displayName || group.name}
+                  </h3>
+                  {group.unreadCount > 0 && (
+                    <span className="bg-[var(--color-danger)] text-white text-[10px] rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 font-bold">
+                      {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 mt-1 text-xs text-[var(--color-text-muted)]">
+                  <span className="font-semibold">{TYPE_ICONS[group.type] || '✨'} {TYPE_LABELS[group.type] || group.type}</span>
+                  <span>•</span>
+                  <span><Users size={12} className="inline mr-1" />{group.memberCount || group._count?.members || 0} members</span>
+                  {group.description && (
+                    <span className="hidden md:inline truncate max-w-xs">• {group.description}</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Needs key restore badge */}
+              {group.needsKeyRestore && (
+                <span
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border border-[var(--color-warning)] text-[var(--color-warning)] bg-[var(--color-warning)]/10 flex-shrink-0"
+                  title="Your cryptographic alias key was not detected on this device. Click to restore."
+                >
+                  <KeyRound size={12} />
+                  <span>Restore Key</span>
+                </span>
+              )}
+
+              {/* Ring / Anon Badge */}
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {group.isAnonymous ? (
-                  <span className="px-2.5 py-1 rounded-full text-xs bg-[var(--color-bg-secondary)] border border-[var(--color-accent)] text-[var(--color-accent)]">
-                    {group.myIdentity?.alias ? `Anon · ${group.myIdentity.alias}${group.myIdentity.aliasTag ? '#' + group.myIdentity.aliasTag : ''}` : 'Anonymous'}
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-[var(--palette-rose)]/20 text-[var(--palette-plum)] border border-[var(--palette-rose)]/30">
+                    {group.myIdentity?.alias ? `🎭 ${group.myIdentity.alias}${group.myIdentity.aliasTag ? '#' + group.myIdentity.aliasTag : ''}` : '🎭 Anonymous'}
                   </span>
                 ) : group.userRing !== null && group.userRing !== undefined ? (
-                  <span className={`px-2.5 py-1 rounded-full text-xs text-white ring-badge-${Math.min(group.userRing ?? 3, 3)}`}>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ring-badge-${Math.min(group.userRing ?? 3, 3)}`}>
                     Ring {group.userRing}
                   </span>
                 ) : isAdmin ? (
-                  <span className="px-2.5 py-1 rounded-full text-xs text-white bg-[var(--color-accent)]">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold ring-badge-0">
                     Admin
                   </span>
                 ) : null}
 
-                {/* Delete group (creator or admin) */}
+                {/* Delete button (creators and admins) */}
                 {canDeleteGroup(group) && (
                   <button
                     onClick={(e) => handleDeleteGroup(e, group)}
                     title="Delete group"
-                    className="p-2 rounded-lg text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors flex-shrink-0"
+                    className="p-2 rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={15} />
                   </button>
                 )}
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
 
+      {/* Modals */}
       {showCreate && (
         <CreateGroupModal
           onClose={() => setShowCreate(false)}
@@ -353,13 +384,14 @@ export default function GroupsPage() {
           }}
         />
       )}
-    {pendingAnon && (
+
+      {pendingAnon && (
         <BackupKeyModal
-          groupName={pendingAnon.identity.alias ? `your anonymous group` : 'this group'}
+          groupName={pendingAnon.identity?.alias ? `your anonymous space` : 'this channel'}
           identity={pendingAnon.identity}
           onDone={handlePendingAnonDone}
         />
       )}
-    </>
+    </div>
   );
 }

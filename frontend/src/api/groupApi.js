@@ -1,12 +1,7 @@
-/**
- * Group API — Centralized group, message, invite, and read receipt API calls.
- */
-
 import client, { withAnonIdentity, anonSessionsHeaderValue } from './client';
 
 export const groupApi = {
   // Groups
-  // Anonymous memberships are discovered from the sessions the client holds.
   listGroups: () => {
     const headers = anonSessionsHeaderValue();
     return client.get('/groups', headers ? { headers: { 'X-Anon-Sessions': headers } } : undefined);
@@ -86,15 +81,16 @@ export const groupApi = {
   getUnreadCount: (groupId) =>
     client.get(`/groups/${groupId}/unread`, withAnonIdentity({}, groupId)),
 
-  // Leave & Delete
+  // Leave & Delete & Transfer
   leaveGroup: (groupId) => client.delete(`/groups/${groupId}/leave`, withAnonIdentity({}, groupId)),
   deleteGroup: (groupId) => client.delete(`/groups/${groupId}`, withAnonIdentity({}, groupId)),
+  transferOwnership: (groupId, targetUserId) => client.post(`/groups/${groupId}/transfer`, { targetUserId }),
 
   // Ring Configuration
   updateRingConfig: (groupId, config) =>
     client.patch(`/groups/${groupId}/rings`, config),
 
-  // ---- Anonymous group identities + moderation ----
+  // Anonymous group identities & moderation
   claimAnonIdentity: (groupId, alias, avatarUrl) =>
     client.post(`/groups/${groupId}/anons/claim`, { alias, avatarUrl }),
   getAnonMe: (groupId) =>
@@ -114,8 +110,11 @@ export const groupApi = {
   leaveAnonIdentity: (groupId) =>
     client.post(`/groups/${groupId}/anons/leave`, {}, withAnonIdentity({}, groupId)),
 
-  // ---- Key restore (no identity header needed) ----
+  // Key restore & Token Join
+  joinGroup: (token, alias, avatarUrl) => client.post(`/groups/join/${token}`, { alias, avatarUrl }),
   anonEnterCheck: (groupId) => client.get(`/groups/${groupId}/anons/enter`),
   restoreAnonIdentity: (groupId, key) =>
     client.post(`/groups/${groupId}/anons/restore`, { key }),
 };
+
+export default groupApi;

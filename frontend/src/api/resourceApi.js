@@ -27,3 +27,5 @@ export const resourceApi = {
     return api.delete(`/resources/${id}`);
   }
 };
+
+export default resourceApi;

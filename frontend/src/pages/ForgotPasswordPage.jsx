@@ -1,11 +1,7 @@
-/**
- * ForgotPasswordPage — Request a password reset link.
- */
-
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Mail, Send, ArrowLeft, Loader2, MailCheck } from 'lucide-react';
+import { Mail, Send, ArrowLeft, Loader2, MailCheck, AlertCircle } from 'lucide-react';
 import { authApi } from '../api/authApi';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../context/ThemeContext';
@@ -14,7 +10,6 @@ import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
-// Format a countdown seconds value for the button label
 const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}s`);
 
 export default function ForgotPasswordPage() {
@@ -25,9 +20,9 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
-  const [cooldown, setCooldown] = useState(0); // seconds until resend allowed
-  const [cooldownEmail, setCooldownEmail] = useState(''); // email the countdown applies to
-  const [limit, setLimit] = useState(null); // { remaining, maxSends } from backend
+  const [cooldown, setCooldown] = useState(0);
+  const [cooldownEmail, setCooldownEmail] = useState('');
+  const [limit, setLimit] = useState(null);
   const cooldownRef = useRef(null);
 
   const startCooldown = useCallback((seconds = 60) => {
@@ -38,7 +33,6 @@ export default function ForgotPasswordPage() {
     }, 1000);
   }, []);
 
-  // Stop the countdown timer when it reaches zero
   useEffect(() => {
     if (cooldown === 0 && cooldownRef.current) {
       clearInterval(cooldownRef.current);
@@ -46,11 +40,8 @@ export default function ForgotPasswordPage() {
     }
   }, [cooldown]);
 
-  // Clear the cooldown timer on unmount
   useEffect(() => () => clearInterval(cooldownRef.current), []);
 
-  // Fetch the backend's per-account reset limit and seed the countdown with
-  // the accurate server-side wait when sends are exhausted.
   const fetchStatus = useCallback(
     async (emailAddress) => {
       try {
@@ -90,13 +81,11 @@ export default function ForgotPasswordPage() {
     try {
       await authApi.forgotPassword(normalized);
       setSubmitted(true);
-      // 60s client guard immediately; fetchStatus replaces it with the accurate
-      // server-side wait when the per-account quota is exhausted.
       startCooldown(60);
       fetchStatus(normalized);
     } catch (err) {
       setError(err.response?.data?.error?.message || 'Something went wrong. Please try again.');
-      fetchStatus(normalized); // seed the accurate server-side wait if rate-limited
+      fetchStatus(normalized);
     } finally {
       setLoading(false);
     }
@@ -104,8 +93,8 @@ export default function ForgotPasswordPage() {
 
   return (
     <AuthShell
-      title={submitted ? 'Check your email' : 'Forgot password'}
-      subtitle={submitted ? undefined : 'We&apos;ll send you a link to reset your password.'}
+      title={submitted ? 'Check your inbox' : 'Reset Password'}
+      subtitle={submitted ? undefined : 'We will send a password reset token to your verified college email.'}
       footer={
         <Link to="/login" className="inline-flex items-center gap-1.5 text-[var(--color-accent)] font-semibold hover:underline">
           <ArrowLeft size={14} /> Back to Login
@@ -113,20 +102,25 @@ export default function ForgotPasswordPage() {
       }
     >
       {submitted ? (
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center py-4 space-y-4">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-[var(--color-success)]/10 border border-[var(--color-success)]/25 flex items-center justify-center">
-            <MailCheck size={30} className="text-[var(--color-success)]" />
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-center py-6 space-y-4">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-[var(--color-success)]/15 border border-[var(--color-success)]/30 flex items-center justify-center text-[var(--color-success)]">
+            <MailCheck size={32} />
           </div>
-          <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-            If an account exists for <strong className="text-[var(--color-text-primary)]">{email}</strong>,
-            we&apos;ve sent a password reset link.
+          <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+            If an account is registered with <strong className="text-[var(--color-text-primary)]">{email}</strong>,
+            we have dispatched a password reset link. Please check your spam folder if not received.
           </p>
         </motion.div>
       ) : (
         <>
           {error && (
-            <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="alert alert-danger mb-5">
-              {error}
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-5 p-3.5 rounded-2xl bg-[var(--color-danger)]/12 border border-[var(--color-danger)]/25 text-[var(--color-danger)] text-xs font-semibold flex items-center gap-2"
+            >
+              <AlertCircle size={16} className="flex-shrink-0" />
+              <span>{error}</span>
             </motion.div>
           )}
 
@@ -134,7 +128,7 @@ export default function ForgotPasswordPage() {
             <div className="mb-6">
               <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
                 <div className="flex justify-center">
-                  <div className="rounded-xl overflow-hidden shadow-sm">
+                  <div className="rounded-2xl overflow-hidden shadow-sm border border-[var(--color-border)]">
                     <GoogleLogin
                       onSuccess={handleGoogleSuccess}
                       onError={() => setError('Google login failed.')}
@@ -150,7 +144,9 @@ export default function ForgotPasswordPage() {
               </GoogleOAuthProvider>
               <div className="flex items-center gap-3 my-6">
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
-                <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">or reset with email</span>
+                <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">
+                  or reset with email
+                </span>
                 <div className="flex-1 h-px bg-[var(--color-border)]" />
               </div>
             </div>
@@ -158,8 +154,8 @@ export default function ForgotPasswordPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="forgot-email" className="block text-sm text-[var(--color-text-secondary)] mb-1.5 font-medium">
-                Email
+              <label htmlFor="forgot-email" className="block text-xs text-[var(--color-text-secondary)] mb-1.5 font-bold uppercase tracking-wider">
+                College Email Address
               </label>
               <div className="relative">
                 <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
@@ -170,7 +166,6 @@ export default function ForgotPasswordPage() {
                   onChange={(e) => {
                     const val = e.target.value;
                     setEmail(val);
-                    // A different address has its own limit — drop stale state
                     if (cooldownEmail && val.trim().toLowerCase() !== cooldownEmail) {
                       clearInterval(cooldownRef.current);
                       cooldownRef.current = null;
@@ -182,14 +177,14 @@ export default function ForgotPasswordPage() {
                   autoComplete="email"
                   required
                   autoFocus
-                  className="pl-10"
+                  className="matte-input pl-10"
                 />
               </div>
             </div>
 
-            <button type="submit" disabled={loading || cooldown > 0} className="btn btn-primary w-full">
+            <button type="submit" disabled={loading || cooldown > 0} className="btn btn-primary w-full py-3 mt-2 shadow-md">
               {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-              {loading ? 'Sending...' : cooldown > 0 ? `Try again in ${formatCooldown(cooldown)}` : 'Send Reset Link'}
+              <span>{loading ? 'Sending link...' : cooldown > 0 ? `Try again in ${formatCooldown(cooldown)}` : 'Send Reset Link'}</span>
             </button>
 
             {limit && limit.remaining < limit.maxSends && (

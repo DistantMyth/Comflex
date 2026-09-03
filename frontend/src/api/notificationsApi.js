@@ -1,7 +1,3 @@
-/**
- * Notifications API — notification bell data.
- */
-
 import client from './client';
 
 export const notificationsApi = {
@@ -20,3 +16,5 @@ export const notificationsApi = {
   markAllRead: () =>
     client.post('/notifications/read-all'),
 };
+
+export default notificationsApi;

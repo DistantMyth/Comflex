@@ -1,22 +1,11 @@
 /**
  * App — Root component with React Router setup + animated page transitions.
- *
- * Routes:
- *   /login          → LoginPage (public)
- *   /register       → RegisterPage (public, gated by system config)
- *   /set-password   → SetPasswordPage (authenticated, post-Google flow)
- *   /setup          → SetupPage (admin only, first boot)
- *   /profile        → ProfilePage (authenticated)
- *   /admin          → AdminDashboard (Ring 0 only)
- *   /groups         → GroupsPage (authenticated)
- *   /friends        → FriendsPage (authenticated)
- *   /messages       → MessagesPage (authenticated)
- *   /               → Homepage (public landing)
  */
 
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
+import { ThemeProvider } from './context/ThemeContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import PageTransition from './components/PageTransition';
@@ -44,7 +33,6 @@ import FloatingChatbot from './components/FloatingChatbot';
 import Homepage from './pages/Homepage';
 import ErrorBoundary from './components/ErrorBoundary';
 
-// Public pages get a subtle enter animation.
 const tr = (el) => <PageTransition>{el}</PageTransition>;
 
 function AppRoutes() {
@@ -57,13 +45,12 @@ function AppRoutes() {
       <Route path="/reset-password" element={tr(<ResetPasswordPage />)} />
       <Route path="/verify-email" element={tr(<VerifyEmailPage />)} />
 
-      {/* Standalone guarded pages (own full-screen shell, no sidebar) */}
+      {/* Standalone guarded pages */}
       <Route path="/set-password" element={tr(<ProtectedRoute><SetPasswordPage /></ProtectedRoute>)} />
       <Route path="/setup" element={tr(<ProtectedRoute maxRing={0}><SetupPage /></ProtectedRoute>)} />
       <Route path="/join/:token" element={tr(<ProtectedRoute><JoinGroupPage /></ProtectedRoute>)} />
 
-      {/* Authenticated app shell — Layout persists across all of these routes,
-          so the sidebar/nav never remounts when switching between pages. */}
+      {/* Authenticated app shell */}
       <Route element={<ProtectedRoute><Layout><Outlet /></Layout></ProtectedRoute>}>
         <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute maxRing={0}><AdminDashboard /></ProtectedRoute>} />
@@ -91,12 +78,14 @@ export default function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <AuthProvider>
-          <SocketProvider>
-            <AppRoutes />
-            <FloatingChatbot />
-          </SocketProvider>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <SocketProvider>
+              <AppRoutes />
+              <FloatingChatbot />
+            </SocketProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );

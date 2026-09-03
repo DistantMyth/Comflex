@@ -1,9 +1,9 @@
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import react from 'eslint-plugin-react'
-import { defineConfig, globalIgnores } from 'eslint/config'
+import js from '@eslint/js';
+import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
+import react from 'eslint-plugin-react';
+import { defineConfig, globalIgnores } from 'eslint/config';
 
 export default defineConfig([
   globalIgnores(['dist', 'public']),
@@ -29,11 +29,9 @@ export default defineConfig([
     },
     rules: {
       'react/jsx-uses-vars': 'error',
-      // react-hooks v7's compiler-derived rule flags standard fetch-on-mount
-      // and countdown patterns (setLoading/setTimeLeft in effect) that are
-      // intentional here; keep it off to avoid noise on accepted patterns.
       'react-hooks/set-state-in-effect': 'off',
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'no-unused-vars': ['warn', { varsIgnorePattern: '^[A-Z_]' }],
     },
   },
   {
@@ -42,4 +40,4 @@ export default defineConfig([
       globals: globals.node,
     },
   },
-])
+]);

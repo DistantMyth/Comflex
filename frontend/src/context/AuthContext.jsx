@@ -1,12 +1,5 @@
 /**
  * Auth Context — Global authentication state provider.
- *
- * Provides: user, token, isAuthenticated, isAdmin, login, logout,
- * register, googleLogin, setPassword, setUsername.
- *
- * Token handling changed to match the hardened backend:
- * - Access token is held in memory via the client module (no localStorage)
- * - Refresh token lives in an httpOnly cookie set by the backend
  */
 
 import { createContext, useState, useEffect, useCallback } from 'react';
@@ -15,7 +8,6 @@ import { userApi } from '../api/userApi';
 import { adminApi } from '../api/adminApi';
 import { getAccessToken, setAccessToken, clearAccessToken, refreshAccessToken } from '../api/client';
 
-// eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
@@ -23,18 +15,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [systemStatus, setSystemStatus] = useState(null);
 
-  // Check if user is currently authenticated (on mount)
   useEffect(() => {
     const init = async () => {
-      // 1. Fetch system status (non-fatal if it fails)
       try {
         const statusRes = await adminApi.getSystemStatus();
-        setSystemStatus(statusRes.data.data);
+        setSystemStatus(statusRes.data?.data || null);
       } catch {
         // Non-critical: system status not loaded
       }
 
-      // 2. Authenticate session
       try {
         let token = getAccessToken();
         if (!token) {
@@ -50,7 +39,6 @@ export function AuthProvider({ children }) {
           setUser(profileRes.data.data);
         }
       } catch {
-        // Token invalid or expired — clear it
         clearAccessToken();
         setUser(null);
       } finally {
@@ -86,7 +74,6 @@ export function AuthProvider({ children }) {
 
   const setPasswordFn = useCallback(async (newPassword, currentPassword) => {
     const res = await authApi.setPassword(newPassword, currentPassword);
-    // Refresh the user profile to get updated hasPassword
     const profileRes = await userApi.getProfile();
     setUser(profileRes.data.data);
     return res.data.data;
@@ -94,7 +81,6 @@ export function AuthProvider({ children }) {
 
   const setUsernameFn = useCallback(async (username) => {
     const res = await authApi.setUsername(username);
-    // Refresh profile
     const profileRes = await userApi.getProfile();
     setUser(profileRes.data.data);
     return res.data.data;
@@ -138,3 +124,5 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   );
 }
+
+export default AuthContext;

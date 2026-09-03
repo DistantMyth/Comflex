@@ -1,7 +1,3 @@
-/**
- * Friend API — Centralized friend-related API calls.
- */
-
 import client from './client';
 
 export const friendApi = {
@@ -26,3 +22,5 @@ export const friendApi = {
   remove: (friendshipId) =>
     client.delete(`/friends/${friendshipId}`),
 };
+
+export default friendApi;

@@ -31,5 +31,12 @@ export const eventApi = {
   listRewardGrants: (eventId) => client.get(`/events/${eventId}/rewards`),
   createInviteLink: (eventId) => client.post(`/events/${eventId}/invite-link`),
   getEventInviteInfo: (token) => client.get(`/events/invite/${token}`),
-  joinEventViaInvite: (token) => client.post(`/events/invite/${token}/join`)
+  joinEventViaInvite: (token) => client.post(`/events/invite/${token}/join`),
+  verifyTeam: (eventId, teamId) => client.post(`/events/${eventId}/teams/${teamId}/verify`),
+  leaveTeam: (eventId, teamId) => client.post(`/events/${eventId}/teams/${teamId}/leave`),
+  proposeSwap: (eventId, teamId, targetTeamId) => client.post(`/events/${eventId}/teams/${teamId}/propose-swap`, { targetTeamId }),
+  acceptSwap: (eventId, teamId, swapId) => client.post(`/events/${eventId}/teams/${teamId}/accept-swap`, { swapId }),
+  rejectSwap: (eventId, teamId, swapId) => client.post(`/events/${eventId}/teams/${teamId}/reject-swap`, { swapId }),
 };
+
+export default eventApi;

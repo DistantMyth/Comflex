@@ -1,7 +1,3 @@
-/**
- * useSocket — Consumes SocketContext with a safe fallback when outside provider.
- */
-
 import { useContext } from 'react';
 import { SocketContext } from '../context/SocketContext';
 

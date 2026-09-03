@@ -1,23 +1,13 @@
-/**
- * PageTransition — Animated wrapper for routed pages with reduced motion support.
- * Fades content in on mount / route change.
- */
-
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion } from 'framer-motion';
 
 export default function PageTransition({ children }) {
-  const shouldReduceMotion = useReducedMotion();
-
-  if (shouldReduceMotion) {
-    return <div style={{ height: '100%' }}>{children}</div>;
-  }
-
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
-      style={{ height: '100%' }}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+      className="w-full"
     >
       {children}
     </motion.div>

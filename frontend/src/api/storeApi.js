@@ -30,3 +30,5 @@ export const storeApi = {
   bindWallet: (data) => api.post('/store/wallet', data),
   buyCredits: (data) => api.post('/store/buy-credits', data)
 };
+
+export default storeApi;

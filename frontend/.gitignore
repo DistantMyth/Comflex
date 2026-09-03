@@ -1,4 +1,4 @@
-# Logs
+﻿# Logs
 logs
 *.log
 npm-debug.log*
@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Environment Variables
+# Environment
 .env
-.env.*.local
-.env.local
+.env.*
+!.env.example

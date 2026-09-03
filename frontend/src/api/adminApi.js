@@ -1,8 +1,3 @@
-/**
- * Admin API — Institution config, cohort config, auto-join rules,
- * group management, user management, and permissions.
- */
-
 import client from './client';
 
 export const adminApi = {
@@ -34,7 +29,7 @@ export const adminApi = {
   previewAutoJoinRules: (email) =>
     client.post('/admin/auto-join-rules/preview', { email }),
 
-  // Groups (admin management — all platform groups)
+  // Groups
   listAllGroups: () =>
     client.get('/admin/groups'),
   createGroup: (data) =>
@@ -70,3 +65,5 @@ export const adminApi = {
   clearDatabase: (adminPassword) =>
     client.delete('/admin/database/clear', { data: { adminPassword } }),
 };
+
+export default adminApi;

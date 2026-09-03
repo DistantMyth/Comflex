@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import resolveAsset from '../utils/resolveAsset';
 
-export default function Avatar({ src, alt, name, className, fallbackChar = '?' }) {
+export default function Avatar({ src, alt, name, className = 'w-10 h-10 rounded-full', fallbackChar = '?' }) {
   const [error, setError] = useState(false);
 
   useEffect(() => {
@@ -13,7 +13,9 @@ export default function Avatar({ src, alt, name, className, fallbackChar = '?' }
   if (!resolved || error) {
     const initial = name?.trim().charAt(0)?.toUpperCase() || fallbackChar;
     return (
-      <div className={`flex items-center justify-center avatar-gradient text-white font-bold overflow-hidden flex-shrink-0 ${className}`}>
+      <div
+        className={`flex items-center justify-center font-bold overflow-hidden flex-shrink-0 text-white select-none border border-[var(--color-border)] shadow-sm bg-gradient-to-br from-[var(--palette-teal)] to-[var(--palette-plum)] ${className}`}
+      >
         {initial}
       </div>
     );
@@ -22,8 +24,8 @@ export default function Avatar({ src, alt, name, className, fallbackChar = '?' }
   return (
     <img
       src={resolved}
-      alt={alt || ''}
-      className={`flex-shrink-0 ${className}`}
+      alt={alt || name || 'Avatar'}
+      className={`flex-shrink-0 object-cover border border-[var(--color-border)] ${className}`}
       onError={() => setError(true)}
       loading="lazy"
     />

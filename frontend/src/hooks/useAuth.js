@@ -1,7 +1,3 @@
-/**
- * useAuth Hook — Convenience wrapper for AuthContext.
- */
-
 import { useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 
@@ -12,3 +8,5 @@ export function useAuth() {
   }
   return context;
 }
+
+export default useAuth;

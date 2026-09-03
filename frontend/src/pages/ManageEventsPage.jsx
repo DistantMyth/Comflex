@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  CalendarDays, Plus, Trash2, Link as LinkIcon, Check, Copy,
+  Users, Clock, ShieldCheck, AlertCircle, Loader2, ArrowRight
+} from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
-import { Link } from 'react-router-dom';
 
 function InviteLinkButton({ eventId }) {
   const [copied, setCopied] = useState(false);
@@ -11,23 +16,28 @@ function InviteLinkButton({ eventId }) {
     setError('');
     try {
       const res = await eventApi.createInviteLink(eventId);
-      const token = res.data.data.token;
+      const token = res.data?.data?.token;
       const url = `${window.location.origin}/events/invite/${token}`;
       await navigator.clipboard.writeText(url);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      setError(err.response?.data?.error?.message || 'Failed to create invite link.');
+      setError(err.response?.data?.error?.message || 'Failed to create link.');
     }
   };
 
   return (
-    <span className="flex flex-col items-end">
-      <button onClick={handleCopy} className="btn btn-secondary text-xs px-3 py-1.5" title="Copy shareable invite link (valid 7 days)">
-        {copied ? '✓ Copied' : 'Copy Invite Link'}
+    <div className="flex flex-col items-end">
+      <button
+        onClick={handleCopy}
+        className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 shadow-xs"
+        title="Copy shareable invite link"
+      >
+        {copied ? <Check size={13} className="text-[var(--color-success)]" /> : <LinkIcon size={13} />}
+        <span>{copied ? 'Copied' : 'Invite Link'}</span>
       </button>
       {error && <span className="text-[10px] text-[var(--color-danger)] mt-1">{error}</span>}
-    </span>
+    </div>
   );
 }
 
@@ -39,7 +49,6 @@ export default function ManageEventsPage() {
   const isAdminUser = user?.globalRing === 0;
   const mayTargetGroups = isAdminUser || user?.canCreateEvents === true;
 
-  // Creation Form State
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
@@ -59,28 +68,20 @@ export default function ManageEventsPage() {
     allowedCohorts: '',
     blockedCohorts: '',
     allowedUserIds: '',
-    blockedUserIds: ''
+    blockedUserIds: '',
   });
   const [message, setMessage] = useState('');
 
   const fetchEvents = () => {
     setLoading(true);
     eventApi.listManagedEvents()
-      .then(res => setEvents(res.data.data))
+      .then(res => setManagedEvents(res.data?.data || []))
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
-  };
-
-  const setEvents = (data) => {
-    setManagedEvents(data);
   };
 
   useEffect(() => {
-    setLoading(true);
-    eventApi.listManagedEvents()
-      .then(res => setManagedEvents(res.data.data))
-      .catch(err => console.error(err))
-      .finally(() => setLoading(false));
+    fetchEvents();
   }, []);
 
   const handleCreateEvent = async (e) => {
@@ -101,20 +102,17 @@ export default function ManageEventsPage() {
         blockedCohorts: form.blockedCohorts ? form.blockedCohorts.split(',').map(t => t.trim()).filter(Boolean) : [],
         allowedUserIds: form.allowedUserIds ? form.allowedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
         blockedUserIds: form.blockedUserIds ? form.blockedUserIds.split(',').map(t => t.trim()).filter(Boolean) : [],
-        startDate: new Date(form.startDate).toISOString()
+        startDate: new Date(form.startDate).toISOString(),
       };
 
       await eventApi.createEvent(payload);
       setMessage('Event successfully created!');
       setShowForm(false);
-
-      // Reset form
       setForm({
         title: '', description: '', startDate: '', durationHours: 0, durationMinutes: 0, taskViewMode: 'all', category: '', targetTags: '',
         isTeamEvent: false, minTeamSize: 1, maxTeamSize: 4, autoStart: true,
-        inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: ''
+        inviteOnly: false, allowedCohorts: '', blockedCohorts: '', allowedUserIds: '', blockedUserIds: '',
       });
-
       fetchEvents();
     } catch (err) {
       setMessage(err.response?.data?.error?.message || 'Failed to create event.');
@@ -134,40 +132,78 @@ export default function ManageEventsPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex justify-between items-center bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-sm">
-          <div>
-            <h2 className="text-2xl font-bold gradient-text">Manage Events</h2>
-            <p className="text-[var(--color-text-secondary)] mt-1">
-              Create, oversee, and manage permissions for events.
-            </p>
-          </div>
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="btn btn-primary"
-          >
-            {showForm ? 'Cancel' : '+ Create Event'}
-          </button>
+    <div className="max-w-5xl mx-auto pb-12">
+      {/* Top Banner */}
+      <div className="glass-card p-6 border border-[var(--color-border)] mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold font-display text-[var(--color-text-primary)]">Manage Campus Events</h1>
+          <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Create, oversee challenges, grade task submissions, and distribute rewards</p>
         </div>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="btn btn-primary text-xs py-2 px-4 shadow-sm flex items-center gap-1.5"
+        >
+          <Plus size={15} />
+          <span>{showForm ? 'Cancel Creation' : 'Create Event'}</span>
+        </button>
+      </div>
 
-        {/* Create Form */}
+      {/* Creation Modal / Form */}
+      <AnimatePresence>
         {showForm && (
-          <form onSubmit={handleCreateEvent} className="bg-[var(--color-bg-primary)] border border-[var(--color-border)] rounded-2xl p-6 shadow-lg">
-            <h3 className="text-lg font-bold mb-4">Create New Event</h3>
-            {message && <div className="text-sm text-[var(--color-warning)] mb-4">{message}</div>}
+          <motion.form
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            onSubmit={handleCreateEvent}
+            className="glass-card p-6 sm:p-8 border border-[var(--color-border)] shadow-xl mb-6 space-y-4"
+          >
+            <h3 className="text-base font-bold font-display text-[var(--color-text-primary)] mb-2">Create New Event</h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Title *</label>
-                <input required type="text" value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Cybersec Capture The Flag" className="w-full text-sm" />
+            {message && (
+              <div className="p-3 rounded-2xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-xs font-semibold">
+                {message}
               </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                 <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Start Date & Time *</label>
-                 <input required type="datetime-local" value={form.startDate} onChange={e => setForm({...form, startDate: e.target.value})} className="w-full text-sm" />
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Event Title *
+                </label>
+                <input
+                  required
+                  type="text"
+                  value={form.title}
+                  onChange={e => setForm({ ...form, title: e.target.value })}
+                  placeholder="e.g. Winter Hackathon 2026"
+                  className="matte-input text-xs"
+                />
               </div>
+
               <div>
-                <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Category *</label>
-                <select required value={form.category} onChange={e => setForm({...form, category: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Start Date & Time *
+                </label>
+                <input
+                  required
+                  type="datetime-local"
+                  value={form.startDate}
+                  onChange={e => setForm({ ...form, startDate: e.target.value })}
+                  className="matte-input text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Category *
+                </label>
+                <select
+                  required
+                  value={form.category}
+                  onChange={e => setForm({ ...form, category: e.target.value })}
+                  className="matte-input text-xs"
+                >
                   <option value="">Select Category...</option>
                   <option value="cybersec">Cyber Security</option>
                   <option value="app">App Development</option>
@@ -177,160 +213,191 @@ export default function ManageEventsPage() {
                   <option value="other">Other</option>
                 </select>
               </div>
+
               <div>
-                <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Target Tags (Comma separated)</label>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Target Cohort Tags
+                </label>
                 {mayTargetGroups ? (
-                  <input type="text" value={form.targetTags} onChange={e => setForm({...form, targetTags: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
+                  <input
+                    type="text"
+                    value={form.targetTags}
+                    onChange={e => setForm({ ...form, targetTags: e.target.value })}
+                    placeholder="e.g. cohort-2026, branch-cs"
+                    className="matte-input text-xs"
+                  />
                 ) : (
-                  <div className="text-xs text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-lg px-3 py-2">
-                    🔒 Cohort targeting requires admin permission. Your events are invite-only and spread via the invite link, team invitations and friends.
-                  </div>
+                  <p className="text-[11px] text-[var(--color-warning)] p-2 rounded-xl bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20">
+                    Cohort auto-enrollment requires admin elevation. Events will be distributed via shareable invite links.
+                  </p>
                 )}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Duration</label>
-                <div className="flex gap-1">
-                  <input type="number" min="0" value={form.durationHours} onChange={e => setForm({...form, durationHours: Number(e.target.value)})} className="w-1/2 text-sm text-center px-1" placeholder="Hrs" title="Hours" />
-                  <span className="self-center">:</span>
-                  <input type="number" min="0" max="59" value={form.durationMinutes} onChange={e => setForm({...form, durationMinutes: Number(e.target.value)})} className="w-1/2 text-sm text-center px-1" placeholder="Min" title="Minutes" />
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Duration (Hours : Minutes)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.durationHours}
+                    onChange={e => setForm({ ...form, durationHours: Number(e.target.value) })}
+                    className="matte-input text-xs flex-1 text-center"
+                    placeholder="Hours"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    value={form.durationMinutes}
+                    onChange={e => setForm({ ...form, durationMinutes: Number(e.target.value) })}
+                    className="matte-input text-xs flex-1 text-center"
+                    placeholder="Minutes"
+                  />
                 </div>
               </div>
+
               <div>
-                <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Task View Mode</label>
-                <select value={form.taskViewMode} onChange={e => setForm({...form, taskViewMode: e.target.value})} className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-2 py-2">
-                  <option value="all">All At Once</option>
-                  <option value="dynamic">Dynamic Unlocking</option>
+                <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                  Task View Mode
+                </label>
+                <select
+                  value={form.taskViewMode}
+                  onChange={e => setForm({ ...form, taskViewMode: e.target.value })}
+                  className="matte-input text-xs"
+                >
+                  <option value="all">All Tasks Visible At Once</option>
+                  <option value="dynamic">Dynamic Sequential Unlocking</option>
                 </select>
               </div>
             </div>
 
-            <div className="mb-4">
-               <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Description</label>
-               <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Event details..." className="w-full text-sm bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-lg px-3 py-2 min-h-[80px]" />
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+                Description
+              </label>
+              <textarea
+                value={form.description}
+                onChange={e => setForm({ ...form, description: e.target.value })}
+                placeholder="Guidelines, rules, and overview..."
+                rows={3}
+                className="matte-input text-xs resize-none"
+              />
             </div>
 
-            <div className="flex items-center gap-6 mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
-               <label className="flex items-center gap-2 text-sm font-medium">
-                  <input type="checkbox" checked={form.isTeamEvent} onChange={e => setForm({...form, isTeamEvent: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
-                  Is Team Event?
-               </label>
+            <div className="flex items-center gap-6 p-4 rounded-2xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] flex-wrap">
+              <label className="flex items-center gap-2 text-xs font-bold text-[var(--color-text-primary)]">
+                <input
+                  type="checkbox"
+                  checked={form.isTeamEvent}
+                  onChange={e => setForm({ ...form, isTeamEvent: e.target.checked })}
+                />
+                Team Event Format
+              </label>
 
-               {form.isTeamEvent && (
-                 <>
-                   <div className="flex items-center gap-2">
-                     <label className="text-sm text-[var(--color-text-secondary)]">Min Size:</label>
-                     <input type="number" min="1" value={form.minTeamSize} onChange={e => setForm({...form, minTeamSize: Number(e.target.value)})} className="w-16 text-sm py-1" />
-                   </div>
-                   <div className="flex items-center gap-2">
-                     <label className="text-sm text-[var(--color-text-secondary)]">Max Size:</label>
-                     <input type="number" min="1" value={form.maxTeamSize} onChange={e => setForm({...form, maxTeamSize: Number(e.target.value)})} className="w-16 text-sm py-1" />
-                   </div>
-                 </>
-               )}
-            </div>
-
-            <div className="flex items-center gap-6 mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
-               <label className="flex items-center gap-2 text-sm font-medium">
-                  <input type="checkbox" checked={form.autoStart} onChange={e => setForm({...form, autoStart: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
-                  Auto-start event when Start Date arrives
-               </label>
-               <span className="text-xs text-[var(--color-text-secondary)]">If disabled, you will need to manually click 'Start Event' on the event page.</span>
-            </div>
-
-            {/* Participation policy */}
-            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl space-y-4">
-              <h4 className="text-sm font-bold">Participation Policy</h4>
-              {mayTargetGroups ? (
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <input type="checkbox" checked={form.inviteOnly} onChange={e => setForm({...form, inviteOnly: e.target.checked})} className="rounded text-[var(--color-accent)] focus:ring-[var(--color-accent)]" />
-                  Invite-only — no self-registration; participants join via invite link or team invitations
-                </label>
-              ) : (
-                <p className="text-xs text-[var(--color-warning)] bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/20 rounded-lg px-3 py-2">
-                  🔒 This event will be invite-only — no self-registration, no cohort targeting. Participants join via your invite link or team/friend invitations.
-                </p>
-              )}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {mayTargetGroups && (
-                  <>
-                    <div>
-                      <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed Cohorts (whitelist)</label>
-                      <input type="text" value={form.allowedCohorts} onChange={e => setForm({...form, allowedCohorts: e.target.value})} placeholder="e.g. cohort-28, branch-cs" className="w-full text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked Cohorts (blacklist)</label>
-                      <input type="text" value={form.blockedCohorts} onChange={e => setForm({...form, blockedCohorts: e.target.value})} placeholder="e.g. cohort-26" className="w-full text-sm" />
-                    </div>
-                  </>
-                )}
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Allowed User IDs (whitelist)</label>
-                  <input type="text" value={form.allowedUserIds} onChange={e => setForm({...form, allowedUserIds: e.target.value})} placeholder="Comma separated user IDs" className="w-full text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--color-text-secondary)] mb-1">Blocked User IDs (blacklist)</label>
-                  <input type="text" value={form.blockedUserIds} onChange={e => setForm({...form, blockedUserIds: e.target.value})} placeholder="Comma separated user IDs" className="w-full text-sm" />
-                </div>
-              </div>
-              <p className="text-xs text-[var(--color-text-muted)]">Whitelists and blacklists are enforced even when someone has the invite link.</p>
-            </div>
-
-            {/* Rewards are configured per event, on the event page */}
-            <div className="mb-6 p-4 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl">
-              <h4 className="text-sm font-bold">Rewards</h4>
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Reward rules (per correct answer, rank placements, manual grants) are configured inside the event page's <strong>Rewards</strong> panel after creation.
-                {!isAdminUser && ' Non-admin creators fund rewards from their own credit balance and badge inventory.'}
-              </p>
-            </div>
-
-            <button type="submit" disabled={creating || !form.title || !form.startDate || !form.category} className="btn btn-primary w-full md:w-auto">
-              {creating ? <span className="spinner" /> : 'Create Event'}
-            </button>
-          </form>
-        )}
-
-        {/* List of Managed Events */}
-        {loading ? (
-          <div className="space-y-4">
-            {[1, 2, 3].map(i => <div key={i} className="h-20 bg-[var(--color-bg-secondary)] animate-pulse rounded-2xl" />)}
-          </div>
-        ) : managedEvents.length === 0 ? (
-          <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl p-8 text-center text-[var(--color-text-muted)]">
-            You aren't organizing any events right now.
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {managedEvents.map(event => (
-              <div key={event.id} className="flex items-center justify-between p-4 bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-2xl">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3">
-                    <h4 className="font-bold">{event.title}</h4>
-                    <span className="text-xs px-2 py-0.5 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-full">{event.category}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${event.status === 'draft' ? 'bg-[var(--color-bg-primary)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent)] text-white'}`}>{event.status}</span>
+              {form.isTeamEvent && (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-[var(--color-text-muted)]">Min:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={form.minTeamSize}
+                      onChange={e => setForm({ ...form, minTeamSize: Number(e.target.value) })}
+                      className="matte-input text-xs w-16 text-center py-1"
+                    />
                   </div>
-                  <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                    Starts: {new Date(event.startDate).toLocaleString()} • Targets: {event.targetTags?.length ? event.targetTags.join(', ') : 'Public'}
-                    {event.isTeamEvent ? ` • Team (${event.minTeamSize}-${event.maxTeamSize})` : ' • Solo'}
-                    {event.inviteMode === 'invite_only' ? ' • Invite-only' : ''}
-                    {event.rewardRules?.length > 0 ? ` • ${event.rewardRules.length} reward rule${event.rewardRules.length > 1 ? 's' : ''}` : ''}
-                  </p>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-[var(--color-text-muted)]">Max:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={form.maxTeamSize}
+                      onChange={e => setForm({ ...form, maxTeamSize: Number(e.target.value) })}
+                      className="matte-input text-xs w-16 text-center py-1"
+                    />
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <InviteLinkButton eventId={event.id} />
-                  <Link to={`/events/${event.id}`} className="btn btn-secondary text-xs px-3 py-1.5">Manage</Link>
-                  <button onClick={() => handleDelete(event.id, event.title)} className="p-1.5 text-[var(--color-danger)] hover:bg-[rgba(239,68,68,0.1)] rounded-lg transition-colors" title="Delete Event">
-                    🗑
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+              )}
+            </div>
 
-      </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="submit"
+                disabled={creating || !form.title || !form.startDate || !form.category}
+                className="btn btn-primary text-xs py-2.5 px-6 shadow-md"
+              >
+                {creating ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                <span>{creating ? 'Creating Event...' : 'Publish Event'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowForm(false)}
+                className="btn btn-secondary text-xs px-4"
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.form>
+        )}
+      </AnimatePresence>
+
+      {/* Managed Events List */}
+      {loading ? (
+        <div className="py-12 flex justify-center items-center gap-2 text-xs text-[var(--color-text-muted)]">
+          <Loader2 size={18} className="animate-spin text-[var(--color-accent)]" />
+          <span>Loading managed events...</span>
+        </div>
+      ) : managedEvents.length === 0 ? (
+        <div className="glass-card p-10 text-center border border-[var(--color-border)]">
+          <CalendarDays size={32} className="mx-auto text-[var(--color-text-muted)] mb-2 opacity-50" />
+          <p className="text-xs text-[var(--color-text-muted)]">You are not organizing any events yet. Click &quot;Create Event&quot; to begin.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {managedEvents.map(event => (
+            <div
+              key={event.id}
+              className="glass-card p-4.5 px-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-[var(--color-border)] hover-lift"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h3 className="font-bold text-sm text-[var(--color-text-primary)] truncate">{event.title}</h3>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)] border border-[var(--color-border)]">
+                    {event.category}
+                  </span>
+                  <span className={`text-[9px] font-bold px-2 py-0.2 rounded-full uppercase ${
+                    event.status === 'draft' ? 'bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)]' : 'bg-[var(--palette-teal)]/15 text-[var(--palette-teal)]'
+                  }`}>
+                    {event.status}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
+                  Starts: {new Date(event.startDate).toLocaleString()} • {event.isTeamEvent ? `Team (${event.minTeamSize}–${event.maxTeamSize})` : 'Individual'}
+                  {event.rewardRules?.length > 0 ? ` • ${event.rewardRules.length} reward rules` : ''}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <InviteLinkButton eventId={event.id} />
+                <Link to={`/events/${event.id}`} className="btn btn-primary text-xs py-1.5 px-3 shadow-xs">
+                  Workspace
+                </Link>
+                <button
+                  onClick={() => handleDelete(event.id, event.title)}
+                  className="btn btn-secondary text-xs p-1.5 text-[var(--color-danger)]"
+                  title="Delete event"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

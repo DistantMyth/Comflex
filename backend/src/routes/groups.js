@@ -452,6 +452,48 @@ router.delete('/:id/leave', requireGroupMember, async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/v1/groups/:id/transfer — Transfer ownership of a group to another member.
+ */
+router.post('/:id/transfer', requireGroupMember, [
+  body('targetUserId').isMongoId().withMessage('Valid targetUserId is required.')
+], async (req, res, next) => {
+  try {
+    const group = await prisma.cohortGroup.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, creatorId: true, isAnonymous: true },
+    });
+    if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
+    if (group.creatorId !== req.user.id && req.user.globalRing !== 0) {
+      return error(res, 'PERMISSION_DENIED', 'Only the group creator can transfer ownership.', 403);
+    }
+    const { targetUserId } = req.body;
+    if (targetUserId === req.user.id) {
+      return error(res, 'INVALID_TARGET', 'You are already the owner.', 400);
+    }
+    const targetMember = await prisma.groupMember.findUnique({
+      where: { userId_groupId: { userId: targetUserId, groupId: req.params.id } },
+    });
+    if (!targetMember) {
+      return error(res, 'NOT_A_MEMBER', 'Target user is not a member of this group.', 404);
+    }
+
+    const updated = await prisma.cohortGroup.update({
+      where: { id: req.params.id },
+      data: { creatorId: targetUserId },
+    });
+
+    await prisma.groupMember.update({
+      where: { userId_groupId: { userId: targetUserId, groupId: req.params.id } },
+      data: { ring: 0 },
+    });
+
+    return success(res, updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ============================================================
 // MEMBERS
 // ============================================================

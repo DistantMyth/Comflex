@@ -1,41 +1,24 @@
 /**
- * parseEmail — Utility to extract academic info from IIITL student emails.
- *
- * Email format: L<BranchCode><YearOfAdmission><RollNo>@iiitl.ac.in
- *
- * Branch codes:
- *   CS → Computer Science
- *   CI → Artificial Intelligence
- *   CB → CS-Business
- *
- * Regex: /^l(cs|ci|cb)(\d{4})(\d{3,})@iiitl\.ac\.in$/i
- *   Group 1 → branch code
- *   Group 2 → 4-digit year of admission
- *   Group 3 → roll number (3+ digits)
+ * parseEmail — Utility to extract academic info from college student emails.
  */
 
-const IIITL_EMAIL_REGEX = /^l(cs|ci|cb)(\d{4})(\d{3,})@iiitl\.ac\.in$/i;
+const EMAIL_REGEX = /^l?(cs|ci|cb|it|ece|me|ee|ce)?(\d{4})(\d{3,})@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/i;
 
 const BRANCH_MAP = {
   cs: 'Computer Science',
   ci: 'Artificial Intelligence',
   cb: 'CS-Business',
+  it: 'Information Technology',
+  ece: 'Electronics & Communication',
 };
 
-/**
- * Parse an IIITL student email to extract academic information.
- *
- * @param {string} email - The email address to parse
- * @returns {{ branch: string, branchCode: string, yearOfAdmission: string, rollNumber: string } | null}
- *   Parsed info or null if the email doesn't match the IIITL format.
- */
-export function parseIIITLEmail(email) {
+export function parseStudentEmail(email) {
   if (!email) return null;
 
-  const match = email.match(IIITL_EMAIL_REGEX);
+  const match = email.match(EMAIL_REGEX);
   if (!match) return null;
 
-  const branchCode = match[1].toUpperCase();
+  const branchCode = (match[1] || 'GEN').toUpperCase();
   const yearOfAdmission = match[2];
   const rollNumber = match[3];
 
@@ -46,3 +29,6 @@ export function parseIIITLEmail(email) {
     rollNumber,
   };
 }
+
+export const parseIIITLEmail = parseStudentEmail;
+export default parseStudentEmail;
