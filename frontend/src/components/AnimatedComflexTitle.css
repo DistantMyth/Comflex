@@ -1,4 +1,4 @@
-﻿/* AnimatedComflexTitle.css - Scoped styling for animated Comflex hero title
+/* AnimatedComflexTitle.css - Scoped styling for animated Comflex hero title
    Theme adaptive with crisp borders for Light Mode visibility.
 */
 
@@ -8,7 +8,9 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 1.5rem 0 3rem 0;
+  padding: 1.25rem 0 2.5rem 0;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 @media (min-width: 768px) {
@@ -18,7 +20,7 @@
 }
 
 .hero-main-title {
-  font-size: clamp(3.2rem, 9vw, 8rem);
+  font-size: clamp(2.1rem, 7.5vw, 7.5rem);
   font-weight: 700;
   font-family: 'Caveat', cursive;
   display: flex;
@@ -119,11 +121,18 @@
   opacity: 0;
   white-space: nowrap;
   font-family: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
-  font-size: clamp(1rem, 2.8vw, 2.2rem);
+  font-size: clamp(0.9rem, 2.8vw, 2.2rem);
   font-weight: 700;
   line-height: 1.2;
   transform: translateX(-10px);
   text-shadow: 0 0 20px rgba(239, 199, 194, 0.6);
+}
+
+@media (max-width: 480px) {
+  .text-join-your,
+  .text-badges {
+    font-size: clamp(0.8rem, 3.6vw, 1.2rem);
+  }
 }
 
 /* ============================================================

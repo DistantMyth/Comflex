@@ -385,7 +385,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-8.5rem)] rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl relative">
+    <div className="flex h-[calc(100dvh-8rem)] sm:h-[calc(100vh-8.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl relative">
       {/* Key Restore Gate for Anonymous Groups */}
       {anonGate && (
         <div className="absolute inset-0 z-40 bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
@@ -587,7 +587,7 @@ export default function ChatPage() {
         </div>
 
         {/* Input Bar */}
-        <form onSubmit={handleSendMessage} className="p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/70 flex items-center gap-2">
+        <form onSubmit={handleSendMessage} className="p-2 sm:p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/70 flex items-center gap-1.5 sm:gap-2">
           <input
             type="file"
             ref={fileInputRef}
@@ -597,7 +597,7 @@ export default function ChatPage() {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2.5 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+            className="p-2 sm:p-2.5 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors shrink-0"
             title="Attach file or screenshot"
           >
             <Paperclip size={16} />
@@ -614,31 +614,71 @@ export default function ChatPage() {
               typingTimeoutRef.current = setTimeout(() => stopTyping?.(groupId), 2000);
             }}
             placeholder={isAnon ? 'Send anonymous message...' : `Message #${group?.name || 'chat'}...`}
-            className="matte-input flex-1 text-xs sm:text-sm py-2.5"
+            className="matte-input flex-1 text-xs sm:text-sm py-2 sm:py-2.5"
           />
 
           <button
             type="submit"
             disabled={sending || (!messageInput.trim() && !fileAttachment)}
-            className="btn btn-primary px-4 py-2.5 shadow-sm"
+            className="btn btn-primary px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm shrink-0"
           >
             {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>
         </form>
       </div>
 
-      {/* Member & Pinned Sidebar */}
+      {/* Member & Pinned Sidebar (Desktop inline, Mobile overlay drawer) */}
       {!isAnon && showSidebar && (
-        <div className="w-72 border-l border-[var(--color-border)] hidden lg:block bg-[var(--color-bg-card)]/40 overflow-hidden">
-          <GroupSidebar
-            group={group}
-            members={members}
-            pinnedMessages={pinnedMessages}
-            isAdmin={isAdmin}
-            onUserClick={(uid) => setSelectedUserId(uid)}
-            onJumpToMessage={jumpToMessage}
-          />
-        </div>
+        <>
+          {/* Desktop inline */}
+          <div className="w-72 border-l border-[var(--color-border)] hidden lg:block bg-[var(--color-bg-card)]/40 overflow-hidden">
+            <GroupSidebar
+              group={group}
+              members={members}
+              pinnedMessages={pinnedMessages}
+              isAdmin={isAdmin}
+              onUserClick={(uid) => setSelectedUserId(uid)}
+              onJumpToMessage={jumpToMessage}
+            />
+          </div>
+
+          {/* Mobile slide-over drawer */}
+          <div className="lg:hidden fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+              className="w-full max-w-xs sm:max-w-sm h-full bg-[var(--color-bg-primary)] border-l border-[var(--color-border)] shadow-2xl flex flex-col pt-safe pb-safe"
+            >
+              <div className="p-3.5 border-b border-[var(--color-border)] flex items-center justify-between">
+                <h3 className="font-bold font-display text-sm text-[var(--color-text-primary)]">Members & Pins</h3>
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-1.5 rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <GroupSidebar
+                  group={group}
+                  members={members}
+                  pinnedMessages={pinnedMessages}
+                  isAdmin={isAdmin}
+                  onUserClick={(uid) => {
+                    setSelectedUserId(uid);
+                    setShowSidebar(false);
+                  }}
+                  onJumpToMessage={(mid) => {
+                    jumpToMessage(mid);
+                    setShowSidebar(false);
+                  }}
+                />
+              </div>
+            </motion.div>
+          </div>
+        </>
       )}
 
       {/* Group Settings Flyout Drawer */}

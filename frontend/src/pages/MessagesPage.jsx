@@ -228,7 +228,7 @@ export default function MessagesPage() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-8.5rem)] rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl">
+    <div className="flex h-[calc(100dvh-8rem)] sm:h-[calc(100vh-8.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl">
       {/* Conversations Sidebar */}
       <div className={`w-full md:w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-card)]/40 ${activeUserId ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-4 border-b border-[var(--color-border)]">
@@ -389,7 +389,7 @@ export default function MessagesPage() {
                       </div>
                     )}
 
-                    <div className={`max-w-[75%] sm:max-w-[65%] px-4 py-2.5 rounded-2xl text-xs sm:text-sm break-words relative shadow-xs ${
+                    <div className={`max-w-[85%] sm:max-w-[65%] px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-xs sm:text-sm break-words relative shadow-xs ${
                       isMine
                         ? 'bg-gradient-to-br from-[var(--color-accent)] to-[#528976] text-white rounded-br-xs'
                         : 'glass-card text-[var(--color-text-primary)] border border-[var(--color-border)] rounded-bl-xs'
@@ -491,20 +491,20 @@ export default function MessagesPage() {
             )}
 
             {/* Input Bar */}
-            <form onSubmit={handleSend} className="p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/60 flex items-center gap-2">
+            <form onSubmit={handleSend} className="p-2 sm:p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/60 flex items-center gap-1.5 sm:gap-2">
               <input
                 ref={inputRef}
                 type="text"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 placeholder={`Message ${activePartner?.displayName || ''}...`}
-                className="matte-input flex-1 text-xs sm:text-sm py-2.5"
+                className="matte-input flex-1 text-xs sm:text-sm py-2 sm:py-2.5"
                 autoFocus
               />
               <button
                 type="submit"
                 disabled={sending || !newMessage.trim()}
-                className="btn btn-primary px-4 py-2.5 shadow-sm"
+                className="btn btn-primary px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm shrink-0"
               >
                 {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
               </button>

@@ -51,9 +51,9 @@ export default function Homepage() {
       <LiquidGlassBackground />
 
       {/* Floating Matte Glass Top Navigation */}
-      <nav className="fixed top-4 inset-x-4 max-w-6xl mx-auto z-50 glass-card px-5 py-3 flex items-center justify-between border border-[var(--color-border)] shadow-lg">
-        <Link to="/" className="flex items-center gap-2.5">
-          <ComflexLogo variant="fullWithWordmark" size="md" animated={true} />
+      <nav className="fixed top-2.5 sm:top-4 inset-x-2.5 sm:inset-x-4 max-w-6xl mx-auto z-50 glass-card px-3 sm:px-5 py-2 sm:py-3 flex items-center justify-between border border-[var(--color-border)] shadow-lg">
+        <Link to="/" className="flex items-center gap-2">
+          <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={true} />
         </Link>
 
         {/* Center Links */}
@@ -65,20 +65,21 @@ export default function Homepage() {
         </div>
 
         {/* Right CTA */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <ThemeToggle size="sm" variant="icon" />
 
           {isAuthenticated ? (
-            <Link to="/groups" className="btn btn-primary text-xs py-2 px-4 shadow-sm flex items-center gap-2">
+            <Link to="/groups" className="btn btn-primary text-xs py-1.5 px-3 sm:py-2 sm:px-4 shadow-sm flex items-center gap-1.5 sm:gap-2">
               <Avatar src={user?.avatarUrl} name={user?.displayName} className="w-5 h-5 rounded-full" />
-              <span>Go to App</span>
+              <span className="hidden sm:inline">Go to App</span>
+              <span className="sm:hidden">App</span>
             </Link>
           ) : (
-            <div className="flex items-center gap-2">
-              <Link to="/login" className="btn btn-secondary text-xs py-2 px-3.5">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <Link to="/login" className="btn btn-secondary text-xs py-1.5 px-2.5 sm:py-2 sm:px-3.5">
                 Login
               </Link>
-              <Link to="/register" className="btn btn-primary text-xs py-2 px-4 shadow-sm">
+              <Link to="/register" className="btn btn-primary text-xs py-1.5 px-3 sm:py-2 sm:px-4 shadow-sm">
                 Register
               </Link>
             </div>
@@ -87,7 +88,7 @@ export default function Homepage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative z-10 pt-36 pb-20 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
+      <section className="relative z-10 pt-28 sm:pt-36 pb-16 sm:pb-20 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
         <motion.div
           variants={heroContainerVariants}
           initial="hidden"
@@ -122,12 +123,13 @@ export default function Homepage() {
           </motion.p>
 
           {/* 21st.dev Liquid Glass Tactile CTA Buttons */}
-          <motion.div variants={heroItemVariants} className="mt-8 flex flex-wrap justify-center items-center gap-4">
+          <motion.div variants={heroItemVariants} className="mt-8 flex flex-col sm:flex-row justify-center items-center gap-3 sm:gap-4 w-full max-w-md mx-auto">
             <LiquidGlassButton
               to={isAuthenticated ? '/groups' : '/register'}
               variant="primary"
               size="lg"
               icon={Sparkles}
+              className="w-full sm:w-auto justify-center text-center"
             >
               {isAuthenticated ? 'Open Dashboard' : 'Get Started with College Email'}
             </LiquidGlassButton>
@@ -135,6 +137,7 @@ export default function Homepage() {
               href="#architecture"
               variant="secondary"
               size="lg"
+              className="w-full sm:w-auto justify-center text-center"
             >
               Explore Platform
             </LiquidGlassButton>

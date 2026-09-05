@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ComflexLogo.jsx — Official Brand Mark & Wordmark Component
  * Enhanced with crisp contrast borders for Light & Dark modes.
  */
@@ -12,6 +12,7 @@ export default function ComflexLogo({
   animated = false,
   className = '',
   showSubtitle = true,
+  responsiveWordmark = false,
   onClick,
 }) {
   const uniqueId = useId().replace(/:/g, '_');
@@ -197,7 +198,7 @@ export default function ComflexLogo({
       )}
 
       {variant !== 'iconOnly' && (
-        <div className="flex flex-col justify-center leading-none">
+        <div className={`${responsiveWordmark ? 'hidden sm:flex' : 'flex'} flex-col justify-center leading-none`}>
           <div
             className={`font-display font-extrabold tracking-tight ${currentSize.text} flex items-baseline`}
           >

@@ -16,11 +16,25 @@ let accessToken = (() => {
 })();
 
 export function getAccessToken() {
+  if (!accessToken) {
+    try {
+      accessToken = localStorage.getItem('accessToken') || null;
+    } catch {
+      accessToken = null;
+    }
+  }
   return accessToken;
 }
 
 export function setAccessToken(token) {
   accessToken = token || null;
+  try {
+    if (token) {
+      localStorage.setItem('accessToken', token);
+    } else {
+      localStorage.removeItem('accessToken');
+    }
+  } catch { /* ignore */ }
 }
 
 export function clearAccessToken() {

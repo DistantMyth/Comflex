@@ -33,9 +33,9 @@ const RING_LABELS = {
   3: { label: 'Member', color: 'ring-badge-3' },
 };
 
-const Logo = () => (
-  <Link to="/" className="flex items-center px-5 py-5" aria-label="Comflex Home">
-    <ComflexLogo variant="fullWithWordmark" size="md" animated={true} />
+const Logo = ({ className = 'px-5 py-5' }) => (
+  <Link to="/" className={`flex items-center ${className}`} aria-label="Comflex Home">
+    <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={true} />
   </Link>
 );
 
@@ -263,6 +263,14 @@ export default function Layout({ children }) {
     ...(isAdmin ? [{ path: '/admin', label: 'Admin', icon: ShieldCheck }] : []),
   ];
 
+  const mobileBottomNavItems = [
+    { path: '/groups', label: 'Groups', icon: MessagesSquare, badge: totalUnread.groups },
+    { path: '/messages', label: 'DMs', icon: Send, badge: totalUnread.dms },
+    { path: '/events', label: 'Events', icon: CalendarDays },
+    { path: '/store', label: 'Store', icon: Store },
+    { path: '/profile', label: 'Profile', icon: User },
+  ];
+
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
@@ -286,9 +294,9 @@ export default function Layout({ children }) {
       </aside>
 
       {/* Top action bar (for Notification Bell & Mobile Menu) */}
-      <header className="fixed top-0 inset-x-0 lg:left-[268px] z-40 flex items-center justify-between px-4 sm:px-8 py-3.5 glass-panel border-b border-[var(--color-border)]">
+      <header className="fixed top-0 inset-x-0 lg:left-[268px] z-40 flex items-center justify-between px-3 sm:px-8 py-2.5 sm:py-3.5 glass-panel border-b border-[var(--color-border)] pt-safe">
         <div className="lg:hidden">
-          <Logo />
+          <Logo className="px-1 py-0" />
         </div>
         <div className="hidden lg:flex items-center gap-2 text-xs font-semibold text-[var(--color-text-muted)]">
           <span className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
@@ -406,7 +414,7 @@ export default function Layout({ children }) {
               onClick={() => setDrawerOpen(false)}
             />
             <motion.aside
-              className="lg:hidden fixed inset-y-0 left-0 z-50 w-[280px] glass-panel flex flex-col border-r border-[var(--color-border)]"
+              className="lg:hidden fixed inset-y-0 left-0 z-50 w-[280px] glass-panel flex flex-col border-r border-[var(--color-border)] pt-safe pb-safe shadow-2xl"
               initial={{ x: -300 }}
               animate={{ x: 0 }}
               exit={{ x: -300 }}
@@ -436,15 +444,56 @@ export default function Layout({ children }) {
         )}
       </AnimatePresence>
 
+      {/* Mobile Frosted Glass Bottom Navigation Bar */}
+      <nav
+        aria-label="Mobile Bottom Navigation"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[var(--color-bg-matte)]/95 backdrop-blur-xl border-t border-[var(--color-border)] shadow-[0_-4px_20px_rgba(0,0,0,0.08)] pb-safe"
+      >
+        <div className="flex items-center justify-around px-2 py-1.5 h-16">
+          {mobileBottomNavItems.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.path);
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={`relative flex flex-col items-center justify-center flex-1 py-1 rounded-xl transition-all duration-200 select-none ${
+                  active
+                    ? 'text-[var(--color-accent)] font-bold'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                {active && (
+                  <motion.div
+                    layoutId="mobile-bottom-nav-pill"
+                    className="absolute inset-x-1 inset-y-0.5 rounded-xl bg-[var(--color-accent)]/12 border border-[var(--color-accent)]/20"
+                    transition={{ type: 'spring', stiffness: 450, damping: 30 }}
+                  />
+                )}
+                <div className="relative">
+                  <Icon size={20} strokeWidth={active ? 2.5 : 2} className="transition-transform duration-200" />
+                  {item.badge > 0 && (
+                    <span className="absolute -top-1.5 -right-2.5 bg-[var(--color-danger)] text-white text-[9px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 shadow-sm">
+                      {item.badge > 99 ? '99+' : item.badge}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] tracking-tight mt-1 leading-none">{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+
       {/* Main page content container */}
-      <main className="flex-1 lg:ml-[268px] min-h-screen overflow-x-hidden pt-16">
+      <main className="flex-1 lg:ml-[268px] min-h-screen overflow-x-hidden pt-16 pb-24 lg:pb-8">
         <ErrorBoundary>
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
-            className="px-4 sm:px-6 lg:px-10 py-6 max-w-7xl mx-auto"
+            className="px-3 sm:px-6 lg:px-10 py-4 sm:py-6 max-w-7xl mx-auto"
           >
             {children}
           </motion.div>

@@ -436,14 +436,14 @@ export default function StorePage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1.5 p-1.5 bg-[var(--color-bg-matte)] rounded-2xl border border-[var(--color-border)] mb-6">
+      <div className="flex gap-1.5 p-1.5 bg-[var(--color-bg-matte)] rounded-2xl border border-[var(--color-border)] mb-6 overflow-x-auto scrollbar-none">
         {tabs.map((t) => {
           const active = activeTab === t.key;
           return (
             <button
               key={t.key}
               onClick={() => setActiveTab(t.key)}
-              className={`relative flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+              className={`relative flex-1 shrink-0 whitespace-nowrap py-2 px-3.5 rounded-xl text-xs font-bold transition-all ${
                 active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
               }`}
             >
