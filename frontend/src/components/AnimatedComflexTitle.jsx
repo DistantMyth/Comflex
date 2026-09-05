@@ -88,6 +88,9 @@ export default function AnimatedComflexTitle() {
             pin: true,
             pinSpacing: true,
             scrub: 0.6,
+            anticipatePin: 1,
+            fastScrollEnd: true,
+            preventOverlaps: true,
           },
         });
 

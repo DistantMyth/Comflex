@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ComflexBuildSection.jsx — Scroll-Driven Self-Building Vector Logo Section
  *
  * Implements ScrollTrigger PINNING:
@@ -20,9 +20,9 @@ gsap.registerPlugin(ScrollTrigger);
 
 export default function ComflexBuildSection() {
   const containerRef = useRef(null);
+  const percentRef = useRef(null);
   const { theme } = useTheme();
   const [activeStage, setActiveStage] = useState(1);
-  const [percentText, setPercentText] = useState(0);
 
   const stages = [
     {
@@ -90,53 +90,78 @@ export default function ComflexBuildSection() {
         }
       });
 
-      // Pinned timeline:
-      // (on scroll) -> (page doesn't go down, logo builds itself) -> (fully assembled) -> (scroll resumes)
+      // Pinned timeline with anticipation, generous runway, and lead-in/dwell buffers
       const tl = gsap.timeline({
         scrollTrigger: {
           trigger: target,
           start: 'top top',
-          end: '+=450',
+          end: '+=850',
           pin: true,
           pinSpacing: true,
-          scrub: 0.5,
+          anticipatePin: 1,
+          fastScrollEnd: true,
+          preventOverlaps: true,
+          invalidateOnRefresh: true,
+          scrub: 0.8,
           onUpdate: (self) => {
             const p = Math.round(self.progress * 100);
+            if (percentRef.current) {
+              percentRef.current.textContent = `${p}%`;
+            }
             if (isMounted) {
-              setPercentText(p);
-              if (p < 28) setActiveStage(1);
-              else if (p < 58) setActiveStage(2);
-              else if (p < 85) setActiveStage(3);
-              else setActiveStage(4);
+              let nextStage = 1;
+              if (p < 28) nextStage = 1;
+              else if (p < 58) nextStage = 2;
+              else if (p < 85) nextStage = 3;
+              else nextStage = 4;
+              setActiveStage((prev) => (prev !== nextStage ? nextStage : prev));
             }
           },
         },
       });
 
-      // STAGE 1: Stroke drawing (0 -> 1.5s)
-      tl.to(archPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0)
-        .to(ascendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.2)
-        .to(descendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.3)
+      // Lead-in buffer: smooth settling into the pin before animation starts (0 -> 0.25s)
+      tl.to({}, { duration: 0.25 })
 
-      // STAGE 2: Geometric convergence from exploded coordinates (0.8 -> 2.4s)
-        .to(archGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.7)
-        .to(ascendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.8)
-        .to(descendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.9)
+      // STAGE 1: Stroke drawing (0.25 -> 1.45s)
+        .to(archPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.25)
+        .to(ascendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.45)
+        .to(descendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.55)
 
-      // STAGE 3: Core node bloom & aura bloom (1.8 -> 2.8s)
-        .to(coreGroup, { scale: 1, opacity: 1, duration: 0.9, ease: 'back.out(1.8)' }, 1.8)
-        .to(auraCircle, { scale: 1.25, opacity: 0.9, duration: 1.0, ease: 'power1.out' }, 1.9)
+      // STAGE 2: Geometric convergence from exploded coordinates (0.95 -> 2.55s)
+        .to(archGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.95)
+        .to(ascendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 1.05)
+        .to(descendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 1.15)
 
-      // STAGE 4: Specular sheen flash & Wordmark reveal (2.4 -> 3.2s)
-        .to(specularArc, { opacity: 1, duration: 0.6, ease: 'power1.out' }, 2.3)
-        .to(wordmark, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.8, ease: 'power2.out' }, 2.4)
+      // STAGE 3: Core node bloom & aura bloom (2.05 -> 2.95s)
+        .to(coreGroup, { scale: 1, opacity: 1, duration: 0.9, ease: 'back.out(1.8)' }, 2.05)
+        .to(auraCircle, { scale: 1.25, opacity: 0.9, duration: 1.0, ease: 'power1.out' }, 2.15)
 
-      // HUD Progress bar linking
-        .to(hudProgress, { width: '100%', duration: 3.2, ease: 'none' }, 0);
+      // STAGE 4: Specular sheen flash & Wordmark reveal (2.55 -> 3.35s)
+        .to(specularArc, { opacity: 1, duration: 0.6, ease: 'power1.out' }, 2.55)
+        .to(wordmark, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.8, ease: 'power2.out' }, 2.65)
+
+      // HUD Progress bar linking (0.25 -> 3.35s)
+        .to(hudProgress, { width: '100%', duration: 3.1, ease: 'none' }, 0.25)
+
+      // Settle / Dwell buffer: completed logo rests cleanly before unpinning (3.35 -> 4.1s)
+        .to({}, { duration: 0.75 });
     }, target);
+
+    ScrollTrigger.refresh();
+
+    const handleRefresh = () => ScrollTrigger.refresh();
+    window.addEventListener('resize', handleRefresh);
+
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (isMounted) ScrollTrigger.refresh();
+      });
+    }
 
     return () => {
       isMounted = false;
+      window.removeEventListener('resize', handleRefresh);
       ctx.revert();
     };
   }, [theme]);
@@ -145,7 +170,7 @@ export default function ComflexBuildSection() {
     <section
       id="architecture"
       ref={containerRef}
-      className="relative min-h-screen w-full flex flex-col items-center justify-center py-16 bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden border-t border-[var(--color-border)]/40"
+      className="relative min-h-screen w-full flex flex-col items-center justify-center pt-24 sm:pt-28 pb-16 bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden border-t border-[var(--color-border)]/40"
     >
       {/* Ambient Radial Glow Background */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-0">
@@ -351,11 +376,43 @@ export default function ComflexBuildSection() {
               className="build-hud-progress h-full bg-gradient-to-r from-[var(--palette-teal)] to-[var(--palette-rose)] w-0"
             />
           </div>
-          <span className="font-mono">{percentText}%</span>
+          <span ref={percentRef} className="font-mono">0%</span>
         </div>
 
-        {/* 4 Architectural Milestone Cards */}
-        <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* Mobile: Single Active Stage Card (clean vertical fit while pinned) */}
+        <div className="w-full sm:hidden">
+          {stages
+            .filter((_, idx) => idx + 1 === activeStage)
+            .map((stage) => {
+              const Icon = stage.icon;
+              return (
+                <div
+                  key={stage.id}
+                  className="glass-card p-3 rounded-2xl border border-[var(--palette-teal)]/60 shadow-md bg-[var(--palette-teal)]/5 flex items-center justify-between gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-[10px] font-mono font-bold text-[var(--palette-teal)]">
+                        STAGE {stage.id}
+                      </span>
+                      <h4 className="text-xs font-bold font-display text-[var(--color-text-primary)] truncate">
+                        {stage.title}
+                      </h4>
+                    </div>
+                    <p className="text-[10px] text-[var(--color-text-muted)] line-clamp-1">
+                      {stage.desc}
+                    </p>
+                  </div>
+                  <div className="w-8 h-8 rounded-xl bg-[var(--palette-teal)]/15 flex items-center justify-center shrink-0">
+                    <Icon size={16} className="text-[var(--palette-teal)]" />
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+
+        {/* Desktop / Tablet: 4 Milestone Cards Grid */}
+        <div className="w-full hidden sm:grid sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
           {stages.map((stage, idx) => {
             const Icon = stage.icon;
             const isHighlighted = activeStage >= idx + 1;
