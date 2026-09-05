@@ -9,8 +9,7 @@
   justify-content: center;
   align-items: center;
   padding: 1.25rem 0 2.5rem 0;
-  max-width: 100%;
-  overflow-x: clip;
+  overflow: visible;
 }
 
 @media (min-width: 768px) {
@@ -30,6 +29,7 @@
   color: white;
   user-select: none;
   line-height: 1;
+  overflow: visible;
 }
 
 .title-interactive-wrapper {
@@ -38,6 +38,7 @@
   position: relative;
   justify-content: center;
   align-items: baseline;
+  overflow: visible;
 }
 
 .text-com,

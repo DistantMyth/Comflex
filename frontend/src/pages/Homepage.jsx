@@ -93,7 +93,7 @@ export default function Homepage() {
           variants={heroContainerVariants}
           initial="hidden"
           animate="visible"
-          className="flex flex-col items-center max-w-3xl"
+          className="flex flex-col items-center w-full max-w-5xl"
         >
           {/* Announcement Pill Badge */}
           <motion.div variants={heroItemVariants} className="mb-4 inline-flex">
