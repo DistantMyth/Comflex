@@ -39,6 +39,47 @@ const RESERVED_USERNAMES = new Set([
 ]);
 
 /**
+ * Auto-generate a unique temporary username (prefixed with user_)
+ * for new registrations and Google signups so that:
+ * 1. MongoDB unique constraint is satisfied (avoiding multiple-null E11000 duplicate key errors)
+ * 2. The username is recognized as temporary so the onboarding flow prompts
+ *    the user to choose their real handle.
+ */
+async function generateUniqueTempUsername(email) {
+  const rawBase = (email || '').split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+  const cleanBase = (rawBase || 'member').slice(0, 15);
+  const baseUsername = `user_${cleanBase}`;
+  let candidate = baseUsername;
+  let counter = 1;
+
+  while (
+    (await prisma.user.findFirst({
+      where: { username: { equals: candidate, mode: 'insensitive' } },
+    })) ||
+    RESERVED_USERNAMES.has(candidate.toLowerCase())
+  ) {
+    candidate = `${baseUsername}_${counter}`;
+    counter++;
+  }
+  return candidate;
+}
+
+/**
+ * Check whether a user needs to pick a username during onboarding.
+ * True if username is missing, or if the account never called setUsername
+ * and still has an auto-generated or numeric handle.
+ */
+function checkNeedsUsername(user) {
+  if (!user || !user.username) return true;
+  if (!user.usernameChangedAt) {
+    if (/^user_|^[\d]+$/.test(user.username) || /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Register a new user (email/password — legacy, kept for admin accounts).
  * 1. Check institution is configured (registration gate)
  * 2. Enforce the institution email domain when configured
@@ -71,14 +112,7 @@ async function register(email, password, displayName) {
   }
 
   // Auto-generate a unique temporary username (sanitized of dots and special characters)
-  const rawBase = normalizedEmail.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '');
-  const baseUsername = (rawBase.length >= 3 ? rawBase : `user_${rawBase || 'member'}`).slice(0, 20);
-  let tempUsername = baseUsername;
-  let counter = 1;
-  while (await prisma.user.findUnique({ where: { username: tempUsername } }) || RESERVED_USERNAMES.has(tempUsername.toLowerCase())) {
-    tempUsername = `${baseUsername}${counter}`;
-    counter++;
-  }
+  const tempUsername = await generateUniqueTempUsername(normalizedEmail);
 
   // Create the user with hashed password
   const hashedPw = await hashPassword(password);
@@ -116,6 +150,8 @@ async function register(email, password, displayName) {
     accessToken,
     refreshToken,
     user: sanitizeUser(updatedUser),
+    needsPassword: false,
+    needsUsername: checkNeedsUsername(updatedUser),
   };
 }
 
@@ -169,14 +205,16 @@ async function googleLogin(tokenInput) {
         throw Object.assign(new Error('Registration is disabled. The platform has not been configured yet.'), { statusCode: 403, code: 'REGISTRATION_DISABLED' });
       }
 
-      // Create brand new user — no password yet, no username yet (chosen
-      // during onboarding so users pick their handle instead of an
-      // auto-generated one).
+      // Create brand new user — assign a unique temporary username to avoid
+      // MongoDB multiple-null unique constraint error, while flagging
+      // needsUsername: true so the user chooses their permanent handle in onboarding.
       isNewUser = true;
+      const tempUsername = await generateUniqueTempUsername(googleEmail);
 
       user = await prisma.user.create({
         data: {
           email: googleEmail,
+          username: tempUsername,
           password: '',
           displayName: googleUser.name,
           avatarUrl: googleUser.picture,
@@ -209,12 +247,7 @@ async function googleLogin(tokenInput) {
     refreshToken,
     user: sanitizeUser(user),
     needsPassword: !user.hasPassword,
-    // New users have no username until they pick one in onboarding. Legacy
-    // accounts (auto-generated handle, never claimed via setUsername) are
-    // flagged too so the user can claim a real username. usernameChangedAt
-    // is only set by setUsername, so it cleanly separates claimed handles
-    // from auto-assigned ones.
-    needsUsername: !user.username || (!user.usernameChangedAt && /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))),
+    needsUsername: checkNeedsUsername(user),
     isNewUser,
   };
 }
@@ -369,7 +402,7 @@ async function login(email, password) {
     accessToken,
     refreshToken,
     user: sanitizeUser(user),
-    needsUsername: !user.username || (!user.usernameChangedAt && /^[\d]+$/.test(user.username.split(/[a-z]/i).join(''))),
+    needsUsername: checkNeedsUsername(user),
   };
 }
 

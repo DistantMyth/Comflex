@@ -589,11 +589,12 @@ router.post(
       }
 
       // Auto-generate a dummy username to avoid MongoDB multiple-null unique constraint error
-      const baseUsername = email.split('@')[0];
+      const rawBase = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').toLowerCase();
+      const baseUsername = `user_${(rawBase || 'member').slice(0, 15)}`;
       let generatedUsername = baseUsername;
       let counter = 1;
-      while (await prisma.user.findUnique({ where: { username: generatedUsername } })) {
-        generatedUsername = `${baseUsername}${counter}`;
+      while (await prisma.user.findFirst({ where: { username: { equals: generatedUsername, mode: 'insensitive' } } })) {
+        generatedUsername = `${baseUsername}_${counter}`;
         counter++;
       }
 
