@@ -373,7 +373,7 @@ html, body {
 }
 
 .pt-safe {
-  padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+  padding-top: calc(0.625rem + env(safe-area-inset-top, 0px));
 }
 
 .bottom-safe {

@@ -163,7 +163,7 @@ export default function UserProfilePanel({
 
   return (
     <aside
-      className={`w-80 md:w-88 flex-shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-matte)] backdrop-blur-2xl flex flex-col h-full overflow-hidden shadow-2xl z-20 select-none ${className}`}
+      className={`w-full max-w-xs sm:w-80 md:w-88 max-w-[100vw] flex-shrink-0 border-l border-[var(--color-border)] bg-[var(--color-bg-matte)] backdrop-blur-2xl flex flex-col h-full overflow-hidden shadow-2xl z-20 select-none ${className}`}
       aria-label="User Profile"
     >
       {/* Panel Header */}

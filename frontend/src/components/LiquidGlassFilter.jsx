@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LiquidGlassFilter.jsx
  * SVG displacement and turbulence filter from 21st.dev (@designali-in/liquid-glass-button).
  * Provides authentic fluid refraction for elements using backdrop-filter: url("#liquid-glass").
@@ -6,7 +6,7 @@
 
 export default function LiquidGlassFilter() {
   return (
-    <svg className="hidden pointer-events-none fixed w-0 h-0" aria-hidden="true">
+    <svg className="sr-only pointer-events-none fixed w-0 h-0 overflow-hidden" aria-hidden="true">
       <defs>
         {/* Standard liquid glass refraction filter */}
         <filter

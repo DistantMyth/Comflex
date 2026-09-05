@@ -33,9 +33,9 @@ const RING_LABELS = {
   3: { label: 'Member', color: 'ring-badge-3' },
 };
 
-const Logo = ({ className = 'px-5 py-5' }) => (
+const Logo = ({ className = 'px-5 py-5', responsiveWordmark = true }) => (
   <Link to="/" className={`flex items-center ${className}`} aria-label="Comflex Home">
-    <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={true} />
+    <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={responsiveWordmark} />
   </Link>
 );
 
@@ -222,15 +222,36 @@ export default function Layout({ children }) {
     window.scrollTo(0, 0);
   }, [location.pathname]);
 
-  // Click outside to close notification dropdown
+  useEffect(() => {
+    if (drawerOpen) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+  }, [drawerOpen]);
+
+  // Click/touch outside to close notification dropdown, escape key to close drawer/dropdown
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (notifRef.current && !notifRef.current.contains(e.target)) {
         setNotifOpen(false);
       }
     };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setNotifOpen(false);
+        setDrawerOpen(false);
+      }
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const handleMarkAllRead = async () => {
@@ -294,7 +315,7 @@ export default function Layout({ children }) {
       </aside>
 
       {/* Top action bar (for Notification Bell & Mobile Menu) */}
-      <header className="fixed top-0 inset-x-0 lg:left-[268px] z-40 flex items-center justify-between px-3 sm:px-8 py-2.5 sm:py-3.5 glass-panel border-b border-[var(--color-border)] pt-safe">
+      <header className="fixed top-0 inset-x-0 lg:left-[268px] z-40 flex items-center justify-between px-3 sm:px-8 pt-[calc(0.625rem+env(safe-area-inset-top,0px))] lg:pt-3.5 pb-2.5 sm:pb-3.5 glass-panel border-b border-[var(--color-border)]">
         <div className="lg:hidden">
           <Logo className="px-1 py-0" />
         </div>
@@ -326,7 +347,7 @@ export default function Layout({ children }) {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
-                  className="absolute right-0 mt-2 w-80 sm:w-96 glass-card p-4 shadow-2xl border border-[var(--color-border)] z-50 rounded-3xl"
+                  className="absolute -right-12 sm:right-0 mt-2 w-[calc(100vw-1.5rem)] max-w-sm sm:w-96 glass-card p-4 shadow-2xl border border-[var(--color-border)] z-50 rounded-3xl"
                 >
                   <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)]">
                     <div className="flex items-center gap-2">
@@ -421,7 +442,7 @@ export default function Layout({ children }) {
               transition={{ type: 'spring', stiffness: 350, damping: 32 }}
             >
               <div className="flex items-center justify-between pr-3">
-                <Logo />
+                <Logo responsiveWordmark={false} />
                 <button
                   onClick={() => setDrawerOpen(false)}
                   className="p-2 rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
@@ -486,7 +507,7 @@ export default function Layout({ children }) {
       </nav>
 
       {/* Main page content container */}
-      <main className="flex-1 lg:ml-[268px] min-h-screen overflow-x-hidden pt-16 pb-24 lg:pb-8">
+      <main className="flex-1 lg:ml-[268px] min-h-screen overflow-x-hidden pt-[calc(4rem+env(safe-area-inset-top,0px))] pb-[calc(5.5rem+max(0.75rem,env(safe-area-inset-bottom,0px)))] lg:pt-16 lg:pb-8">
         <ErrorBoundary>
           <motion.div
             key={location.pathname}

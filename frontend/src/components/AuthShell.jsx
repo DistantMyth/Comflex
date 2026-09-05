@@ -15,7 +15,7 @@ export default function AuthShell({ title, subtitle, children, footer }) {
   return (
     <div className="min-h-svh flex relative overflow-hidden bg-[var(--color-bg-primary)]">
       {/* Ambient Theme Toggle at Top Right */}
-      <div className="absolute top-5 right-5 z-30">
+      <div className="absolute top-[calc(1.25rem+env(safe-area-inset-top,0px))] right-5 z-30">
         <ThemeToggle size="sm" variant="icon" />
       </div>
 

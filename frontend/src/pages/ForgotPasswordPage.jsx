@@ -5,10 +5,31 @@ import { Mail, Send, ArrowLeft, Loader2, MailCheck, AlertCircle } from 'lucide-r
 import { authApi } from '../api/authApi';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../context/ThemeContext';
-import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import { useGoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
+import GoogleAuthButton from '../components/GoogleAuthButton';
 import AuthShell from '../components/AuthShell';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+
+function GoogleForgotTrigger({ onSuccess, onError, loading }) {
+  const triggerLogin = useGoogleLogin({
+    onSuccess,
+    onError: (err) => {
+      console.error('[GoogleAuth] Forgot password login error:', err);
+      onError('Google login was interrupted or failed.');
+    },
+    flow: 'implicit',
+  });
+
+  return (
+    <GoogleAuthButton
+      onClick={() => triggerLogin()}
+      isLoading={loading}
+      text="Continue with Google"
+      loadingText="Verifying Google account..."
+    />
+  );
+}
 
 const formatCooldown = (sec) => (sec >= 60 ? `${Math.ceil(sec / 60)}m` : `${sec}s`);
 
@@ -130,20 +151,11 @@ export default function ForgotPasswordPage() {
           {GOOGLE_CLIENT_ID && (
             <div className="mb-6">
               <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-                <div className="flex justify-center">
-                  <div className="rounded-2xl overflow-hidden shadow-sm border border-[var(--color-border)]">
-                    <GoogleLogin
-                      onSuccess={handleGoogleSuccess}
-                      onError={() => setError('Google login failed.')}
-                      useOneTap={false}
-                      text="continue_with"
-                      shape="rectangular"
-                      size="large"
-                      width={320}
-                      theme={theme === 'dark' ? 'filled_black' : 'outline'}
-                    />
-                  </div>
-                </div>
+                <GoogleForgotTrigger
+                  onSuccess={handleGoogleSuccess}
+                  onError={setError}
+                  loading={loading}
+                />
               </GoogleOAuthProvider>
               <div className="flex items-center gap-3 my-6">
                 <div className="flex-1 h-px bg-[var(--color-border)]" />

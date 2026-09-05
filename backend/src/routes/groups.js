@@ -32,6 +32,9 @@ const router = express.Router();
 // cap the array, and only accept string IDs.
 function parseMentions(raw) {
   if (!raw) return undefined;
+  if (Array.isArray(raw)) {
+    return raw.filter((id) => typeof id === 'string' && id.length <= 64).slice(0, 50);
+  }
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return undefined;
@@ -87,6 +90,16 @@ const messageUpload = multer({
     cb(null, allowed.includes(ext));
   },
 });
+
+const uploadMessageAttachment = (req, res, next) => {
+  messageUpload.fields([{ name: 'attachment', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, (err) => {
+    if (err) return next(err);
+    if (req.files) {
+      req.file = req.files.attachment?.[0] || req.files.file?.[0] || null;
+    }
+    next();
+  });
+};
 
 // All group routes require authentication
 router.use(authMiddleware);
@@ -1323,12 +1336,13 @@ router.post(
   '/:id/messages',
   requireGroupMember,
   requireGroupPermission('can_send_messages'),
-  messageUpload.single('attachment'),
+  uploadMessageAttachment,
   async (req, res, next) => {
     try {
-      // Manual validation because body may be multipart form-data
+      // Manual validation because body may be multipart form-data or JSON (e.g. forward)
       const content = (req.body.content || '').trim();
-      if (!content && !req.file) {
+      const bodyFileUrl = typeof req.body.fileUrl === 'string' && req.body.fileUrl.trim().length > 0 ? req.body.fileUrl.trim() : null;
+      if (!content && !req.file && !bodyFileUrl) {
         return error(res, 'VALIDATION_ERROR', 'Message content or attachment is required.', 400);
       }
 
@@ -1353,8 +1367,12 @@ router.post(
         content,
         mentions: req.anonIdentity ? [] : parseMentions(req.body.mentions),
         replyToId: req.body.replyToId || undefined,
-        forwarded: req.body.forwarded === 'true',
+        forwarded: req.body.forwarded === 'true' || req.body.forwarded === true,
         msgType: req.body.msgType || 'text',
+        fileUrl: bodyFileUrl || undefined,
+        fileName: req.body.fileName || undefined,
+        fileSize: req.body.fileSize ? Number(req.body.fileSize) : undefined,
+        mimetype: req.body.mimetype || undefined,
       };
 
       if (req.file) {

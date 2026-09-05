@@ -568,6 +568,24 @@ export default function FloatingChatbot() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeMessages, loading]);
 
+  // Escape key handler for dialog accessibility
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (alertInfo) {
+          setAlertInfo(null);
+        } else if (showResourcePicker) {
+          setShowResourcePicker(false);
+        } else if (!isMinimized) {
+          setIsMinimized(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isMinimized, showResourcePicker, alertInfo]);
+
   // Local file upload with Magic Bytes validation
   const handleLocalUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -811,7 +829,7 @@ export default function FloatingChatbot() {
           setIsMinimized(false);
         }}
         aria-label="Open AI Notes Assistant"
-        className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-50 flex items-center gap-2 px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-full bg-gradient-to-r from-[var(--palette-teal)] via-[#568d7b] to-[var(--palette-plum)] text-white shadow-[0_10px_35px_-4px_rgba(104,166,145,0.5)] hover:shadow-[0_14px_45px_-4px_rgba(104,166,145,0.7)] border border-white/20 backdrop-blur-xl transition-all duration-300 group cursor-pointer"
+        className="fixed bottom-[calc(4.75rem+max(0.75rem,env(safe-area-inset-bottom,0px)))] right-4 lg:bottom-6 lg:right-6 z-50 flex items-center gap-2 px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-full bg-gradient-to-r from-[var(--palette-teal)] via-[#568d7b] to-[var(--palette-plum)] text-white shadow-[0_10px_35px_-4px_rgba(104,166,145,0.5)] hover:shadow-[0_14px_45px_-4px_rgba(104,166,145,0.7)] border border-white/20 backdrop-blur-xl transition-all duration-300 group cursor-pointer"
         title="Notes AI Assistant — Chat with your documents"
       >
         <span className="relative flex items-center justify-center">
@@ -844,7 +862,7 @@ export default function FloatingChatbot() {
       <motion.div
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-50 flex items-center gap-2.5 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl glass-card bg-[var(--color-bg-glass)] border border-[var(--color-border)] shadow-2xl backdrop-blur-2xl text-xs max-w-[calc(100vw-2rem)]"
+        className="fixed bottom-[calc(4.75rem+max(0.75rem,env(safe-area-inset-bottom,0px)))] right-4 lg:bottom-6 lg:right-6 z-50 flex items-center gap-2.5 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl glass-card bg-[var(--color-bg-glass)] border border-[var(--color-border)] shadow-2xl backdrop-blur-2xl text-xs max-w-[calc(100vw-2rem)]"
       >
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg bg-[var(--palette-teal)]/20 text-[var(--palette-teal)] flex items-center justify-center">
@@ -879,8 +897,8 @@ export default function FloatingChatbot() {
 
   // 3. EXPANDABLE MATTE GLASS CHAT WINDOW (Mobile bottom sheet, Desktop floating window)
   const windowResponsiveClass = isExpanded
-    ? 'w-full sm:w-[640px] sm:max-w-[calc(100vw-2rem)] h-[92dvh] sm:h-[740px] sm:max-h-[calc(100vh-2.5rem)]'
-    : 'w-full sm:w-[420px] sm:max-w-[calc(100vw-2rem)] h-[84dvh] sm:h-[620px] sm:max-h-[calc(100vh-2.5rem)]';
+    ? 'w-full sm:w-[640px] sm:max-w-[calc(100vw-2rem)] h-[92dvh] sm:h-[740px] sm:max-h-[calc(100vh-6.5rem)] lg:max-h-[calc(100vh-2.5rem)]'
+    : 'w-full sm:w-[420px] sm:max-w-[calc(100vw-2rem)] h-[84dvh] sm:h-[620px] sm:max-h-[calc(100vh-6.5rem)] lg:max-h-[calc(100vh-2.5rem)]';
 
   return (
     <motion.div
@@ -891,7 +909,7 @@ export default function FloatingChatbot() {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 30 }}
       transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
-      className={`fixed inset-x-0 bottom-0 sm:inset-x-auto sm:bottom-6 sm:right-6 ${windowResponsiveClass} glass-card rounded-t-3xl sm:rounded-3xl shadow-[0_20px_50px_-10px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden z-50 border-t sm:border border-[var(--color-border)] backdrop-blur-2xl transition-[width,height] duration-300`}
+      className={`fixed inset-x-0 bottom-0 sm:inset-x-auto sm:right-4 sm:bottom-[calc(4.75rem+max(0.75rem,env(safe-area-inset-bottom,0px)))] lg:bottom-6 lg:right-6 ${windowResponsiveClass} glass-card rounded-t-3xl sm:rounded-3xl shadow-[0_20px_50px_-10px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden z-50 border-t sm:border border-[var(--color-border)] backdrop-blur-2xl transition-[width,height] duration-300`}
     >
       {/* -------------------------------------------------------------
           Top Header: Matte Glass & Palette Gradient

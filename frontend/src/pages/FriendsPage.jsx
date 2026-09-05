@@ -158,7 +158,7 @@ export default function FriendsPage() {
       )}
 
       {/* Tabs Switcher */}
-      <div className="flex gap-1.5 p-1.5 bg-[var(--color-bg-matte)] rounded-2xl border border-[var(--color-border)] mb-6">
+      <div className="flex gap-1.5 p-1.5 bg-[var(--color-bg-matte)] rounded-2xl border border-[var(--color-border)] mb-6 overflow-x-auto scrollbar-none">
         {tabs.map((t) => {
           const active = tab === t.key;
           const Icon = t.icon;
@@ -166,7 +166,7 @@ export default function FriendsPage() {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`relative flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              className={`relative shrink-0 whitespace-nowrap py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
                 active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
               }`}
             >

@@ -843,7 +843,7 @@ export default function MessageBubble({
             {/* Anonymous Report button */}
             {isAnonMsg && !isOwn && onReport && (
               <button
-                onClick={() => onReport(author.id, authorLabel)}
+                onClick={() => onReport({ identityId: author.id || message.anonAuthorId, alias: authorLabel })}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
                 title="Report anonymous identity"
                 type="button"

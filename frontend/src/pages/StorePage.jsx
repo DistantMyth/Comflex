@@ -291,16 +291,39 @@ export default function StorePage() {
     ...(isAdmin ? [{ key: 'admin', label: '⚙️ Store Control' }] : []),
   ];
 
+  useEffect(() => {
+    const hasModal = popup.show || confirmModal.show || editModal.show;
+    if (hasModal) {
+      document.body.style.overflow = 'hidden';
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setPopup({ show: false, message: '', isError: false });
+          setConfirmModal({ show: false, title: '', message: '', confirmText: 'Confirm', onConfirm: null });
+          setEditModal({ show: false, listingId: '', badgeName: '', price: 0, quantity: -1 });
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.body.style.overflow = '';
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [popup.show, confirmModal.show, editModal.show]);
+
   return (
     <div className="max-w-5xl mx-auto pb-12">
       {/* Notifications modal */}
       <AnimatePresence>
         {popup.show && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setPopup({ show: false, message: '', isError: false })}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className={`glass-card p-6 rounded-3xl max-w-sm w-full text-center border shadow-2xl relative ${
                 popup.isError ? 'border-[var(--color-danger)]/40' : 'border-[var(--color-success)]/40'
               }`}
@@ -329,11 +352,15 @@ export default function StorePage() {
       {/* Confirmation Modal */}
       <AnimatePresence>
         {confirmModal.show && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setConfirmModal({ show: false, title: '', message: '', confirmText: 'Confirm', onConfirm: null })}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="glass-card p-6 rounded-3xl max-w-md w-full border border-[var(--color-border)] shadow-2xl"
             >
               <div className="flex items-center gap-2.5 mb-3 text-[var(--color-danger)]">
@@ -363,11 +390,15 @@ export default function StorePage() {
       {/* Edit Listing Modal */}
       <AnimatePresence>
         {editModal.show && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setEditModal({ show: false, listingId: '', badgeName: '', price: 0, quantity: -1 })}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="glass-card p-6 rounded-3xl max-w-sm w-full border border-[var(--color-border)] shadow-2xl"
             >
               <h3 className="text-base font-bold font-display text-[var(--color-text-primary)] mb-1">Edit Listing</h3>
@@ -443,7 +474,7 @@ export default function StorePage() {
             <button
               key={t.key}
               onClick={() => setActiveTab(t.key)}
-              className={`relative flex-1 shrink-0 whitespace-nowrap py-2 px-3.5 rounded-xl text-xs font-bold transition-all ${
+              className={`relative shrink-0 whitespace-nowrap py-2 px-4 rounded-xl text-xs font-bold transition-all ${
                 active ? 'text-white' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
               }`}
             >
@@ -504,7 +535,7 @@ export default function StorePage() {
               {/* Badge Listings Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
                 {listings.length === 0 && (
-                  <p className="text-xs text-[var(--color-text-muted)] col-span-3 text-center py-10">No items available in store right now.</p>
+                  <p className="text-xs text-[var(--color-text-muted)] col-span-full text-center py-10">No items available in store right now.</p>
                 )}
                 {listings.map((l) => (
                   <div
@@ -560,7 +591,7 @@ export default function StorePage() {
             <div className="space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 {inventory.length === 0 && (
-                  <div className="glass-card p-10 text-center col-span-4 border border-[var(--color-border)]">
+                  <div className="glass-card p-10 text-center col-span-full border border-[var(--color-border)]">
                     <p className="text-xs text-[var(--color-text-muted)]">You don&apos;t hold any badges yet. Browse the Store Catalog to acquire badges.</p>
                   </div>
                 )}

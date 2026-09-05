@@ -3,8 +3,9 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Settings, Users, Pin, ArrowLeft, Send, Paperclip, X, CornerDownLeft,
-  Share2, KeyRound, Loader2, Smile, AlertCircle, ChevronRight, Check
+  Share2, KeyRound, Loader2, Smile, AlertCircle, ChevronRight, Check, Flag
 } from 'lucide-react';
+import Avatar from '../components/Avatar';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { groupApi } from '../api/groupApi';
@@ -312,9 +313,13 @@ export default function ChatPage() {
       if (fileAttachment) {
         const formData = new FormData();
         formData.append('content', messageInput.trim());
+        formData.append('attachment', fileAttachment);
         formData.append('file', fileAttachment);
         if (replyingTo?.id) formData.append('replyToId', replyingTo.id);
-        await groupApi.uploadAttachment(groupId, formData);
+        if (pendingMentions.length > 0) {
+          formData.append('mentions', JSON.stringify(pendingMentions));
+        }
+        await groupApi.sendMessage(groupId, formData);
         setFileAttachment(null);
       } else {
         await groupApi.sendMessage(groupId, {
@@ -326,12 +331,70 @@ export default function ChatPage() {
       setMessageInput('');
       setReplyingTo(null);
       setPendingMentions([]);
+      setShowMentionPopup(false);
       stopTyping?.(groupId);
     } catch (err) {
       console.error(err);
     } finally {
       setSending(false);
       setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  };
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setMessageInput(val);
+    startTyping?.(groupId);
+    clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => stopTyping?.(groupId), 2000);
+
+    if (!isAnon) {
+      const cursor = e.target.selectionStart ?? val.length;
+      const textBeforeCursor = val.slice(0, cursor);
+      const match = textBeforeCursor.match(/@([a-zA-Z0-9_-]*)$/);
+      if (match) {
+        setMentionQuery(match[1]);
+        setShowMentionPopup(true);
+        setMentionIndex(0);
+      } else {
+        setShowMentionPopup(false);
+      }
+    }
+  };
+
+  const handleSelectMention = (member) => {
+    if (!member) return;
+    const cursor = inputRef.current?.selectionStart ?? messageInput.length;
+    const textBefore = messageInput.slice(0, cursor).replace(/@([a-zA-Z0-9_-]*)$/, `@${member.displayName || member.username} `);
+    const textAfter = messageInput.slice(cursor);
+    setMessageInput(textBefore + textAfter);
+    setPendingMentions((prev) => [...new Set([...prev, member.id])]);
+    setShowMentionPopup(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const handleInputKeyDown = (e) => {
+    if (showMentionPopup && mentionSuggestions.length > 0 && !isAnon) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        handleSelectMention(mentionSuggestions[mentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowMentionPopup(false);
+        return;
+      }
     }
   };
 
@@ -363,10 +426,7 @@ export default function ChatPage() {
   const handleReport = async () => {
     if (!reportTarget || !reportReason.trim()) return;
     try {
-      await groupApi.reportAnonIdentity(groupId, {
-        reportedIdentityId: reportTarget.identityId,
-        reason: reportReason.trim(),
-      });
+      await groupApi.reportAnonIdentity(groupId, reportTarget.identityId, reportReason.trim());
       alert('Report submitted for moderator review.');
       setReportTarget(null);
       setReportReason('');
@@ -384,8 +444,68 @@ export default function ChatPage() {
     }
   };
 
+  const handleForwardSearch = async (val) => {
+    setForwardSearch(val);
+    if (!allGroups.length) {
+      try {
+        const res = await groupApi.listGroups();
+        const groups = res.data?.data?.groups || res.data?.data || [];
+        setAllGroups(groups);
+      } catch { /* ignore */ }
+    }
+  };
+
+  const submitForward = async (targetGroupId) => {
+    if (!forwardingMsg) return;
+    try {
+      await groupApi.sendMessage(targetGroupId, {
+        content: forwardingMsg.content,
+        forwarded: true,
+        msgType: forwardingMsg.msgType || 'text',
+        fileUrl: forwardingMsg.fileUrl,
+        fileName: forwardingMsg.fileName,
+        fileSize: forwardingMsg.fileSize,
+      });
+      alert('Message forwarded successfully!');
+      setForwardingMsg(null);
+    } catch (err) {
+      alert(err.response?.data?.error?.message || 'Failed to forward message.');
+    }
+  };
+
+  useEffect(() => {
+    if (forwardingMsg && allGroups.length === 0) {
+      groupApi.listGroups().then((res) => {
+        setAllGroups(res.data?.data?.groups || res.data?.data || []);
+      }).catch(() => {});
+    }
+  }, [forwardingMsg, allGroups.length]);
+
+  useEffect(() => {
+    const isMobileDrawerActive = showSidebar && typeof window !== 'undefined' && window.innerWidth < 1024;
+    const hasActiveOverlay = isMobileDrawerActive || showSettings || selectedUserId || forwardingMsg || reportTarget;
+
+    if (hasActiveOverlay) {
+      document.body.style.overflow = 'hidden';
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setForwardingMsg(null);
+          setReportTarget(null);
+          setShowSettings(false);
+          if (window.innerWidth < 1024) setShowSidebar(false);
+          setSelectedUserId(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.body.style.overflow = '';
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [showSidebar, showSettings, selectedUserId, forwardingMsg, reportTarget]);
+
   return (
-    <div className="flex h-[calc(100dvh-8rem)] sm:h-[calc(100vh-8.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl relative">
+    <div className="flex h-[calc(100dvh-12.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] sm:h-[calc(100dvh-13.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] lg:h-[calc(100vh-9.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl relative">
       {/* Key Restore Gate for Anonymous Groups */}
       {anonGate && (
         <div className="absolute inset-0 z-40 bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
@@ -553,7 +673,19 @@ export default function ChatPage() {
                 anonMode={isAnon}
                 myIdentityId={myIdentity?.identityId}
                 isAnonCreator={group?.creatorId === user?.id}
-                onReport={(target) => setReportTarget(target)}
+                onReport={(identityIdOrObj, alias) => {
+                  if (typeof identityIdOrObj === 'object' && identityIdOrObj !== null) {
+                    setReportTarget({
+                      identityId: identityIdOrObj.identityId || identityIdOrObj.id,
+                      alias: identityIdOrObj.alias || identityIdOrObj.displayName || 'Anonymous',
+                    });
+                  } else {
+                    setReportTarget({
+                      identityId: identityIdOrObj,
+                      alias: alias || 'Anonymous',
+                    });
+                  }
+                }}
                 onReact={handleReact}
               />
             </div>
@@ -587,11 +719,44 @@ export default function ChatPage() {
         </div>
 
         {/* Input Bar */}
-        <form onSubmit={handleSendMessage} className="p-2 sm:p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/70 flex items-center gap-1.5 sm:gap-2">
+        <form onSubmit={handleSendMessage} className="p-2 sm:p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/70 flex items-center gap-1.5 sm:gap-2 relative">
+          {showMentionPopup && mentionSuggestions.length > 0 && !isAnon && (
+            <div className="absolute bottom-full left-2 sm:left-4 mb-2 w-64 max-h-48 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]/95 backdrop-blur-md shadow-xl z-30 p-1 divide-y divide-[var(--color-border)]/50">
+              {mentionSuggestions.map((m, idx) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => handleSelectMention(m)}
+                  onMouseEnter={() => setMentionIndex(idx)}
+                  className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                    idx === mentionIndex
+                      ? 'bg-[var(--color-accent)] text-white'
+                      : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)]'
+                  }`}
+                >
+                  <Avatar src={m.avatarUrl} name={m.displayName || m.username} size="xs" />
+                  <div className="truncate flex-1">
+                    <p className="font-semibold truncate leading-tight">{m.displayName}</p>
+                    {m.username && (
+                      <p className={`text-[10px] truncate ${idx === mentionIndex ? 'text-white/80' : 'text-[var(--color-text-muted)]'}`}>
+                        @{m.username}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
           <input
             type="file"
             ref={fileInputRef}
-            onChange={(e) => setFileAttachment(e.target.files[0])}
+            onChange={(e) => {
+              if (e.target.files?.[0]) {
+                setFileAttachment(e.target.files[0]);
+              }
+              e.target.value = '';
+            }}
             className="hidden"
           />
           <button
@@ -607,12 +772,8 @@ export default function ChatPage() {
             ref={inputRef}
             type="text"
             value={messageInput}
-            onChange={(e) => {
-              setMessageInput(e.target.value);
-              startTyping?.(groupId);
-              clearTimeout(typingTimeoutRef.current);
-              typingTimeoutRef.current = setTimeout(() => stopTyping?.(groupId), 2000);
-            }}
+            onChange={handleInputChange}
+            onKeyDown={handleInputKeyDown}
             placeholder={isAnon ? 'Send anonymous message...' : `Message #${group?.name || 'chat'}...`}
             className="matte-input flex-1 text-xs sm:text-sm py-2 sm:py-2.5"
           />
@@ -629,26 +790,31 @@ export default function ChatPage() {
 
       {/* Member & Pinned Sidebar (Desktop inline, Mobile overlay drawer) */}
       {!isAnon && showSidebar && (
-        <>
-          {/* Desktop inline */}
-          <div className="w-72 border-l border-[var(--color-border)] hidden lg:block bg-[var(--color-bg-card)]/40 overflow-hidden">
-            <GroupSidebar
-              group={group}
-              members={members}
-              pinnedMessages={pinnedMessages}
-              isAdmin={isAdmin}
-              onUserClick={(uid) => setSelectedUserId(uid)}
-              onJumpToMessage={jumpToMessage}
-            />
-          </div>
+        <div className="w-72 border-l border-[var(--color-border)] hidden lg:block bg-[var(--color-bg-card)]/40 overflow-hidden">
+          <GroupSidebar
+            group={group}
+            members={members}
+            pinnedMessages={pinnedMessages}
+            isAdmin={isAdmin}
+            onUserClick={(uid) => setSelectedUserId(uid)}
+            onJumpToMessage={jumpToMessage}
+          />
+        </div>
+      )}
 
-          {/* Mobile slide-over drawer */}
-          <div className="lg:hidden fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs">
+      {/* Mobile slide-over drawer for members & pins */}
+      <AnimatePresence>
+        {!isAnon && showSidebar && (
+          <div
+            className="lg:hidden fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs"
+            onClick={() => setShowSidebar(false)}
+          >
             <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+              onClick={(e) => e.stopPropagation()}
               className="w-full max-w-xs sm:max-w-sm h-full bg-[var(--color-bg-primary)] border-l border-[var(--color-border)] shadow-2xl flex flex-col pt-safe pb-safe"
             >
               <div className="p-3.5 border-b border-[var(--color-border)] flex items-center justify-between">
@@ -678,59 +844,191 @@ export default function ChatPage() {
               </div>
             </motion.div>
           </div>
-        </>
-      )}
+        )}
+      </AnimatePresence>
 
-      {/* Group Settings Flyout Drawer */}
+      {/* Anonymous Group Administration Drawer */}
       <AnimatePresence>
-        {showSettings && (
-          <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs">
+        {showSettings && isAnon && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs"
+            onClick={() => setShowSettings(false)}
+          >
             <motion.div
-              initial={{ x: 400 }}
+              initial={{ x: '100%' }}
               animate={{ x: 0 }}
-              exit={{ x: 400 }}
+              exit={{ x: '100%' }}
               transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-              className="w-full max-w-lg h-full bg-[var(--color-bg-primary)] border-l border-[var(--color-border)] shadow-2xl flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg h-full bg-[var(--color-bg-primary)] border-l border-[var(--color-border)] shadow-2xl flex flex-col pt-safe pb-safe"
             >
               <div className="p-4 border-b border-[var(--color-border)] flex items-center justify-between">
-                <h3 className="font-bold font-display text-sm text-[var(--color-text-primary)]">Group Administration</h3>
+                <h3 className="font-bold font-display text-sm text-[var(--color-text-primary)]">Anonymous Administration</h3>
                 <button onClick={() => setShowSettings(false)} className="p-1 hover:opacity-75">
                   <X size={18} />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
-                {isAnon ? (
-                  <AnonGroupPanel
-                    groupId={groupId}
-                    myIdentity={myIdentity}
-                    isCreator={group?.creatorId === user?.id}
-                    onLeft={() => navigate('/groups')}
-                    onIdentityUpdated={(newId) => setMyIdentity(newId)}
-                  />
-                ) : (
-                  <GroupSettingsPanel
-                    groupId={groupId}
-                    group={group}
-                    isAdmin={isAdmin}
-                    onGroupUpdated={() => {
-                      groupApi.getGroup(groupId).then(res => setGroup(res.data?.data));
-                    }}
-                    onGroupDeleted={() => navigate('/groups')}
-                  />
-                )}
+                <AnonGroupPanel
+                  groupId={groupId}
+                  myIdentity={myIdentity}
+                  isCreator={group?.creatorId === user?.id || isAdmin}
+                  onLeft={() => navigate('/groups')}
+                  onIdentityUpdated={(newId) => setMyIdentity(newId)}
+                  className="w-full border-none p-0 overflow-visible shadow-none"
+                />
               </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* User Profile Modal */}
-      {selectedUserId && (
-        <UserProfilePanel
-          userId={selectedUserId}
-          onClose={() => setSelectedUserId(null)}
-        />
-      )}
+      {/* Standard Group Settings Modal Dialog */}
+      <AnimatePresence>
+        {showSettings && !isAnon && (
+          <GroupSettingsPanel
+            groupId={groupId}
+            group={group}
+            currentUserId={user?.id}
+            isAdmin={isAdmin}
+            onClose={() => setShowSettings(false)}
+            onGroupUpdated={() => {
+              groupApi.getGroup(groupId).then(res => setGroup(res.data?.data));
+            }}
+            onGroupDeleted={() => navigate('/groups')}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* User Profile Modal / Slide-Over Drawer */}
+      <AnimatePresence>
+        {selectedUserId && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-end bg-black/60 backdrop-blur-xs"
+            onClick={() => setSelectedUserId(null)}
+          >
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+              onClick={(e) => e.stopPropagation()}
+              className="h-full flex flex-col pt-safe pb-safe max-w-full"
+            >
+              <UserProfilePanel
+                userId={selectedUserId}
+                currentUserId={user?.id}
+                onClose={() => setSelectedUserId(null)}
+              />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Message Forwarding Modal */}
+      <AnimatePresence>
+        {forwardingMsg && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setForwardingMsg(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+              className="glass-card p-6 rounded-3xl max-w-sm w-full border border-[var(--color-border)] shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+                <div className="flex items-center gap-2 text-[var(--color-accent)]">
+                  <Share2 size={16} />
+                  <h3 className="font-bold font-display text-sm text-[var(--color-text-primary)]">Forward Message</h3>
+                </div>
+                <button onClick={() => setForwardingMsg(null)} className="p-1 hover:opacity-75">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Search group to forward to..."
+                value={forwardSearch}
+                onChange={(e) => handleForwardSearch(e.target.value)}
+                className="matte-input text-xs mb-3"
+              />
+
+              <div className="max-h-48 overflow-y-auto space-y-1.5 divide-y divide-[var(--color-border)]/50">
+                {allGroups
+                  .filter((g) => g.id !== groupId && (!forwardSearch.trim() || (g.displayName || g.name || '').toLowerCase().includes(forwardSearch.toLowerCase())))
+                  .map((g) => (
+                    <button
+                      key={g.id}
+                      onClick={() => submitForward(g.id)}
+                      className="w-full flex items-center gap-2 p-2 rounded-xl hover:bg-[var(--color-bg-secondary)] text-left"
+                    >
+                      <Avatar src={g.avatarUrl} name={g.displayName || g.name} className="w-7 h-7 rounded-xl" />
+                      <span className="text-xs font-semibold text-[var(--color-text-primary)] truncate">{g.displayName || g.name}</span>
+                    </button>
+                  ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Anonymous Report Modal */}
+      <AnimatePresence>
+        {reportTarget && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setReportTarget(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
+              className="glass-card p-6 rounded-3xl max-w-sm w-full border border-[var(--color-border)] shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
+                <div className="flex items-center gap-2 text-rose-500">
+                  <Flag size={16} />
+                  <h3 className="font-bold font-display text-sm text-[var(--color-text-primary)]">Report Post</h3>
+                </div>
+                <button onClick={() => setReportTarget(null)} className="p-1 hover:opacity-75">
+                  <X size={16} />
+                </button>
+              </div>
+              <p className="text-xs text-[var(--color-text-secondary)] mb-3">
+                Report anonymous identity <strong>{reportTarget.alias || reportTarget.identityId}</strong> to group moderators.
+              </p>
+              <textarea
+                value={reportReason}
+                onChange={(e) => setReportReason(e.target.value)}
+                placeholder="Why are you reporting this message?"
+                className="matte-input text-xs w-full h-24 mb-4 resize-none"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReportTarget(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-[var(--color-text-muted)] hover:bg-[var(--color-bg-secondary)]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReport}
+                  disabled={!reportReason.trim()}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-500 text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+                >
+                  Submit Report
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

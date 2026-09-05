@@ -51,9 +51,9 @@ export default function Homepage() {
       <LiquidGlassBackground />
 
       {/* Floating Matte Glass Top Navigation */}
-      <nav className="fixed top-2.5 sm:top-4 inset-x-2.5 sm:inset-x-4 max-w-6xl mx-auto z-50 glass-card px-3 sm:px-5 py-2 sm:py-3 flex items-center justify-between border border-[var(--color-border)] shadow-lg">
+      <nav className="fixed top-[calc(0.625rem+env(safe-area-inset-top,0px))] sm:top-4 inset-x-2.5 sm:inset-x-4 max-w-6xl mx-auto z-50 glass-card px-3 sm:px-5 py-2 sm:py-3 flex items-center justify-between border border-[var(--color-border)] shadow-lg">
         <Link to="/" className="flex items-center gap-2">
-          <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={true} />
+          <ComflexLogo variant="fullWithWordmark" size="md" animated={true} responsiveWordmark={false} />
         </Link>
 
         {/* Center Links */}
@@ -88,7 +88,7 @@ export default function Homepage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative z-10 pt-28 sm:pt-36 pb-16 sm:pb-20 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
+      <section className="relative z-10 pt-[calc(7rem+env(safe-area-inset-top,0px))] sm:pt-36 pb-16 sm:pb-20 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
         <motion.div
           variants={heroContainerVariants}
           initial="hidden"

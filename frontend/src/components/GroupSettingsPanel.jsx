@@ -74,8 +74,10 @@ export default function GroupSettingsPanel({
   groupId,
   group,
   currentUserId,
+  isAdmin = false,
   onClose,
-  onGroupUpdated
+  onGroupUpdated,
+  onGroupDeleted,
 }) {
   const [tab, setTab] = useState('info');
   const [members, setMembers] = useState([]);
@@ -221,7 +223,7 @@ export default function GroupSettingsPanel({
   }, [currentMember, group?.creatorId, currentUserId]);
 
   const currentUserRing = currentMember ? currentMember.groupRing : 3;
-  const isGroupAdmin = isCreator || currentUserRing === 0;
+  const isGroupAdmin = isCreator || currentUserRing === 0 || isAdmin;
   const canManageRoles = isGroupAdmin || !!currentMember?.permissions?.can_manage_roles;
   const canEditGroupInfo = isGroupAdmin || !!currentMember?.permissions?.can_edit_group_info;
   const canAddMembers = isGroupAdmin || !!currentMember?.permissions?.can_add_members;
@@ -280,6 +282,7 @@ export default function GroupSettingsPanel({
 
     if (file.size > 5 * 1024 * 1024) {
       showToast('Avatar file must be under 5MB', 'error');
+      if (e.target) e.target.value = '';
       return;
     }
 
@@ -293,6 +296,7 @@ export default function GroupSettingsPanel({
       showToast(err.response?.data?.error?.message || 'Failed to upload avatar', 'error');
     } finally {
       setUploadingAvatar(false);
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -561,7 +565,10 @@ export default function GroupSettingsPanel({
 
   // Delete Group
   const handleExecuteDelete = async () => {
-    if (deleteConfirmationText.trim().toLowerCase() !== (group?.name || group?.displayName || '').toLowerCase()) {
+    const targetA = (group?.displayName || '').trim().toLowerCase();
+    const targetB = (group?.name || '').trim().toLowerCase();
+    const input = deleteConfirmationText.trim().toLowerCase();
+    if (!input || (input !== targetA && input !== targetB)) {
       showToast('Group name confirmation does not match', 'error');
       return;
     }
@@ -569,9 +576,13 @@ export default function GroupSettingsPanel({
     try {
       await groupApi.deleteGroup(groupId);
       showToast('Group permanently deleted');
-      setTimeout(() => {
-        window.location.href = '/groups';
-      }, 500);
+      if (onGroupDeleted) {
+        onGroupDeleted();
+      } else {
+        setTimeout(() => {
+          window.location.href = '/groups';
+        }, 500);
+      }
     } catch (err) {
       showToast(err.response?.data?.error?.message || 'Failed to delete group', 'error');
       setActionLoading(false);
@@ -1710,11 +1721,12 @@ export default function GroupSettingsPanel({
         {/* Mute Modal */}
         <AnimatePresence>
           {mutingMember && (
-            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => setMutingMember(null)}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                onClick={(e) => e.stopPropagation()}
                 className="glass-card w-full max-w-md p-6 space-y-4 shadow-2xl border border-[var(--color-border)]"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-warning)]">
@@ -1766,11 +1778,12 @@ export default function GroupSettingsPanel({
         {/* Kick Modal */}
         <AnimatePresence>
           {confirmKickMember && (
-            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => setConfirmKickMember(null)}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                onClick={(e) => e.stopPropagation()}
                 className="glass-card w-full max-w-md p-6 space-y-4 shadow-2xl border border-[var(--color-border)]"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-danger)]">
@@ -1805,11 +1818,12 @@ export default function GroupSettingsPanel({
         {/* Transfer Ownership Modal */}
         <AnimatePresence>
           {confirmTransferMember && (
-            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => setConfirmTransferMember(null)}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                onClick={(e) => e.stopPropagation()}
                 className="glass-card w-full max-w-md p-6 space-y-4 shadow-2xl border border-[var(--color-border)]"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-warning)]">
@@ -1845,11 +1859,12 @@ export default function GroupSettingsPanel({
         {/* Leave Group Modal */}
         <AnimatePresence>
           {confirmLeave && (
-            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => setConfirmLeave(false)}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                onClick={(e) => e.stopPropagation()}
                 className="glass-card w-full max-w-md p-6 space-y-4 shadow-2xl border border-[var(--color-border)]"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-warning)]">
@@ -1884,11 +1899,12 @@ export default function GroupSettingsPanel({
         {/* Delete Group Modal */}
         <AnimatePresence>
           {confirmDelete && (
-            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs" onClick={() => { setConfirmDelete(false); setDeleteConfirmationText(''); }}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
+                onClick={(e) => e.stopPropagation()}
                 className="glass-card w-full max-w-md p-6 space-y-4 shadow-2xl border border-[var(--color-danger)]/40"
               >
                 <div className="flex items-center gap-2 text-sm font-bold text-[var(--color-danger)]">
@@ -1917,7 +1933,9 @@ export default function GroupSettingsPanel({
                     onClick={handleExecuteDelete}
                     disabled={
                       actionLoading ||
-                      deleteConfirmationText.trim().toLowerCase() !== (group?.displayName || group?.name || '').toLowerCase()
+                      !deleteConfirmationText.trim() ||
+                      (deleteConfirmationText.trim().toLowerCase() !== (group?.displayName || '').trim().toLowerCase() &&
+                       deleteConfirmationText.trim().toLowerCase() !== (group?.name || '').trim().toLowerCase())
                     }
                     className="btn btn-danger flex-1 text-xs py-2 cursor-pointer"
                   >

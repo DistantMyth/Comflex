@@ -38,7 +38,18 @@ async function verifyGoogleToken(tokenInput) {
     }
   } else if (tokenInput && typeof tokenInput === 'object') {
     idToken = typeof tokenInput.idToken === 'string' && tokenInput.idToken.trim() ? tokenInput.idToken.trim() : null;
-    accessToken = typeof tokenInput.accessToken === 'string' && tokenInput.accessToken.trim() ? tokenInput.accessToken.trim() : null;
+    accessToken = (typeof tokenInput.accessToken === 'string' && tokenInput.accessToken.trim())
+      || (typeof tokenInput.access_token === 'string' && tokenInput.access_token.trim())
+      || null;
+
+    if (!idToken && !accessToken && typeof tokenInput.token === 'string' && tokenInput.token.trim()) {
+      const raw = tokenInput.token.trim();
+      if (raw.startsWith('ya29.')) {
+        accessToken = raw;
+      } else {
+        idToken = raw;
+      }
+    }
   }
 
   if (!idToken && !accessToken) {

@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Send, Search, Coins, ArrowLeft, CornerDownLeft, X, CornerUpRight,
-  Pencil, Trash2, Check, CheckCheck, Loader2, Share2, Sparkles, MessageSquare
+  Pencil, Trash2, Check, CheckCheck, Loader2, Share2, Sparkles, MessageSquare,
+  Paperclip, FileText, Download
 } from 'lucide-react';
 import { dmApi } from '../api/dmApi';
 import { storeApi } from '../api/storeApi';
@@ -11,6 +12,7 @@ import { userApi } from '../api/userApi';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import Avatar from '../components/Avatar';
+import resolveAsset from '../utils/resolveAsset';
 
 export default function MessagesPage() {
   const { userId: activeUserId } = useParams();
@@ -22,6 +24,7 @@ export default function MessagesPage() {
   const [search, setSearch] = useState('');
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
+  const [fileAttachment, setFileAttachment] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [page, setPage] = useState(1);
@@ -40,6 +43,7 @@ export default function MessagesPage() {
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
 
   const fetchConversations = useCallback(async () => {
@@ -162,11 +166,28 @@ export default function MessagesPage() {
 
   const handleSend = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !activeUserId) return;
+    if ((!newMessage.trim() && !fileAttachment) || !activeUserId) return;
 
     setSending(true);
     try {
-      await dmApi.sendMessage(activeUserId, { content: newMessage.trim(), replyToId: replyingTo?.id });
+      let fileData = {};
+      if (fileAttachment) {
+        const uploadRes = await dmApi.uploadAttachment(fileAttachment);
+        const uploaded = uploadRes.data?.data || uploadRes.data;
+        fileData = {
+          fileUrl: uploaded.fileUrl,
+          fileName: uploaded.fileName,
+          fileSize: uploaded.fileSize,
+          mimetype: uploaded.mimetype,
+          msgType: uploaded.mimetype?.startsWith('image/') ? 'image' : 'document',
+        };
+        setFileAttachment(null);
+      }
+      await dmApi.sendMessage(activeUserId, {
+        content: newMessage.trim(),
+        replyToId: replyingTo?.id,
+        ...fileData,
+      });
       setNewMessage('');
       setReplyingTo(null);
       await fetchMessages(true);
@@ -227,8 +248,25 @@ export default function MessagesPage() {
     }
   };
 
+  useEffect(() => {
+    if (showCreditTransfer || forwardingMsg) {
+      document.body.style.overflow = 'hidden';
+      const handleKeyDown = (e) => {
+        if (e.key === 'Escape') {
+          setShowCreditTransfer(false);
+          setForwardingMsg(null);
+        }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        document.body.style.overflow = '';
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+  }, [showCreditTransfer, forwardingMsg]);
+
   return (
-    <div className="flex h-[calc(100dvh-8rem)] sm:h-[calc(100vh-8.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl">
+    <div className="flex h-[calc(100dvh-12.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] sm:h-[calc(100dvh-13.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] lg:h-[calc(100vh-9.5rem)] rounded-2xl sm:rounded-3xl border border-[var(--color-border)] glass-card overflow-hidden shadow-xl">
       {/* Conversations Sidebar */}
       <div className={`w-full md:w-80 border-r border-[var(--color-border)] flex flex-col bg-[var(--color-bg-card)]/40 ${activeUserId ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-4 border-b border-[var(--color-border)]">
@@ -295,29 +333,30 @@ export default function MessagesPage() {
           <>
             {/* Chat Top Header */}
             <div className="p-3.5 px-5 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-bg-card)]/60 backdrop-blur-md">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <button
                   onClick={() => navigate('/messages')}
-                  className="md:hidden p-1.5 rounded-xl border border-[var(--color-border)] text-[var(--color-text-secondary)]"
+                  className="md:hidden p-1.5 rounded-xl border border-[var(--color-border)] text-[var(--color-text-secondary)] shrink-0"
+                  aria-label="Back to conversations"
                 >
                   <ArrowLeft size={16} />
                 </button>
                 <Avatar
                   src={activePartner?.avatarUrl}
                   name={activePartner?.displayName}
-                  className="w-9 h-9 rounded-2xl ring-1 ring-[var(--color-border)] shadow-xs"
+                  className="w-9 h-9 rounded-2xl ring-1 ring-[var(--color-border)] shadow-xs shrink-0"
                 />
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <p className="font-bold text-xs text-[var(--color-text-primary)]">{activePartner?.displayName || 'Loading...'}</p>
+                    <p className="font-bold text-xs text-[var(--color-text-primary)] truncate">{activePartner?.displayName || 'Loading...'}</p>
                     {activePartner?.isFriend && (
-                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-bold">
+                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-bold shrink-0">
                         Friend
                       </span>
                     )}
                   </div>
                   {activePartner?.username && (
-                    <p className="text-[10px] text-[var(--color-text-muted)] font-medium">@{activePartner.username}</p>
+                    <p className="text-[10px] text-[var(--color-text-muted)] font-medium truncate">@{activePartner.username}</p>
                   )}
                 </div>
               </div>
@@ -325,10 +364,11 @@ export default function MessagesPage() {
               {/* Header Right Actions */}
               <button
                 onClick={() => setShowCreditTransfer(true)}
-                className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 text-[var(--color-warning)]"
+                className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 text-[var(--color-warning)] shrink-0 ml-2"
               >
                 <Coins size={14} />
-                <span>Send Credits</span>
+                <span className="hidden sm:inline">Send Credits</span>
+                <span className="sm:hidden">Credits</span>
               </button>
             </div>
 
@@ -431,7 +471,35 @@ export default function MessagesPage() {
                               </div>
                             </div>
                           ) : (
-                            <p className="leading-relaxed">{msg.content}</p>
+                            <>
+                              {msg.content && <p className="leading-relaxed">{msg.content}</p>}
+                              {msg.fileUrl && (
+                                (msg.msgType === 'image' || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.fileName || msg.fileUrl)) ? (
+                                  <div className="mt-2 rounded-xl overflow-hidden max-w-sm border border-[var(--color-border)]">
+                                    <img
+                                      src={resolveAsset(msg.fileUrl)}
+                                      alt={msg.fileName || 'Attachment'}
+                                      className="w-full max-h-60 object-cover cursor-pointer hover:opacity-95"
+                                      onClick={() => window.open(resolveAsset(msg.fileUrl), '_blank', 'noopener,noreferrer')}
+                                    />
+                                  </div>
+                                ) : (
+                                  <a
+                                    href={resolveAsset(msg.fileUrl)}
+                                    download={msg.fileName || true}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-2 flex items-center justify-between p-2.5 rounded-xl border border-[var(--color-border)] bg-black/10 hover:bg-black/20 transition-colors"
+                                  >
+                                    <div className="flex items-center gap-2 truncate">
+                                      <FileText size={15} className="shrink-0" />
+                                      <span className="text-xs font-semibold truncate">{msg.fileName || 'Attachment'}</span>
+                                    </div>
+                                    <Download size={14} className="shrink-0 ml-2" />
+                                  </a>
+                                )
+                              )}
+                            </>
                           )}
 
                           <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isMine ? 'text-white/80' : 'text-[var(--color-text-muted)]'}`}>
@@ -490,8 +558,36 @@ export default function MessagesPage() {
               </div>
             )}
 
+            {fileAttachment && (
+              <div className="px-4 py-2 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex items-center justify-between text-xs">
+                <span className="font-bold truncate text-[var(--palette-teal)]">📎 {fileAttachment.name}</span>
+                <button onClick={() => setFileAttachment(null)} className="p-1 hover:text-[var(--color-danger)]">
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
             {/* Input Bar */}
             <form onSubmit={handleSend} className="p-2 sm:p-3 border-t border-[var(--color-border)] bg-[var(--color-bg-card)]/60 flex items-center gap-1.5 sm:gap-2">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    setFileAttachment(e.target.files[0]);
+                  }
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 sm:p-2.5 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors shrink-0"
+                title="Attach file"
+              >
+                <Paperclip size={16} />
+              </button>
               <input
                 ref={inputRef}
                 type="text"
@@ -503,7 +599,7 @@ export default function MessagesPage() {
               />
               <button
                 type="submit"
-                disabled={sending || !newMessage.trim()}
+                disabled={sending || (!newMessage.trim() && !fileAttachment)}
                 className="btn btn-primary px-3 sm:px-4 py-2 sm:py-2.5 shadow-sm shrink-0"
               >
                 {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
@@ -526,11 +622,15 @@ export default function MessagesPage() {
       {/* Credit Transfer Modal */}
       <AnimatePresence>
         {showCreditTransfer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setShowCreditTransfer(false)}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="glass-card p-6 rounded-3xl max-w-sm w-full border border-[var(--color-border)] shadow-2xl"
             >
               <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">
@@ -579,11 +679,15 @@ export default function MessagesPage() {
       {/* Forwarding Modal */}
       <AnimatePresence>
         {forwardingMsg && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
+            onClick={() => setForwardingMsg(null)}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="glass-card p-6 rounded-3xl max-w-sm w-full border border-[var(--color-border)] shadow-2xl"
             >
               <div className="flex items-center justify-between pb-3 border-b border-[var(--color-border)] mb-4">

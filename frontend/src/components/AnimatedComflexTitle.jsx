@@ -1,4 +1,4 @@
-﻿import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { useReducedMotion } from 'framer-motion';
@@ -11,8 +11,29 @@ export default function AnimatedComflexTitle() {
   const container = useRef(null);
   const shouldReduceMotion = useReducedMotion();
   const { theme } = useTheme();
+  const [fontsReady, setFontsReady] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+    const timeout = setTimeout(() => {
+      if (isMounted) setFontsReady(true);
+    }, 350);
+
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        clearTimeout(timeout);
+        if (isMounted) setFontsReady(true);
+      });
+    }
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timeout);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!fontsReady) return;
     let isMounted = true;
     const target = container.current;
     if (!target) return;
@@ -78,20 +99,21 @@ export default function AnimatedComflexTitle() {
       });
     }, container);
 
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(() => {
-        if (isMounted) ScrollTrigger.refresh();
-      });
-    }
+    ScrollTrigger.refresh();
 
     return () => {
       isMounted = false;
       ctx.revert();
     };
-  }, [shouldReduceMotion, theme]);
+  }, [fontsReady, shouldReduceMotion, theme]);
 
   return (
-    <div className="animated-comflex-container" ref={container}>
+    <div
+      className="animated-comflex-container"
+      ref={container}
+      style={{ opacity: fontsReady ? 1 : 0, transition: 'opacity 0.2s ease-in' }}
+    >
+      <h1 className="sr-only">Comflex — Join your community, flex your badges</h1>
       <div className="hero-main-title" aria-hidden="true">
         <div className="title-interactive-wrapper">
           <span className="text-com">

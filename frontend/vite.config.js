@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       port: 5174,
-      host: '127.0.0.1',
+      host: env.HOST || true,
       proxy: {
         '/api': {
           target: backendUrl,
@@ -34,7 +34,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: Number(port),
-      host: '127.0.0.1',
+      host: env.HOST || true,
       proxy: {
         '/api': {
           target: backendUrl,

@@ -62,6 +62,7 @@ export const groupApi = {
     }
     return client.post(`/groups/${groupId}/messages`, data, config);
   },
+  uploadAttachment: (groupId, data) => groupApi.sendMessage(groupId, data),
   reactToMessage: (groupId, msgId, emoji) =>
     client.patch(`/groups/${groupId}/messages/${msgId}/react`, { emoji }, withAnonIdentity({}, groupId)),
   editMessage: (groupId, msgId, content) =>
@@ -97,8 +98,15 @@ export const groupApi = {
     client.get(`/groups/${groupId}/anons/me`, withAnonIdentity({}, groupId)),
   renameAnonIdentity: (groupId, alias, avatarUrl) =>
     client.post(`/groups/${groupId}/anons/rename`, { alias, avatarUrl }, withAnonIdentity({}, groupId)),
-  reportAnonIdentity: (groupId, targetIdentityId, reason) =>
-    client.post(`/groups/${groupId}/anons/report`, { targetIdentityId, reason }, withAnonIdentity({}, groupId)),
+  reportAnonIdentity: (groupId, targetIdentityIdOrData, reason) => {
+    let targetIdentityId = targetIdentityIdOrData;
+    let reportReason = reason;
+    if (typeof targetIdentityIdOrData === 'object' && targetIdentityIdOrData !== null) {
+      targetIdentityId = targetIdentityIdOrData.targetIdentityId || targetIdentityIdOrData.reportedIdentityId || targetIdentityIdOrData.identityId;
+      reportReason = targetIdentityIdOrData.reason;
+    }
+    return client.post(`/groups/${groupId}/anons/report`, { targetIdentityId, reason: reportReason }, withAnonIdentity({}, groupId));
+  },
   getAnonReports: (groupId) =>
     client.get(`/groups/${groupId}/anons/reports`, withAnonIdentity({}, groupId)),
   banAnonIdentity: (groupId, identityId) =>
