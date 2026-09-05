@@ -12,7 +12,10 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 function GoogleRegisterTrigger({ onSuccess, onError, loading }) {
   const triggerSignup = useGoogleLogin({
     onSuccess,
-    onError: () => onError('Google registration was interrupted or failed.'),
+    onError: (err) => {
+      console.error('[GoogleAuth] Registration error:', err);
+      onError('Google registration was interrupted or failed.');
+    },
     flow: 'implicit',
   });
 
@@ -32,11 +35,14 @@ export default function RegisterPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (response) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const payload = response?.credential
+        ? { idToken: response.credential }
+        : { accessToken: response?.access_token };
+      const result = await googleLogin(payload);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Registration failed. Please make sure you use your official college email.');

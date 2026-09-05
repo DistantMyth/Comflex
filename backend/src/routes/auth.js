@@ -91,11 +91,22 @@ router.post(
 /**
  * POST /api/v1/auth/google
  * Login or register via Google OAuth.
- * Expects: { idToken } from the frontend Google Sign-In.
+ * Accepts: { idToken } or { accessToken } from the frontend Google Sign-In.
  */
 router.post(
   '/google',
-  [body('idToken').notEmpty().withMessage('Google ID token is required.')],
+  [
+    body().custom((value, { req }) => {
+      const hasIdToken = typeof req.body?.idToken === 'string' && req.body.idToken.trim().length > 0;
+      const hasAccessToken = (typeof req.body?.accessToken === 'string' && req.body.accessToken.trim().length > 0) ||
+                             (typeof req.body?.access_token === 'string' && req.body.access_token.trim().length > 0);
+      const hasToken = typeof req.body?.token === 'string' && req.body.token.trim().length > 0;
+      if (!hasIdToken && !hasAccessToken && !hasToken) {
+        throw new Error('Google token (idToken or accessToken) is required.');
+      }
+      return true;
+    }),
+  ],
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -105,7 +116,11 @@ router.post(
         );
       }
 
-      const result = await authService.googleLogin(req.body.idToken);
+      const result = await authService.googleLogin({
+        idToken: req.body.idToken,
+        accessToken: req.body.accessToken || req.body.access_token,
+        token: req.body.token,
+      });
       setRefreshCookie(res, result.refreshToken);
       return success(res, result);
     } catch (err) {

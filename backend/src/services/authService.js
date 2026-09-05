@@ -121,21 +121,15 @@ async function register(email, password, displayName) {
 
 /**
  * Google OAuth Login/Register.
- * 1. Verify the Google ID token
+ * 1. Verify the Google ID token or Access token
  * 2. Find existing user by googleId or email
  * 3. If new user → create account (no password yet)
  * 4. Auto-assign cohort tags
  * 5. Return JWT pair + needsPassword + needsUsername flags
  */
-async function googleLogin(idToken) {
-  // Gate: institution must be configured
-  const config = await prisma.institutionConfig.findFirst();
-  if (!config || !config.isConfigured) {
-    throw Object.assign(new Error('Registration is disabled. The platform has not been configured yet.'), { statusCode: 403, code: 'REGISTRATION_DISABLED' });
-  }
-
+async function googleLogin(tokenInput) {
   // Verify the Google token and get user info
-  const googleUser = await verifyGoogleToken(idToken);
+  const googleUser = await verifyGoogleToken(tokenInput);
   const googleEmail = normalizeEmail(googleUser.email);
 
   // Look up user by googleId first, then by email
@@ -153,7 +147,9 @@ async function googleLogin(idToken) {
           { statusCode: 409, code: 'GOOGLE_LINK_CONFLICT' }
         );
       }
-      if (user.hasPassword && !user.googleId) {
+      const isSeedAdmin = env.SEED_ADMIN_EMAIL && user.email.toLowerCase() === env.SEED_ADMIN_EMAIL.trim().toLowerCase();
+      const isAdmin = isSeedAdmin || user.globalRing === 0;
+      if (user.hasPassword && !user.googleId && !isAdmin) {
         // Never silently absorb a password account into a Google identity —
         // an attacker could pre-register a victim's email otherwise.
         throw Object.assign(
@@ -161,12 +157,18 @@ async function googleLogin(idToken) {
           { statusCode: 409, code: 'EMAIL_TAKEN' }
         );
       }
-      // Link the existing Google-only account (or previously linked) to Google
+      // Link the existing Google-only account (or previously linked or admin) to Google
       user = await prisma.user.update({
         where: { id: user.id },
         data: { googleId: googleUser.googleId },
       });
     } else {
+      // Gate: institution must be configured before new user registration is allowed
+      const config = await prisma.institutionConfig.findFirst();
+      if (!config || !config.isConfigured) {
+        throw Object.assign(new Error('Registration is disabled. The platform has not been configured yet.'), { statusCode: 403, code: 'REGISTRATION_DISABLED' });
+      }
+
       // Create brand new user — no password yet, no username yet (chosen
       // during onboarding so users pick their handle instead of an
       // auto-generated one).

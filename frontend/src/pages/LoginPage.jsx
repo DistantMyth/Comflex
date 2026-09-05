@@ -12,7 +12,10 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 function GoogleButtonTrigger({ onSuccess, onError, loading }) {
   const triggerLogin = useGoogleLogin({
     onSuccess,
-    onError: () => onError('Google login was interrupted or failed.'),
+    onError: (err) => {
+      console.error('[GoogleAuth] Login error:', err);
+      onError('Google login was interrupted or failed.');
+    },
     flow: 'implicit',
   });
 
@@ -72,11 +75,14 @@ export default function LoginPage() {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (response) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const payload = response?.credential
+        ? { idToken: response.credential }
+        : { accessToken: response?.access_token };
+      const result = await googleLogin(payload);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
       setError(err.response?.data?.error?.message || err.response?.data?.message || 'Google login failed.');

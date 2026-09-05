@@ -60,14 +60,17 @@ export default function ForgotPasswordPage() {
     [startCooldown]
   );
 
-  const handleGoogleSuccess = async (credentialResponse) => {
+  const handleGoogleSuccess = async (response) => {
     setError('');
     setLoading(true);
     try {
-      const result = await googleLogin(credentialResponse.credential);
+      const payload = response?.credential
+        ? { idToken: response.credential }
+        : { accessToken: response?.access_token };
+      const result = await googleLogin(payload);
       navigate(result.needsPassword || result.needsUsername ? '/set-password' : '/profile', { state: { needsUsername: result.needsUsername } });
     } catch (err) {
-      setError(err.response?.data?.message || 'Google login failed.');
+      setError(err.response?.data?.error?.message || err.response?.data?.message || 'Google login failed.');
     } finally {
       setLoading(false);
     }

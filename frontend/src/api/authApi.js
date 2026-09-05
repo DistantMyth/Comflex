@@ -7,8 +7,12 @@ export const authApi = {
   register: (email, password, displayName) =>
     client.post('/auth/register', { email, password, displayName }),
 
-  googleLogin: (idToken) =>
-    client.post('/auth/google', { idToken }),
+  googleLogin: (tokenOrPayload) => {
+    const payload = typeof tokenOrPayload === 'string'
+      ? (tokenOrPayload.startsWith('ya29.') ? { accessToken: tokenOrPayload } : { idToken: tokenOrPayload })
+      : tokenOrPayload;
+    return client.post('/auth/google', payload);
+  },
 
   setPassword: (newPassword, currentPassword) =>
     client.post('/auth/set-password', { newPassword, currentPassword }),
