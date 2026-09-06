@@ -25,6 +25,14 @@ export default function Homepage() {
   const { isAuthenticated, user } = useAuth();
   const [activeFeatureTab, setActiveFeatureTab] = useState(0);
 
+  const handleAnchorClick = (e, id) => {
+    e.preventDefault();
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   const heroContainerVariants = {
     hidden: { opacity: 0 },
     visible: {
@@ -42,8 +50,16 @@ export default function Homepage() {
     },
   };
 
+  const heroTitleVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { duration: 0.35, ease: 'easeOut' },
+    },
+  };
+
   return (
-    <div className="min-h-screen bg-[var(--color-bg-primary)] overflow-x-hidden selection:bg-[var(--color-accent)] selection:text-white">
+    <div className="min-h-screen bg-[var(--color-bg-primary)] selection:bg-[var(--color-accent)] selection:text-white">
       {/* 21st.dev Palette-anchored Scroll Progress Bar */}
       <ScrollProgressBar height={3} showGlow showLeadingBead />
 
@@ -58,10 +74,10 @@ export default function Homepage() {
 
         {/* Center Links */}
         <div className="hidden md:flex items-center gap-6 text-xs font-semibold text-[var(--color-text-secondary)]">
-          <a href="#architecture" className="hover:text-[var(--color-text-primary)] transition-colors">Architecture</a>
-          <a href="#features" className="hover:text-[var(--color-text-primary)] transition-colors">Features</a>
-          <a href="#achievements" className="hover:text-[var(--color-text-primary)] transition-colors">Medals & Store</a>
-          <a href="#community" className="hover:text-[var(--color-text-primary)] transition-colors">Community</a>
+          <a href="#architecture" onClick={(e) => handleAnchorClick(e, 'architecture')} className="hover:text-[var(--color-text-primary)] transition-colors">Architecture</a>
+          <a href="#features" onClick={(e) => handleAnchorClick(e, 'features')} className="hover:text-[var(--color-text-primary)] transition-colors">Features</a>
+          <a href="#achievements" onClick={(e) => handleAnchorClick(e, 'achievements')} className="hover:text-[var(--color-text-primary)] transition-colors">Medals & Store</a>
+          <a href="#community" onClick={(e) => handleAnchorClick(e, 'community')} className="hover:text-[var(--color-text-primary)] transition-colors">Community</a>
         </div>
 
         {/* Right CTA */}
@@ -88,7 +104,7 @@ export default function Homepage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative z-10 pt-[calc(7rem+env(safe-area-inset-top,0px))] sm:pt-36 pb-16 sm:pb-20 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
+      <section className="flow-root relative z-10 pt-[calc(7rem+env(safe-area-inset-top,0px))] sm:pt-36 pb-16 sm:pb-20 px-3 sm:px-6 lg:px-8 max-w-6xl mx-auto flex flex-col items-center text-center">
         <motion.div
           variants={heroContainerVariants}
           initial="hidden"
@@ -110,7 +126,7 @@ export default function Homepage() {
           </motion.div>
 
           {/* Animated Handwriting Wipe & Interactive Scroll Title from Legacy */}
-          <motion.div variants={heroItemVariants} className="w-full">
+          <motion.div variants={heroTitleVariants} className="w-full">
             <AnimatedComflexTitle />
           </motion.div>
 
@@ -135,6 +151,7 @@ export default function Homepage() {
             </LiquidGlassButton>
             <LiquidGlassButton
               href="#architecture"
+              onClick={(e) => handleAnchorClick(e, 'architecture')}
               variant="secondary"
               size="lg"
               className="w-full sm:w-auto justify-center text-center"
@@ -213,7 +230,7 @@ export default function Homepage() {
       <ComflexBuildSection />
 
       {/* Features Bento Grid Section */}
-      <section id="features" className="relative z-10 py-20 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto">
+      <section id="features" className="flow-root relative z-10 py-20 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto">
         <div className="text-center max-w-2xl mx-auto mb-14">
           <span className="text-xs font-bold uppercase tracking-wider text-[var(--palette-teal)]">
             Architected for Campus Life

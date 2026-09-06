@@ -15,20 +15,35 @@ export default function AnimatedComflexTitle() {
 
   useEffect(() => {
     let isMounted = true;
-    const timeout = setTimeout(() => {
-      if (isMounted) setFontsReady(true);
-    }, 350);
 
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(() => {
-        clearTimeout(timeout);
-        if (isMounted) setFontsReady(true);
-      });
-    }
+    // Explicitly load Caveat font before unhiding title to prevent fallback font layout reflow
+    const checkFont = async () => {
+      try {
+        if (document.fonts) {
+          await Promise.all([
+            document.fonts.load('700 48px Caveat'),
+            document.fonts.ready,
+          ]);
+        }
+      } catch {
+        // fallback to timeout
+      }
+      if (isMounted) {
+        setFontsReady(true);
+      }
+    };
+
+    const fallbackTimeout = setTimeout(() => {
+      if (isMounted) setFontsReady(true);
+    }, 600);
+
+    checkFont().finally(() => {
+      clearTimeout(fallbackTimeout);
+    });
 
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
+      clearTimeout(fallbackTimeout);
     };
   }, []);
 
@@ -69,7 +84,7 @@ export default function AnimatedComflexTitle() {
       );
 
       // 2. Responsive ScrollTrigger timeline with PINNING:
-      // (comflex written) -> (on scroll) -> (page doesn't go down, instead comflex expands) -> (comflex fully expanded) -> (scroll resumes)
+      // Starts only when scrolled so title does not prematurely pin or shift on initial page load
       const mm = gsap.matchMedia();
 
       mm.add({
@@ -83,10 +98,12 @@ export default function AnimatedComflexTitle() {
         const tl = gsap.timeline({
           scrollTrigger: {
             trigger: target,
-            start: 'top 22%',
+            start: 'top 10%',
             end: '+=280',
             pin: true,
             pinSpacing: true,
+            anticipatePin: 1,
+            refreshPriority: 2,
             scrub: 0.6,
           },
         });
@@ -99,10 +116,10 @@ export default function AnimatedComflexTitle() {
       });
     }, container);
 
+    ScrollTrigger.sort();
     ScrollTrigger.refresh();
 
     return () => {
-      isMounted = false;
       ctx.revert();
     };
   }, [fontsReady, shouldReduceMotion, theme]);

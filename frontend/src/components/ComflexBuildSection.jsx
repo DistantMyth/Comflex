@@ -99,9 +99,11 @@ export default function ComflexBuildSection() {
           end: '+=750',
           pin: true,
           pinSpacing: true,
+          anticipatePin: 1,
+          refreshPriority: 1,
           scrub: 0.6,
           onUpdate: (self) => {
-            const p = Math.round(self.progress * 100);
+            const p = Math.min(100, Math.max(0, Math.round(self.progress * 100)));
             if (percentRef.current) {
               percentRef.current.textContent = `${p}%`;
             }
@@ -139,12 +141,15 @@ export default function ComflexBuildSection() {
         .to(hudProgress, { width: '100%', duration: 3.2, ease: 'none' }, 0);
     }, target);
 
-    const handleRefresh = () => ScrollTrigger.refresh();
+    const handleRefresh = () => {
+      ScrollTrigger.sort();
+      ScrollTrigger.refresh();
+    };
     window.addEventListener('resize', handleRefresh);
 
     if (document.fonts?.ready) {
       document.fonts.ready.then(() => {
-        if (isMounted) ScrollTrigger.refresh();
+        if (isMounted) handleRefresh();
       });
     }
 
@@ -159,10 +164,10 @@ export default function ComflexBuildSection() {
     <section
       id="architecture"
       ref={containerRef}
-      className="relative min-h-screen w-full flex flex-col items-center justify-center pt-24 sm:pt-28 pb-16 bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] overflow-hidden border-t border-[var(--color-border)]/40"
+      className="flow-root relative min-h-screen w-full flex flex-col items-center justify-center pt-24 sm:pt-28 pb-16 bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] border-t border-[var(--color-border)]/40 m-0"
     >
       {/* Ambient Radial Glow Background */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-0">
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-0 overflow-hidden">
         <div className="w-[500px] h-[500px] md:w-[650px] md:h-[650px] rounded-full bg-gradient-to-br from-[var(--palette-teal)]/15 via-[var(--palette-rose)]/12 to-transparent blur-[120px]" />
       </div>
 
