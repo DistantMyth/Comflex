@@ -90,19 +90,16 @@ export default function ComflexBuildSection() {
         }
       });
 
-      // Pinned timeline with anticipation, generous runway, and lead-in/dwell buffers
+      // Pinned timeline:
+      // (scroll reaches section) -> (page pins, logo builds) -> (assembled) -> (scroll resumes)
       const tl = gsap.timeline({
         scrollTrigger: {
           trigger: target,
           start: 'top top',
-          end: '+=850',
+          end: '+=750',
           pin: true,
           pinSpacing: true,
-          anticipatePin: 1,
-          fastScrollEnd: true,
-          preventOverlaps: true,
-          invalidateOnRefresh: true,
-          scrub: 0.8,
+          scrub: 0.6,
           onUpdate: (self) => {
             const p = Math.round(self.progress * 100);
             if (percentRef.current) {
@@ -120,35 +117,27 @@ export default function ComflexBuildSection() {
         },
       });
 
-      // Lead-in buffer: smooth settling into the pin before animation starts (0 -> 0.25s)
-      tl.to({}, { duration: 0.25 })
+      // STAGE 1: Stroke drawing (0 -> 1.5s)
+      tl.to(archPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0)
+        .to(ascendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.2)
+        .to(descendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.3)
 
-      // STAGE 1: Stroke drawing (0.25 -> 1.45s)
-        .to(archPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.25)
-        .to(ascendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.45)
-        .to(descendPath, { strokeDashoffset: 0, duration: 1.2, ease: 'power1.out' }, 0.55)
+      // STAGE 2: Geometric convergence from exploded coordinates (0.7 -> 2.3s)
+        .to(archGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.7)
+        .to(ascendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.8)
+        .to(descendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.9)
 
-      // STAGE 2: Geometric convergence from exploded coordinates (0.95 -> 2.55s)
-        .to(archGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 0.95)
-        .to(ascendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 1.05)
-        .to(descendGroup, { x: 0, y: 0, rotation: 0, scale: 1, duration: 1.6, ease: 'power2.out' }, 1.15)
+      // STAGE 3: Core node bloom & aura bloom (1.8 -> 2.8s)
+        .to(coreGroup, { scale: 1, opacity: 1, duration: 0.9, ease: 'back.out(1.8)' }, 1.8)
+        .to(auraCircle, { scale: 1.25, opacity: 0.9, duration: 1.0, ease: 'power1.out' }, 1.9)
 
-      // STAGE 3: Core node bloom & aura bloom (2.05 -> 2.95s)
-        .to(coreGroup, { scale: 1, opacity: 1, duration: 0.9, ease: 'back.out(1.8)' }, 2.05)
-        .to(auraCircle, { scale: 1.25, opacity: 0.9, duration: 1.0, ease: 'power1.out' }, 2.15)
+      // STAGE 4: Specular sheen flash & Wordmark reveal (2.3 -> 3.2s)
+        .to(specularArc, { opacity: 1, duration: 0.6, ease: 'power1.out' }, 2.3)
+        .to(wordmark, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.8, ease: 'power2.out' }, 2.4)
 
-      // STAGE 4: Specular sheen flash & Wordmark reveal (2.55 -> 3.35s)
-        .to(specularArc, { opacity: 1, duration: 0.6, ease: 'power1.out' }, 2.55)
-        .to(wordmark, { opacity: 1, y: 0, filter: 'blur(0px)', duration: 0.8, ease: 'power2.out' }, 2.65)
-
-      // HUD Progress bar linking (0.25 -> 3.35s)
-        .to(hudProgress, { width: '100%', duration: 3.1, ease: 'none' }, 0.25)
-
-      // Settle / Dwell buffer: completed logo rests cleanly before unpinning (3.35 -> 4.1s)
-        .to({}, { duration: 0.75 });
+      // HUD Progress bar linking
+        .to(hudProgress, { width: '100%', duration: 3.2, ease: 'none' }, 0);
     }, target);
-
-    ScrollTrigger.refresh();
 
     const handleRefresh = () => ScrollTrigger.refresh();
     window.addEventListener('resize', handleRefresh);
