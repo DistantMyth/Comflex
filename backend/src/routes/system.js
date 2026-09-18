@@ -19,8 +19,15 @@ const router = express.Router();
  */
 router.get('/status', async (req, res, next) => {
   try {
-    const config = await prisma.institutionConfig.findFirst();
+    const cacheService = require('../services/cacheService');
     const { isCloudinaryConfigured } = require('../utils/fileStorage');
+
+    const config = await cacheService.getOrSet(
+      'system:config',
+      () => prisma.institutionConfig.findFirst(),
+      600,
+      { l1TtlMs: 60000 }
+    );
 
     return success(res, {
       isConfigured: config?.isConfigured ?? false,

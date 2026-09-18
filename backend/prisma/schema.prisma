@@ -53,6 +53,7 @@ model User {
   refreshToken     String?  // hashed refresh token
   resetToken       String?  // password reset token (hashed)
   resetTokenExpiry DateTime? // expiry for the reset token
+  secVersion       Int      @default(0) // Security version / epoch for instantaneous token revocation
 
   createdAt        DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -133,6 +134,7 @@ model CohortGroup {
   inviteTokenExpiry DateTime?  // rotating invite links expire (7 days)
   isAnonymous Boolean          @default(false) // anonymous mode: no rings, alias-only identities
   wordBanList  String[]        @default([])    // creator-set filter enforced on message send
+  messageSeq   Int             @default(0)     // Monotonic sequence counter for messages in group
   createdAt   DateTime @default(now())
 
   // Relations
@@ -215,6 +217,7 @@ model GroupMember {
 
   joinedAt   DateTime @default(now())
   lastReadAt DateTime? // High-water mark for unread tracking — replaces per-message read receipts
+  lastReadSeq Int      @default(0) // Persistent sequence cursor for zero-lookup fallback & cold hydration
 
   // Relations
   user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)

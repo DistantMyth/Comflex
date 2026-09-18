@@ -1178,6 +1178,13 @@ router.post('/:id/anons/:identityId/ban', requireGroupMember, requireAnonCreator
     const { evictAnonIdentityFromGroup } = require('../services/chatSocketService');
     evictAnonIdentityFromGroup(target.id, req.params.id);
 
+    const cacheInvalidator = require('../services/cacheInvalidator');
+    await cacheInvalidator.broadcastWsControl({
+      action: 'EVICT_ANON_IDENTITY',
+      groupId: req.params.id,
+      identityId: target.id,
+    });
+
     emitToGroup(req.params.id, 'anon:moderation', {
       type: 'ban', identityId: target.id,
       groupId: req.params.id, at: new Date().toISOString(),
@@ -1405,7 +1412,7 @@ router.post(
 
       const msg = await messageService.sendMessage(
         req.params.id,
-        req.user.id,
+        req.anonIdentity ? null : req.user.id,
         params,
         req.anonIdentity || null
       );

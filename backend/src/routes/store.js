@@ -11,6 +11,8 @@ const { success, error } = require('../utils/apiResponse');
 const { storeFile, deleteStoredFile } = require('../utils/fileStorage');
 const { validateStoredFile } = require('../utils/fileMagic');
 const { ethers } = require('ethers');
+const cacheService = require('../services/cacheService');
+const cacheInvalidator = require('../services/cacheInvalidator');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -247,9 +249,11 @@ router.get('/config', async (req, res, next) => {
 // Get all badges
 router.get('/badges', async (req, res, next) => {
   try {
-    const badges = await prisma.badge.findMany({
-      orderBy: { createdAt: 'desc' }
-    });
+    const badges = await cacheService.getOrSet(
+      'store:badges:catalog',
+      () => prisma.badge.findMany({ orderBy: { createdAt: 'desc' } }),
+      1800
+    );
     return success(res, badges);
   } catch (err) {
     next(err);
@@ -259,10 +263,11 @@ router.get('/badges', async (req, res, next) => {
 // Get all active store listings
 router.get('/listings', async (req, res, next) => {
   try {
-    const listings = await prisma.storeListing.findMany({
-      include: { badge: true },
-      orderBy: { createdAt: 'desc' }
-    });
+    const listings = await cacheService.getOrSet(
+      'store:listings:catalog',
+      () => prisma.storeListing.findMany({ include: { badge: true }, orderBy: { createdAt: 'desc' } }),
+      1800
+    );
     return success(res, listings);
   } catch (err) {
     next(err);
@@ -307,6 +312,9 @@ router.post('/admin/badges', upload.single('image'), [
     const badge = await prisma.badge.create({
       data: { name, description, imageUrl, isEventBadge: isEventBadge === 'true' || isEventBadge === true }
     });
+
+    await cacheInvalidator.invalidateKey('store:badges:catalog');
+
     return success(res, badge, 201);
   } catch (err) {
     if (err.code === 'P2002') return error(res, 'CONFLICT', 'A badge with this name already exists.', 409);
@@ -330,7 +338,7 @@ router.delete('/admin/badges/:id', async (req, res, next) => {
       return error(res, 'CONFLICT', 'Please delist this badge from the store before deleting it.', 409);
     }
 
-    // Check if owned by users
+    // Check if any users own this badge
     const ownedCount = await prisma.userBadge.count({ where: { badgeId: req.params.id } });
     if (ownedCount > 0) {
       return error(res, 'CONFLICT', 'Cannot delete badge because it has already been awarded to or purchased by users.', 409);
@@ -344,6 +352,8 @@ router.delete('/admin/badges/:id', async (req, res, next) => {
     }
 
     await prisma.badge.delete({ where: { id: req.params.id } });
+    await cacheInvalidator.invalidateKey('store:badges:catalog');
+
     return success(res, { message: `Badge "${badge.name}" deleted successfully.` });
   } catch (err) {
     if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Badge not found.', 404);
@@ -371,6 +381,9 @@ router.post('/admin/listings', [
     const listing = await prisma.storeListing.create({
       data: { badgeId, price, quantity }
     });
+
+    await cacheInvalidator.invalidateKey('store:listings:catalog');
+
     return success(res, listing, 201);
   } catch (err) {
     next(err);
@@ -398,6 +411,9 @@ router.patch('/admin/listings/:id', [
       where: { id: req.params.id },
       data: updateData,
     });
+
+    await cacheInvalidator.invalidateKey('store:listings:catalog');
+
     return success(res, listing);
   } catch (err) {
     if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Listing not found.', 404);
@@ -412,6 +428,8 @@ router.delete('/admin/listings/:id', async (req, res, next) => {
     if (dbUser.globalRing !== 0 && !dbUser.canManageStore) return error(res, 'FORBIDDEN', 'Admin or Store Manager only', 403);
 
     await prisma.storeListing.delete({ where: { id: req.params.id } });
+    await cacheInvalidator.invalidateKey('store:listings:catalog');
+
     return success(res, { message: 'Item delisted from store successfully.' });
   } catch (err) {
     if (err.code === 'P2025') return error(res, 'NOT_FOUND', 'Listing not found.', 404);

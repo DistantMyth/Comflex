@@ -20,6 +20,7 @@ function signAccessToken(user) {
     cohortTags: user.cohortTags || [],
     displayBadges: user.displayBadges || [],
     avatarUrl: user.avatarUrl || null,
+    secVersion: typeof user.secVersion === 'number' ? user.secVersion : 0,
   };
 
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, {

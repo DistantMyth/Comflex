@@ -13,6 +13,7 @@ const { requireRing, validateElevation } = require('../middleware/ringCheck');
 const userService = require('../services/userService');
 const { retagUser } = require('../services/cohortService');
 const prisma = require('../prisma');
+const cacheInvalidator = require('../services/cacheInvalidator');
 const { success, error } = require('../utils/apiResponse');
 
 const router = express.Router();
@@ -74,6 +75,8 @@ router.post(
         },
       });
 
+      await cacheInvalidator.invalidateKey('system:config');
+
       return success(res, updated, 200);
     } catch (err) {
       next(err);
@@ -132,6 +135,8 @@ router.patch(
         where: { id: config.id },
         data: allowed,
       });
+
+      await cacheInvalidator.invalidateKey('system:config');
 
       return success(res, updated);
     } catch (err) {
@@ -211,6 +216,8 @@ router.put(
           isConfigured: true,
         },
       });
+
+      await cacheInvalidator.invalidateKey('system:config');
 
       return success(res, {
         emailParsingRules: updated.emailParsingRules,
@@ -392,6 +399,8 @@ router.put(
         where: { id: config.id },
         data: { autoJoinRules: req.body.rules },
       });
+
+      await cacheInvalidator.invalidateKey('system:config');
 
       return success(res, { autoJoinRules: updated.autoJoinRules });
     } catch (err) {
@@ -716,6 +725,8 @@ router.patch(
         data: updateData,
       });
 
+      await cacheInvalidator.invalidateUser(userId);
+
       return success(res, {
         id: updated.id,
         canCreateGroups: updated.canCreateGroups,
@@ -776,6 +787,9 @@ router.delete('/users/:id', async (req, res, next) => {
       prisma.anonGroupJoin.deleteMany({ where: { userId } }),
       prisma.user.delete({ where: { id: userId } }),
     ]);
+
+    await cacheInvalidator.invalidateUser(userId);
+    await cacheInvalidator.broadcastWsControl({ action: 'DISCONNECT_USER', userId });
 
     return success(res, { message: `User "${user.displayName}" deleted.` });
   } catch (err) {

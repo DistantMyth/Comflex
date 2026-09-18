@@ -31,6 +31,7 @@ const resourceRoutes = require('./routes/resources');
 const storeRoutes = require('./routes/store');
 const chatbotRoutes = require('./routes/chatbotRoutes');
 const notificationRoutes = require('./routes/notifications');
+const webhookRoutes = require('./routes/webhooks');
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -69,7 +70,14 @@ app.use(cors({
 }));
 
 // Parse JSON and URL-encoded bodies
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+   limit: '10mb',
+   verify: (req, res, buf) => {
+     if (req.originalUrl && req.originalUrl.startsWith('/api/v1/webhooks')) {
+       req.rawBody = buf;
+     }
+   },
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
@@ -124,6 +132,7 @@ app.use('/api/v1/resources', resourceRoutes);
 app.use('/api/v1/store', storeRoutes);
 app.use('/api/v1/chatbot', chatbotRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/webhooks', webhookRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -167,6 +176,23 @@ async function ensureUniqueIndexes() {
   }
 }
 
+async function backfillGroupMessageSequences() {
+  try {
+    const unseeded = await prisma.cohortGroup.findMany({
+      where: { messageSeq: 0 },
+      select: { id: true },
+    });
+    for (const g of unseeded) {
+      const count = await prisma.message.count({ where: { groupId: g.id } });
+      if (count > 0) {
+        await prisma.cohortGroup.update({ where: { id: g.id }, data: { messageSeq: count } });
+      }
+    }
+  } catch (err) {
+    console.warn('[DB] Could not backfill group message sequences (continuing):', err.message);
+  }
+}
+
 async function startServer() {
   // Bounded backoff: a transient DB/DNS outage at boot (e.g. Atlas resume,
   // DNS propagation) must not put the service into an instant crash loop —
@@ -180,6 +206,9 @@ async function startServer() {
 
       // Seed the admin user on first boot (idempotent)
       await seedAdmin();
+
+      // Ensure historical groups have messageSeq initialized
+      await backfillGroupMessageSequences();
 
       // Initialize Cloudinary storage layer early and log status
       const { getCloudinary, isCloudinaryConfigured } = require('./utils/fileStorage');

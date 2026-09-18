@@ -52,6 +52,9 @@ async function updateProfile(userId, updates) {
     data: allowed,
   });
 
+  const cacheInvalidator = require('./cacheInvalidator');
+  await cacheInvalidator.invalidateUser(userId);
+
   return sanitizeUser(user);
 }
 
@@ -76,6 +79,10 @@ async function updateAvatar(userId, avatarUrl) {
     where: { id: userId },
     data: { avatarUrl },
   });
+
+  const cacheInvalidator = require('./cacheInvalidator');
+  await cacheInvalidator.invalidateUser(userId);
+
   return sanitizeUser(user);
 }
 
@@ -127,8 +134,16 @@ async function listUsers({ search, ring, page = 1, limit = 20 }) {
 async function setUserRing(userId, newRing) {
   const user = await prisma.user.update({
     where: { id: userId },
-    data: { globalRing: newRing },
+    data: {
+      globalRing: newRing,
+      secVersion: { increment: 1 },
+    },
   });
+
+  const cacheInvalidator = require('./cacheInvalidator');
+  await cacheInvalidator.invalidateUser(userId);
+  await cacheInvalidator.broadcastWsControl({ action: 'DISCONNECT_USER', userId });
+
   return sanitizeUser(user);
 }
 

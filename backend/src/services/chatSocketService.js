@@ -14,8 +14,11 @@ const prisma = require('../prisma');
 const messageService = require('./messageService');
 const groupService = require('./groupService');
 const dmService = require('./dmService');
+const cacheService = require('./cacheService');
+const cacheInvalidator = require('./cacheInvalidator');
 
 let io;
+let currentWsControlHandler = null;
 
 /**
  * Initialize Socket.IO on the HTTP server.
@@ -51,18 +54,49 @@ function initSocket(httpServer, frontendUrl) {
     }
   });
 
+  // ── Cluster-Wide WebSocket Control Listener ───────────
+  if (currentWsControlHandler) {
+    cacheInvalidator.removeListener('ws:control', currentWsControlHandler);
+  }
+
+  currentWsControlHandler = (payload) => {
+    if (!io) return;
+    try {
+      if (payload.action === 'EVICT_USER_GROUP') {
+        evictUserFromGroup(payload.userId, payload.groupId);
+      } else if (payload.action === 'DISCONNECT_USER') {
+        const sockets = io.sockets.adapter.rooms.get(`user:${payload.userId}`);
+        if (sockets) {
+          for (const sId of sockets) {
+            io.sockets.sockets.get(sId)?.disconnect(true);
+          }
+        }
+      } else if (payload.action === 'EVICT_ANON_IDENTITY') {
+        evictAnonIdentityFromGroup(payload.identityId, payload.groupId);
+      }
+    } catch (err) {
+      console.error('[WS Control] Failed to execute cluster action:', err.message);
+    }
+  };
+
+  cacheInvalidator.on('ws:control', currentWsControlHandler);
+
   // ── Connection Handler ────────────────────────────────
   io.on('connection', async (socket) => {
     console.log(`[WS] ✅ Connected: ${socket.user.email} (${socket.id})`);
 
-    // Re-read the user from the DB (like the REST auth middleware) so
-    // demotions, bans, and deletions take effect immediately instead of
-    // trusting stale JWT claims for the session's lifetime.
+    // Re-read the user from cache (L1: 3s, L2: 2m) with instant revocation check
     try {
-      const dbUser = await prisma.user.findUnique({
-        where: { id: socket.user.id },
-        select: { id: true, email: true, globalRing: true, displayName: true, avatarUrl: true },
-      });
+      const dbUser = await cacheService.getOrSet(
+        `auth:user:${socket.user.id}`,
+        () =>
+          prisma.user.findUnique({
+            where: { id: socket.user.id },
+            select: { id: true, email: true, globalRing: true, displayName: true, avatarUrl: true, secVersion: true },
+          }),
+        120,
+        { l1TtlMs: 3000 }
+      );
       if (!dbUser) {
         socket.emit('auth:error', { error: 'Account no longer exists.' });
         socket.disconnect(true);
@@ -73,6 +107,7 @@ function initSocket(httpServer, frontendUrl) {
         email: dbUser.email,
         globalRing: dbUser.globalRing,
         displayName: dbUser.displayName || dbUser.email,
+        secVersion: dbUser.secVersion || 0,
       };
     } catch (err) {
       console.error(`[WS] Failed to load user for ${socket.user.id}:`, err.message);
@@ -189,7 +224,7 @@ function initSocket(httpServer, frontendUrl) {
           const bannedWord = groupService.containsBannedWord(content, group.wordBanList);
           if (bannedWord) return callback?.({ error: `Your message contains a banned word ("${bannedWord}").` });
 
-          const msg = await messageService.sendMessage(groupId, socket.user.id, {
+          const msg = await messageService.sendMessage(groupId, null, {
             content: content?.trim()?.slice(0, 8000) || '',
             mentions: [],
             attachments,

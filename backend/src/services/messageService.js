@@ -7,6 +7,7 @@
 
 const prisma = require('../prisma');
 const notificationService = require('./notificationService');
+const seqCounterService = require('./seqCounterService');
 
 const ID_RE = /^[0-9a-fA-F]{24}$/;
 function isValidMongoId(id) {
@@ -205,17 +206,42 @@ async function sendMessage(groupId, authorId, params, anon = null) {
         replyToId: cleanReplyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
       };
 
-  const msg = await prisma.message.create({
-    data,
-    include: isAnon ? {} : {
-      author: {
-        select: {
-          id: true, displayName: true, avatarUrl: true,
-          globalRing: true, displayBadges: true,
+    const [msg, group] = await prisma.$transaction([
+      prisma.message.create({
+        data,
+        include: isAnon ? {} : {
+          author: {
+            select: {
+              id: true, displayName: true, avatarUrl: true,
+              globalRing: true, displayBadges: true,
+            },
+          },
         },
-      },
-    },
-  });
+      }),
+      prisma.cohortGroup.update({
+        where: { id: groupId },
+        data: { messageSeq: { increment: 1 } },
+        select: { messageSeq: true },
+      }),
+    ]);
+
+    const committedSeq = group?.messageSeq || 0;
+
+    // Persist author lastReadSeq to MongoDB to prevent ghost unreads on Redis cold-starts
+    if (!isAnon && authorId && committedSeq > 0) {
+      await prisma.groupMember.updateMany({
+        where: { userId: authorId, groupId },
+        data: {
+          lastReadSeq: committedSeq,
+          lastReadAt: new Date(),
+        },
+      }).catch((err) => {
+        console.warn(`[Message] Could not update author lastReadSeq in MongoDB:`, err.message);
+      });
+    }
+
+    // Never pass real authorId for anonymous messages (strict zero-knowledge isolation)
+    await seqCounterService.syncCommittedMessageSeq(groupId, committedSeq, isAnon ? null : authorId);
 
   // Resolve reply preview if cleanReplyToId is provided
   let replyPreview = null;

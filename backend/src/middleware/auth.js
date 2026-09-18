@@ -10,6 +10,7 @@
 const { verifyAccessToken } = require('../utils/jwt');
 const { error } = require('../utils/apiResponse');
 const prisma = require('../prisma');
+const cacheService = require('../services/cacheService');
 
 function authMiddleware(req, res, next) {
   try {
@@ -33,16 +34,42 @@ function authMiddleware(req, res, next) {
       return error(res, 'INVALID_TOKEN', 'Invalid authentication token.', 401);
     }
 
-    // Re-read the user from the DB so deletions, demotions, and permission
-    // changes take effect immediately instead of lingering for the token's
-    // full lifetime. Cheap indexed lookup — fine at this scale.
-    prisma.user
-      .findUnique({ where: { id: decoded.sub } })
+    // Re-read user claims from multi-tier cache (L1: 3s, L2: 2m) with
+    // secVersion check to ensure immediate revocation on demotions/bans.
+    cacheService
+      .getOrSet(
+        `auth:user:${decoded.sub}`,
+        () =>
+          prisma.user.findUnique({
+            where: { id: decoded.sub },
+            select: {
+              id: true,
+              email: true,
+              globalRing: true,
+              cohortTags: true,
+              displayBadges: true,
+              avatarUrl: true,
+              secVersion: true,
+            },
+          }),
+        120,
+        { l1TtlMs: 3000 }
+      )
       .then((dbUser) => {
         if (!dbUser) {
           return error(res, 'USER_NOT_FOUND', 'Account no longer exists.', 401);
         }
-        // Overwrite JWT claims with fresh DB values
+
+        // Backward-compatible secVersion epoch check:
+        // Existing active tokens without secVersion (tokenSecVer = 0) pass if currentSecVer = 0,
+        // but any subsequent demotion or ban increments secVersion and revokes them instantly.
+        const tokenSecVer = typeof decoded.secVersion === 'number' ? decoded.secVersion : 0;
+        const currentSecVer = dbUser.secVersion || 0;
+        if (tokenSecVer < currentSecVer) {
+          return error(res, 'TOKEN_REVOKED', 'Session has been revoked. Please log in again.', 401);
+        }
+
+        // Overwrite JWT claims with fresh cached values
         req.user = {
           id: dbUser.id,
           email: dbUser.email,
@@ -50,6 +77,7 @@ function authMiddleware(req, res, next) {
           cohortTags: dbUser.cohortTags || [],
           displayBadges: dbUser.displayBadges || [],
           avatarUrl: dbUser.avatarUrl || null,
+          secVersion: currentSecVer,
         };
         next();
       })

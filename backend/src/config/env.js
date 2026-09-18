@@ -114,6 +114,12 @@ const env = {
 
   // Google Gemini AI
   GEMINI_API_KEY: cleanEnvString(process.env.GEMINI_API_KEY),
+
+  // Redis / Distributed Caching (optional in dev, fallback to in-memory)
+  REDIS_URL: cleanEnvString(process.env.REDIS_URL),
+
+  // Webhooks
+  WEBHOOK_SECRET: cleanEnvString(process.env.WEBHOOK_SECRET) || 'dev-webhook-secret-comflex',
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
@@ -137,6 +143,7 @@ function assertStrongSecret(name, value) {
 if (env.NODE_ENV !== 'development') {
   assertStrongSecret('JWT_ACCESS_SECRET', env.JWT_ACCESS_SECRET);
   assertStrongSecret('JWT_REFRESH_SECRET', env.JWT_REFRESH_SECRET);
+  assertStrongSecret('WEBHOOK_SECRET', env.WEBHOOK_SECRET);
 }
 
 module.exports = env;

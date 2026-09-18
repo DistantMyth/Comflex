@@ -14,6 +14,8 @@ const { success, error } = require('../utils/apiResponse');
 const { storeFile, deleteStoredFile } = require('../utils/fileStorage');
 const { enforceBatchAccess } = require('../utils/batchAccess');
 const { validateStoredFile } = require('../utils/fileMagic');
+const cacheService = require('../services/cacheService');
+const cacheInvalidator = require('../services/cacheInvalidator');
 
 const router = express.Router();
 
@@ -79,15 +81,20 @@ router.get('/subjects', async (req, res, next) => {
       return error(res, 'FORBIDDEN', 'You only have access to your own batch and your immediate juniors.', 403);
     }
 
-    const where = {};
-    if (category) where.category = category;
-    if (subCategory) where.subCategory = subCategory;
-    if (yearGroup) where.yearGroup = yearGroup;
+    const allSubjects = await cacheService.getOrSet(
+      'resources:raw_subjects',
+      () => prisma.resourceSubject.findMany(),
+      900
+    );
 
-    const subjects = await prisma.resourceSubject.findMany({ where });
-    const filtered = req.user.globalRing === 0
-      ? subjects
-      : subjects.filter(s => enforceBatchAccess(req, s.subCategory, s.yearGroup));
+    let filtered = Array.isArray(allSubjects) ? allSubjects : [];
+    if (category) filtered = filtered.filter(s => s.category === category);
+    if (subCategory) filtered = filtered.filter(s => s.subCategory === subCategory);
+    if (yearGroup) filtered = filtered.filter(s => s.yearGroup === yearGroup);
+
+    if (req.user.globalRing !== 0) {
+      filtered = filtered.filter(s => enforceBatchAccess(req, s.subCategory, s.yearGroup));
+    }
 
     return success(res, filtered);
   } catch (err) {
@@ -135,6 +142,8 @@ router.post('/subjects', [
       }
     });
 
+    await cacheInvalidator.invalidateKey('resources:raw_subjects');
+
     return success(res, subject, 201);
   } catch (err) {
     next(err);
@@ -165,6 +174,7 @@ router.delete('/subjects/:id', async (req, res, next) => {
     });
 
     await prisma.resourceSubject.delete({ where: { id: req.params.id } });
+    await cacheInvalidator.invalidateKey('resources:raw_subjects');
 
     for (const r of resources) {
       await deleteStoredFile(r.fileUrl).catch(() => {});

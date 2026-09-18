@@ -9,6 +9,9 @@ const prisma = require('../prisma');
 const { canActOnUser } = require('../middleware/ringCheck');
 const { issueSecret, hashSecret, verifySecret, issueAliasTag } = require('../utils/anonIdentity');
 const { sanitizeUrl } = require('../utils/urlSafety');
+const seqCounterService = require('./seqCounterService');
+const cacheService = require('./cacheService');
+const cacheInvalidator = require('./cacheInvalidator');
 
 const ALIAS_MAX_LEN = 24;
 
@@ -219,46 +222,39 @@ async function listUserGroups(userId, anonSessions = []) {
 
 /**
  * Get unread counts for multiple groups at once.
+ * Uses seqCounterService for O(1) sequence diffing with single-round-trip pipelining.
  */
 async function getUnreadCountsBatch(userId, groupIds) {
-  const counts = {};
-  for (const gid of groupIds) {
-    counts[gid] = await getUnreadCount(gid, userId);
-  }
-  return counts;
+  return seqCounterService.getUnreadCountsBatch(userId, groupIds);
 }
 
 /**
  * Get unread message count for a user in a group.
- * A message is "unread" if it was sent after the user's lastReadAt
- * high-water mark (falling back to their join time), wasn't authored by
- * them, and isn't deleted.
  */
 async function getUnreadCount(groupId, userId) {
-  const membership = await prisma.groupMember.findUnique({
-    where: { userId_groupId: { userId, groupId } },
-  });
-  if (!membership) return 0;
-
-  const waterMark = membership.lastReadAt || membership.joinedAt;
-  return prisma.message.count({
-    where: {
-      groupId,
-      authorId: { not: userId },
-      isDeleted: false,
-      createdAt: { gt: waterMark },
-    },
-  });
+  const counts = await seqCounterService.getUnreadCountsBatch(userId, [groupId]);
+  return counts[groupId] || 0;
 }
 
 /**
  * Mark all messages in a group as read for a user by advancing their
- * lastReadAt high-water mark. One field update — no per-message writes.
+ * lastReadAt high-water mark and read cursor.
  */
 async function markGroupRead(groupId, userId) {
+  const group = await prisma.cohortGroup.findUnique({
+    where: { id: groupId },
+    select: { messageSeq: true },
+  });
+  const currentSeq = group?.messageSeq || 0;
+
+  await seqCounterService.setUserCursor(userId, groupId, currentSeq);
+
   return prisma.groupMember.update({
     where: { userId_groupId: { userId, groupId } },
-    data: { lastReadAt: new Date() },
+    data: {
+      lastReadAt: new Date(),
+      lastReadSeq: currentSeq,
+    },
   });
 }
 
@@ -300,6 +296,7 @@ async function createGroup({ name, displayName, description, type = 'custom', cr
         permissions: ADMIN_PERMISSIONS,
       },
     });
+    await seqCounterService.seedNewMemberCursor(creatorId, group.id);
   }
 
   return sanitizeGroup(group);
@@ -315,7 +312,15 @@ async function updateGroup(groupId, updates) {
   if (updates.avatarUrl !== undefined) allowed.avatarUrl = sanitizeUrl(updates.avatarUrl);
   if (updates.ringConfig !== undefined) allowed.ringConfig = updates.ringConfig;
 
-  return sanitizeGroup(await prisma.cohortGroup.update({ where: { id: groupId }, data: allowed }));
+  const updated = await prisma.cohortGroup.update({ where: { id: groupId }, data: allowed });
+  await cacheInvalidator.invalidateGroup(groupId);
+
+  try {
+    const { emitToGroup } = require('./chatSocketService');
+    emitToGroup(groupId, 'group:updated', { groupId, updates: allowed });
+  } catch { /* socket emission is best effort */ }
+
+  return sanitizeGroup(updated);
 }
 
 /**
@@ -326,6 +331,8 @@ async function deleteGroup(groupId) {
     const { emitToGroup } = require('./chatSocketService');
     emitToGroup(groupId, 'group:deleted', { groupId });
   } catch { /* socket emission is best effort */ }
+
+  await cacheInvalidator.invalidateGroup(groupId);
   await prisma.cohortGroup.delete({ where: { id: groupId } });
 }
 
@@ -422,6 +429,10 @@ async function addMember(groupId, userId, addedByUserId, ringInput, bypassFriend
     data: { userId, groupId, ring: computedRing, permissions },
   });
 
+  await seqCounterService.seedNewMemberCursor(userId, groupId);
+  await cacheInvalidator.invalidateGroup(groupId);
+  await cacheInvalidator.invalidateUser(userId);
+
   return { ...member, invited: false };
 }
 
@@ -438,6 +449,10 @@ async function removeMember(groupId, userId) {
   await prisma.groupMember.delete({
     where: { userId_groupId: { userId, groupId } },
   });
+
+  await cacheInvalidator.invalidateGroup(groupId);
+  await cacheInvalidator.invalidateUser(userId);
+  await cacheInvalidator.broadcastWsControl({ action: 'EVICT_USER_GROUP', userId, groupId });
 }
 
 /**
@@ -489,10 +504,18 @@ async function setMemberRing(groupId, actorRing, actorUserId, actorGlobalRing, t
   // Update permissions to match new ring level
   const permissions = getDefaultPermissions(newRing);
 
-  return prisma.groupMember.update({
+  const updated = await prisma.groupMember.update({
     where: { userId_groupId: { userId: targetUserId, groupId } },
     data: { ring: newRing, permissions },
   });
+
+  await cacheInvalidator.invalidateMemberPermissions(groupId, targetUserId);
+  try {
+    const { emitToUser } = require('./chatSocketService');
+    emitToUser(targetUserId, 'member:permissions_changed', { groupId, ring: newRing, permissions });
+  } catch { /* socket emission is best effort */ }
+
+  return updated;
 }
 
 /**
@@ -533,10 +556,18 @@ async function setMemberPermissions(groupId, actorRing, targetUserId, permission
     }
   }
 
-  return prisma.groupMember.update({
+  const updated = await prisma.groupMember.update({
     where: { userId_groupId: { userId: targetUserId, groupId } },
     data: { permissions: cleaned },
   });
+
+  await cacheInvalidator.invalidateMemberPermissions(groupId, targetUserId);
+  try {
+    const { emitToUser } = require('./chatSocketService');
+    emitToUser(targetUserId, 'member:permissions_changed', { groupId, permissions: cleaned });
+  } catch { /* socket emission is best effort */ }
+
+  return updated;
 }
 
 // ============================================================
@@ -600,6 +631,10 @@ async function acceptInvite(inviteId, userId, alias, avatarUrl) {
   const member = await prisma.groupMember.create({
     data: { userId, groupId: invite.groupId, ring: joinRing, permissions },
   });
+
+  await seqCounterService.seedNewMemberCursor(userId, invite.groupId);
+  await cacheInvalidator.invalidateGroup(invite.groupId);
+  await cacheInvalidator.invalidateUser(userId);
 
   // Update invite status
   await prisma.groupInvite.update({
@@ -749,6 +784,10 @@ async function joinViaLink(token, userId, alias, avatarUrl) {
     data: { userId, groupId: group.id, ring: defaultRingSetting, permissions },
   });
 
+  await seqCounterService.seedNewMemberCursor(userId, group.id);
+  await cacheInvalidator.invalidateGroup(group.id);
+  await cacheInvalidator.invalidateUser(userId);
+
   // Also transition any pending db invite for this user to 'accepted', if it exists
   await prisma.groupInvite.updateMany({
     where: { groupId: group.id, userId, status: 'pending' },
@@ -813,12 +852,19 @@ function getDefaultRingLabel(ring) {
  */
 async function muteMember(groupId, targetUserId, mutedByUserId, durationMinutes = 60) {
   const mutedUntil = new Date(Date.now() + durationMinutes * 60 * 1000);
+  const ttlSeconds = Math.max(1, Math.round((mutedUntil.getTime() - Date.now()) / 1000));
 
-  return prisma.muteRecord.upsert({
+  const mute = await prisma.muteRecord.upsert({
     where: { userId_groupId: { userId: targetUserId, groupId } },
     update: { mutedUntil, mutedBy: mutedByUserId },
     create: { userId: targetUserId, groupId, mutedBy: mutedByUserId, mutedUntil },
   });
+
+  const muteKey = `group:mute:${groupId}:${targetUserId}`;
+  await cacheService.set(muteKey, { muted: true, mutedUntil }, ttlSeconds);
+  await cacheInvalidator.invalidateMemberPermissions(groupId, targetUserId);
+
+  return mute;
 }
 
 /**
@@ -828,21 +874,40 @@ async function unmuteMember(groupId, targetUserId) {
   await prisma.muteRecord.deleteMany({
     where: { userId: targetUserId, groupId },
   });
+
+  const muteKey = `group:mute:${groupId}:${targetUserId}`;
+  await cacheService.del(muteKey);
+  await cacheInvalidator.invalidateMemberPermissions(groupId, targetUserId);
 }
 
 /**
  * Check if a user is currently muted in a group.
+ * Checks multi-tier cache first (0ms DB load) before hitting MongoDB.
  */
 async function isMuted(groupId, userId) {
+  const muteKey = `group:mute:${groupId}:${userId}`;
+  const cached = await cacheService.get(muteKey);
+  if (cached !== null && cached !== undefined) {
+    return cached.muted ? { muted: true, mutedUntil: new Date(cached.mutedUntil) } : false;
+  }
+
   const mute = await prisma.muteRecord.findUnique({
     where: { userId_groupId: { userId, groupId } },
   });
-  if (!mute) return false;
-  if (mute.mutedUntil < new Date()) {
-    // Mute expired — clean up
-    await prisma.muteRecord.delete({ where: { id: mute.id } });
+  if (!mute) {
+    await cacheService.set(muteKey, { muted: false }, 15);
     return false;
   }
+  if (mute.mutedUntil < new Date()) {
+    // Mute expired — clean up
+    await prisma.muteRecord.delete({ where: { id: mute.id } }).catch(() => {});
+    await cacheInvalidator.invalidateMemberPermissions(groupId, userId);
+    return false;
+  }
+
+  const ttlSeconds = Math.max(1, Math.round((mute.mutedUntil.getTime() - Date.now()) / 1000));
+  await cacheService.set(muteKey, { muted: true, mutedUntil: mute.mutedUntil }, ttlSeconds);
+
   return { muted: true, mutedUntil: mute.mutedUntil };
 }
 
