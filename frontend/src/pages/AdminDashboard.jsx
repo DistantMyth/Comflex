@@ -3,12 +3,40 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Building2, Tags, Users, Link2, Activity, Database, Search, RefreshCw,
   Trash2, ShieldCheck, UserPlus, CheckCircle2, XCircle, Loader2, AlertCircle,
-  HardDrive, Clock, Check, X
+  HardDrive, Clock, Check, X, ChevronLeft, ChevronRight, Info, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { adminApi } from '../api/adminApi';
 import resolveAsset from '../utils/resolveAsset';
 
 const RING_LABELS = ['Admin (Ring 0)', 'Manager (Ring 1)', 'Elevated (Ring 2)', 'Member (Ring 3)', 'Restricted (Ring 4)'];
+
+const RING_PERMISSIONS_INFO = {
+  0: {
+    label: 'Admin (Ring 0)',
+    badge: 'bg-red-500/15 text-red-400 border-red-500/30',
+    description: 'Full root platform admin. Unrestricted privileges across all groups, events, settings, and user permissions.',
+  },
+  1: {
+    label: 'Manager (Ring 1)',
+    badge: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+    description: 'Platform manager. Can manage groups, moderate users, and elevate users up to Ring 1.',
+  },
+  2: {
+    label: 'Elevated (Ring 2)',
+    badge: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+    description: 'Elevated member. Senior cohort moderation powers (mute, kick, pin, delete others\' messages in cross-year groups).',
+  },
+  3: {
+    label: 'Member (Ring 3)',
+    badge: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    description: 'Standard member. Can read, write messages, upload resources, and participate across assigned cohorts.',
+  },
+  4: {
+    label: 'Restricted (Ring 4)',
+    badge: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+    description: 'Restricted / read-only member. Muted or restricted access applied as a moderation boundary.',
+  },
+};
 
 export default function AdminDashboard() {
   const [tab, setTab] = useState('institution');
@@ -519,69 +547,659 @@ function AutoJoinTab() {
   );
 }
 
-// ---------------- USER DIRECTORY TAB ----------------
+// ---------------- USER MANAGEMENT & CAPABILITIES TAB ----------------
 function UsersTab() {
   const [users, setUsers] = useState([]);
-  const [search, setSearch] = useState('');
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [ringFilter, setRingFilter] = useState('');
+  const [modal, setModal] = useState({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+  const [banner, setBanner] = useState({ show: false, text: '', isError: false });
+  const [retaggingAll, setRetaggingAll] = useState(false);
+  const [showRingGuide, setShowRingGuide] = useState(false);
+  const [showCreateTestUser, setShowCreateTestUser] = useState(false);
 
-  const fetchUsers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await adminApi.listUsers({ search, limit: 30 });
-      setUsers(res.data?.data?.users || []);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+  const showBanner = (text, isError = false) => {
+    setBanner({ show: true, text, isError });
+    setTimeout(() => setBanner({ show: false, text: '', isError: false }), 4500);
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
-
-  const handleRingChange = async (userId, ring) => {
+  const fetchUsers = useCallback(async (page = 1) => {
+    setLoading(true);
     try {
-      await adminApi.setUserRing(userId, ring);
-      fetchUsers();
+      const params = { page, limit: 10 };
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
+      if (ringFilter !== '') params.ring = ringFilter;
+      const res = await adminApi.listUsers(params);
+      setUsers(res.data?.data?.users || []);
+      setPagination(res.data?.data?.pagination || { page: 1, limit: 10, total: 0, totalPages: 1 });
+    } catch {
+      showBanner('Failed to load user directory.', true);
+    } finally {
+      setLoading(false);
+    }
+  }, [debouncedSearch, ringFilter]);
+
+  useEffect(() => {
+    fetchUsers(1);
+  }, [fetchUsers]);
+
+  const handleTogglePermission = async (userId, field, label, currentValue) => {
+    const newValue = !currentValue;
+    // Optimistic UI update
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, [field]: newValue } : u))
+    );
+
+    try {
+      await adminApi.setUserPermissions(userId, { [field]: newValue });
+      showBanner(`${label} privilege ${newValue ? 'enabled' : 'revoked'}.`);
     } catch (err) {
-      alert(err.response?.data?.error?.message || 'Failed to update ring');
+      // Rollback on error
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, [field]: currentValue } : u))
+      );
+      showBanner(err.response?.data?.error?.message || `Failed to update ${label}.`, true);
+    }
+  };
+
+  const handleRingChangePrompt = (userId, displayName, newRing, currentRing) => {
+    if (newRing === currentRing) return;
+    const ringMeta = RING_PERMISSIONS_INFO[newRing] || { label: `Ring ${newRing}` };
+    const isDanger = newRing === 0;
+
+    setModal({
+      show: true,
+      title: 'Update Role & Ring Level Permissions',
+      message: `Are you sure you want to change "${displayName}"'s role to ${ringMeta.label}? ${
+        isDanger
+          ? '⚠️ WARNING: Ring 0 grants full root platform administrator authority across all systems.'
+          : `This will configure their platform-wide ring level permissions to ${ringMeta.label}.`
+      }`,
+      isDanger,
+      onConfirm: async () => {
+        try {
+          await adminApi.setUserRing(userId, newRing);
+          showBanner(`Role for "${displayName}" updated to ${ringMeta.label}.`);
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Failed to update ring level.', true);
+        } finally {
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      },
+    });
+  };
+
+  const handleRetag = async (userId, displayName) => {
+    try {
+      const res = await adminApi.retagUser(userId);
+      const tags = res.data?.data?.cohortTags || [];
+      showBanner(`Re-tagged "${displayName}". Tags: ${tags.join(', ') || 'none'}`);
+      fetchUsers(pagination.page);
+    } catch (err) {
+      showBanner(err.response?.data?.error?.message || 'Retagging user failed.', true);
+    }
+  };
+
+  const handleRetagAll = () => {
+    setModal({
+      show: true,
+      title: 'Re-tag All Platform Users',
+      message: 'Re-process ALL users through the current cohort rules and auto-join mappings? This will recalculate cohort tags and group memberships for everyone based on current regex configuration.',
+      isDanger: false,
+      onConfirm: async () => {
+        setRetaggingAll(true);
+        try {
+          const res = await adminApi.retagAllUsers();
+          const d = res.data?.data;
+          showBanner(`✅ ${d?.message || 'Re-tagging complete.'} (Processed: ${d?.processed || 0}/${d?.total || 0})`);
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Bulk retagging failed.', true);
+        } finally {
+          setRetaggingAll(false);
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      },
+    });
+  };
+
+  const handleDeleteUser = (userId, displayName) => {
+    setModal({
+      show: true,
+      title: 'Delete User Account Permanently',
+      message: `⚠️ Permanently delete "${displayName}"? This will irreversibly remove their account, messages, event organizer records, friendships, and badges. This action CANNOT be undone.`,
+      isDanger: true,
+      onConfirm: async () => {
+        try {
+          await adminApi.deleteUser(userId);
+          showBanner(`User "${displayName}" permanently deleted.`);
+          fetchUsers(pagination.page);
+        } catch (err) {
+          showBanner(err.response?.data?.error?.message || 'Failed to delete user.', true);
+        } finally {
+          setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false });
+        }
+      },
+    });
+  };
+
+  const getCapabilitiesList = (u) => [
+    {
+      key: 'canCreateGroups',
+      label: 'Create Channels',
+      desc: 'Allowed to create custom and cohort channels',
+      enabled: !!u.canCreateGroups,
+    },
+    {
+      key: 'canCreateEvents',
+      label: 'Organize Events',
+      desc: 'Allowed to host and manage platform events',
+      enabled: !!u.canCreateEvents,
+    },
+    {
+      key: 'canManageResources',
+      label: 'Curate Resources',
+      desc: 'Allowed to manage subjects and study notes',
+      enabled: !!u.canManageResources,
+    },
+    {
+      key: 'canManageStore',
+      label: 'Manage Store',
+      desc: 'Allowed to create badges and marketplace listings',
+      enabled: !!u.canManageStore,
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Confirmation Modal */}
+      {modal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className={`glass-card p-6 rounded-2xl max-w-md w-full border ${modal.isDanger ? 'border-[var(--color-danger)] shadow-red-500/10' : 'border-[var(--color-accent)] shadow-teal-500/10'} shadow-2xl`}>
+            <h3 className={`text-base font-bold font-display mb-2 ${modal.isDanger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]'}`}>
+              {modal.title}
+            </h3>
+            <p className="text-xs text-[var(--color-text-secondary)] mb-6 leading-relaxed">
+              {modal.message}
+            </p>
+            <div className="flex justify-end gap-2.5">
+              <button
+                onClick={() => setModal({ show: false, title: '', message: '', onConfirm: null, isDanger: false })}
+                className="btn btn-secondary text-xs py-1.5 px-3.5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={modal.onConfirm}
+                className={`btn text-xs font-bold text-white py-1.5 px-4 ${modal.isDanger ? 'bg-[var(--color-danger)] hover:bg-red-600' : 'btn-primary'}`}
+              >
+                Confirm Action
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Banner Feedback */}
+      {banner.show && (
+        <div className={`p-3 rounded-2xl text-xs flex items-center justify-between gap-3 border transition-all ${
+          banner.isError
+            ? 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border-[var(--color-danger)]/30'
+            : 'bg-[var(--palette-teal)]/15 text-[var(--palette-teal)] border-[var(--palette-teal)]/30 font-medium'
+        }`}>
+          <span>{banner.text}</span>
+          <button onClick={() => setBanner({ show: false, text: '', isError: false })} className="opacity-70 hover:opacity-100">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {/* Action Header & Filter Controls */}
+      <div className="glass-card p-5 border border-[var(--color-border)] space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold font-display text-[var(--color-text-primary)] flex items-center gap-2">
+              <Users size={16} className="text-[var(--color-accent)]" /> User Capabilities & Ring RBAC
+            </h3>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+              Control granular user capabilities, promote/demote ring levels, and execute cohort re-evaluations
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowRingGuide(!showRingGuide)}
+              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+            >
+              <Info size={12} />
+              <span>Ring Hierarchy Guide</span>
+              {showRingGuide ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+
+            <button
+              onClick={() => setShowCreateTestUser(!showCreateTestUser)}
+              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+            >
+              <UserPlus size={12} />
+              <span>+ Test User</span>
+            </button>
+
+            <button
+              onClick={handleRetagAll}
+              disabled={retaggingAll}
+              className="btn btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+              title="Apply current cohort + auto-join rules to all registered users"
+            >
+              <RefreshCw size={12} className={retaggingAll ? 'animate-spin' : ''} />
+              <span>{retaggingAll ? 'Re-tagging...' : 'Re-tag All'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible Ring Permissions Architecture Guide */}
+        {showRingGuide && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="p-4 rounded-2xl bg-[var(--color-bg-matte)] border border-[var(--color-border)] space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-primary)] flex items-center gap-1.5">
+                <ShieldCheck size={14} className="text-[var(--color-accent)]" />
+                Concentric Ring Permission Model (RULES.md §5)
+              </h4>
+              <span className="text-[10px] text-[var(--color-text-muted)]">Lower Ring # = Higher Privilege</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+              {Object.entries(RING_PERMISSIONS_INFO).map(([ringKey, meta]) => (
+                <div key={ringKey} className="p-3 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${meta.badge}`}>
+                      {meta.label}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed mt-1">
+                    {meta.description}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Collapsible Create Test User Form */}
+        {showCreateTestUser && (
+          <CreateTestUserForm
+            onCreated={() => fetchUsers(pagination.page)}
+            onClose={() => setShowCreateTestUser(false)}
+          />
+        )}
+
+        {/* Search and Filters */}
+        <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+          <div className="relative flex-1 w-full">
+            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, handle, or email address..."
+              className="matte-input text-xs pl-9 w-full"
+            />
+          </div>
+
+          <select
+            value={ringFilter}
+            onChange={(e) => setRingFilter(e.target.value)}
+            className="matte-input text-xs py-2 px-3 w-full sm:w-auto min-w-[190px]"
+          >
+            <option value="">All Platform Rings (0–4)</option>
+            {[0, 1, 2, 3, 4].map((r) => (
+              <option key={r} value={r}>{RING_LABELS[r]}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* User Directory Cards */}
+      {loading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="glass-card p-5 border border-[var(--color-border)] animate-pulse h-40 rounded-2xl" />
+          ))}
+        </div>
+      ) : users.length === 0 ? (
+        <div className="glass-card p-12 text-center text-xs text-[var(--color-text-muted)] border border-[var(--color-border)]">
+          No users matching the query or filter.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {users.map((u) => {
+            const ringMeta = RING_PERMISSIONS_INFO[u.globalRing] || RING_PERMISSIONS_INFO[4];
+            const isRootAdmin = u.globalRing === 0;
+
+            return (
+              <div
+                key={u.id}
+                className="glass-card p-5 border border-[var(--color-border)] space-y-4 rounded-2xl hover:border-[var(--color-border-hover)] transition-all"
+              >
+                {/* User Identity & Top Controls */}
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {u.avatarUrl ? (
+                      <img
+                        src={resolveAsset(u.avatarUrl)}
+                        alt={u.displayName}
+                        className="w-11 h-11 rounded-full object-cover border border-[var(--color-border)] flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[var(--color-accent)] to-[#528976] flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-xs">
+                        {u.displayName?.charAt(0)?.toUpperCase() || 'U'}
+                      </div>
+                    )}
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-xs font-bold text-[var(--color-text-primary)] truncate">{u.displayName}</p>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${ringMeta.badge}`}>
+                          {ringMeta.label}
+                        </span>
+                        {isRootAdmin && (
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/20">
+                            Root Authority
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 truncate">
+                        @{u.username || 'unnamed'} • {u.email}
+                      </p>
+
+                      {/* Cohort tags chips */}
+                      {u.cohortTags?.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {u.cohortTags.map((tag) => (
+                            <span key={tag} className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-[var(--color-bg-matte)] border border-[var(--color-border)] text-[var(--palette-teal)]">
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => handleRetag(u.id, u.displayName)}
+                      className="btn btn-secondary text-xs p-2"
+                      title="Re-evaluate cohort tags for this user"
+                    >
+                      <RefreshCw size={13} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteUser(u.id, u.displayName)}
+                      className="btn btn-secondary text-xs p-2 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/15"
+                      title="Permanently delete user"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Capabilities & Delegated Privileges Section */}
+                <div className="pt-3 border-t border-[var(--color-border)]">
+                  <div className="flex items-center justify-between mb-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <ShieldCheck size={13} className="text-[var(--color-accent)]" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                        Admin-Delegated Capabilities
+                      </span>
+                    </div>
+                    {isRootAdmin && (
+                      <span className="text-[10px] text-[var(--color-text-muted)] italic">
+                        Ring 0 bypasses checks; toggles apply if demoted
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {getCapabilitiesList(u).map((p) => (
+                      <button
+                        key={p.key}
+                        onClick={() => handleTogglePermission(u.id, p.key, p.label, p.enabled)}
+                        title={p.desc}
+                        className={`flex items-center justify-between gap-3 p-2.5 rounded-xl border text-xs font-medium transition-all text-left ${
+                          p.enabled
+                            ? 'bg-[var(--palette-teal)]/10 border-[var(--palette-teal)]/30 text-[var(--color-text-primary)]'
+                            : 'bg-[var(--color-bg-matte)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          {p.enabled ? (
+                            <CheckCircle2 size={14} className="text-[var(--palette-teal)] flex-shrink-0" />
+                          ) : (
+                            <XCircle size={14} className="text-[var(--color-text-muted)] flex-shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <span className="block text-[11px] font-bold text-[var(--color-text-primary)] truncate">
+                              {p.label}
+                            </span>
+                            <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
+                              {p.desc}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Switch Pill */}
+                        <div
+                          className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ${
+                            p.enabled ? 'bg-[var(--palette-teal)]' : 'bg-[var(--color-border)]'
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-xs transition-all ${
+                              p.enabled ? 'left-[16px]' : 'left-[2px]'
+                            }`}
+                          />
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Ring Level Permissions & Role Selector */}
+                <div className="pt-3 border-t border-[var(--color-border)] flex items-center justify-between gap-4 flex-wrap">
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-bold text-[var(--color-text-secondary)] block">
+                      Platform Role & Ring Level Permissions
+                    </span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] block">
+                      {ringMeta.description}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={u.globalRing}
+                      onChange={(e) => handleRingChangePrompt(u.id, u.displayName, Number(e.target.value), u.globalRing)}
+                      className="matte-input text-xs py-1.5 px-3 min-w-[170px]"
+                    >
+                      {[0, 1, 2, 3, 4].map((r) => (
+                        <option key={r} value={r}>
+                          {RING_LABELS[r]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination Bar */}
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center justify-between gap-3 pt-3 flex-wrap">
+          <span className="text-xs text-[var(--color-text-muted)]">
+            Showing page {pagination.page} of {pagination.totalPages} ({pagination.total} total users)
+          </span>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              disabled={pagination.page <= 1}
+              onClick={() => fetchUsers(pagination.page - 1)}
+              className="btn btn-secondary text-xs p-2 disabled:opacity-40"
+              title="Previous Page"
+            >
+              <ChevronLeft size={13} />
+            </button>
+
+            {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === pagination.totalPages || Math.abs(p - pagination.page) <= 1)
+              .map((p, idx, arr) => (
+                <div key={p} className="flex items-center gap-1">
+                  {idx > 0 && arr[idx - 1] !== p - 1 && (
+                    <span className="text-xs text-[var(--color-text-muted)] px-1">...</span>
+                  )}
+                  <button
+                    onClick={() => fetchUsers(p)}
+                    className={`w-7 h-7 rounded-xl text-xs font-bold transition-all ${
+                      pagination.page === p
+                        ? 'bg-[var(--color-accent)] text-white shadow-xs'
+                        : 'bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                </div>
+              ))}
+
+            <button
+              disabled={pagination.page >= pagination.totalPages}
+              onClick={() => fetchUsers(pagination.page + 1)}
+              className="btn btn-secondary text-xs p-2 disabled:opacity-40"
+              title="Next Page"
+            >
+              <ChevronRight size={13} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- CREATE TEST USER SUB-TOOL ----------------
+function CreateTestUserForm({ onCreated, onClose }) {
+  const [form, setForm] = useState({ email: '', displayName: '', password: '' });
+  const [creating, setCreating] = useState(false);
+  const [status, setStatus] = useState({ message: '', isError: false });
+
+  const handleCreate = async () => {
+    if (!form.email.trim() || !form.displayName.trim()) return;
+    setCreating(true);
+    setStatus({ message: '', isError: false });
+    try {
+      const res = await adminApi.createTestUser({
+        email: form.email.trim(),
+        displayName: form.displayName.trim(),
+        password: form.password || undefined,
+      });
+      const d = res.data?.data;
+      setStatus({ message: `✅ ${d?.message || 'Test user created successfully!'}`, isError: false });
+      setForm({ email: '', displayName: '', password: '' });
+      onCreated?.();
+    } catch (err) {
+      setStatus({ message: err.response?.data?.error?.message || 'Failed to create test user.', isError: true });
+    } finally {
+      setCreating(false);
     }
   };
 
   return (
-    <div className="glass-card p-6 border border-[var(--color-border)] space-y-4">
+    <div className="p-4 rounded-2xl bg-[var(--color-bg-matte)] border border-[var(--color-border)] space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-bold font-display text-[var(--color-text-primary)]">User RBAC Registry</h3>
-        <span className="text-xs text-[var(--color-text-muted)]">{users.length} users</span>
+        <h4 className="text-xs font-bold font-display text-[var(--color-text-primary)] flex items-center gap-1.5">
+          <UserPlus size={14} className="text-[var(--color-accent)]" /> Create Test User Account
+        </h4>
+        {onClose && (
+          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] p-1">
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-[var(--color-text-muted)]">
+        Directly creates an account (bypasses registration gating). Cohort tags and auto-join groups will be resolved automatically from email.
+      </p>
+
+      {status.message && (
+        <div className={`text-xs p-2.5 rounded-xl font-medium ${
+          status.isError ? 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border border-[var(--color-danger)]/20' : 'bg-[var(--palette-teal)]/15 text-[var(--palette-teal)] border border-[var(--palette-teal)]/20'
+        }`}>
+          {status.message}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+            Email *
+          </label>
+          <input
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="e.g. cs2029001@university.edu"
+            className="matte-input text-xs"
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+            Display Name *
+          </label>
+          <input
+            type="text"
+            value={form.displayName}
+            onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+            placeholder="e.g. Alex Hunter"
+            className="matte-input text-xs"
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1">
+            Password (optional)
+          </label>
+          <input
+            type="text"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            placeholder="test123"
+            className="matte-input text-xs"
+          />
+        </div>
       </div>
 
-      <input
-        type="text"
-        placeholder="Search users..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="matte-input text-xs max-w-sm"
-      />
-
-      <div className="space-y-2.5">
-        {users.map((u) => (
-          <div key={u.id} className="p-3.5 rounded-2xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] flex items-center justify-between gap-4 flex-wrap">
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-[var(--color-text-primary)] truncate">{u.displayName}</p>
-              <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">@{u.username} • {u.email}</p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-[var(--color-text-muted)]">Role:</span>
-              <select
-                value={u.globalRing}
-                onChange={(e) => handleRingChange(u.id, Number(e.target.value))}
-                className="matte-input text-xs py-1 px-2"
-              >
-                {[0, 1, 2, 3, 4].map(r => (
-                  <option key={r} value={r}>{RING_LABELS[r]}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        ))}
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          onClick={handleCreate}
+          disabled={creating || !form.email.trim() || !form.displayName.trim()}
+          className="btn btn-primary text-xs py-1.5 px-4"
+        >
+          {creating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          <span>Create Account</span>
+        </button>
       </div>
     </div>
   );
