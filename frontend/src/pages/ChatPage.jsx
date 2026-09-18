@@ -72,9 +72,52 @@ export default function ChatPage() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [toastNotice, setToastNotice] = useState(null);
+  const toastTimeoutRef = useRef(null);
   const chatContainerRef = useRef(null);
-
   const messagesEndRef = useRef(null);
+  const prevLastMessageIdRef = useRef(null);
+  const isJumpingRef = useRef(false);
+  const isAtBottomRef = useRef(true);
+  const jumpHighlightTimeoutRef = useRef(null);
+  const jumpHighlightedElRef = useRef(null);
+
+  const cleanupJumpHighlight = useCallback(() => {
+    if (jumpHighlightTimeoutRef.current) {
+      clearTimeout(jumpHighlightTimeoutRef.current);
+      jumpHighlightTimeoutRef.current = null;
+    }
+    if (jumpHighlightedElRef.current) {
+      jumpHighlightedElRef.current.classList.remove('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+      jumpHighlightedElRef.current = null;
+    }
+    isJumpingRef.current = false;
+  }, []);
+
+  const showToastNotice = useCallback((message, type = 'info') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastNotice({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastNotice(null);
+      toastTimeoutRef.current = null;
+    }, 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cleanupJumpHighlight();
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = null;
+      }
+    };
+  }, [cleanupJumpHighlight]);
+
+  useEffect(() => {
+    cleanupJumpHighlight();
+    setToastNotice(null);
+  }, [groupId, cleanupJumpHighlight]);
+
   const typingTimeoutRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -103,6 +146,108 @@ export default function ChatPage() {
       .slice(0, 5);
   }, [messages]);
 
+  const messageMap = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
+
+  const handleJumpToMessage = useCallback(async (targetId) => {
+    if (!targetId) return;
+
+    const performJump = (el) => {
+      cleanupJumpHighlight();
+      isJumpingRef.current = true;
+      jumpHighlightedElRef.current = el;
+
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+
+      jumpHighlightTimeoutRef.current = setTimeout(() => {
+        if (jumpHighlightedElRef.current === el) {
+          el.classList.remove('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+          jumpHighlightedElRef.current = null;
+        }
+        isJumpingRef.current = false;
+        jumpHighlightTimeoutRef.current = null;
+      }, 1500);
+    };
+
+    let targetElement = document.getElementById(`msg-${targetId}`);
+    if (targetElement) {
+      performJump(targetElement);
+      return;
+    }
+
+    if (!hasMore) {
+      isJumpingRef.current = false;
+      showToastNotice('Quoted message could not be found in message history.', 'info');
+      return;
+    }
+
+    if (loadingMore) {
+      isJumpingRef.current = false;
+      showToastNotice('Loading message history... please try again in a moment.', 'info');
+      return;
+    }
+
+    isJumpingRef.current = true;
+    setLoadingMore(true);
+    try {
+      let currentPage = page;
+      let more = hasMore;
+      const container = chatContainerRef.current;
+
+      while (!targetElement && more && currentPage < page + 4) {
+        const prevScrollHeight = container ? container.scrollHeight : 0;
+        const prevScrollTop = container ? container.scrollTop : 0;
+
+        const res = await groupApi.getMessages(groupId, currentPage + 1, 50);
+        const newMsgs = Array.isArray(res?.data?.data?.messages)
+          ? res.data.data.messages
+          : (Array.isArray(res?.data?.data) ? res.data.data : []);
+        if (newMsgs.length < 50) more = false;
+        if (newMsgs.length === 0) break;
+
+        const containsTarget = newMsgs.some((m) => m.id === targetId);
+
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = [...newMsgs].reverse().filter((m) => !existingIds.has(m.id));
+          return [...uniqueOlder, ...prev];
+        });
+
+        currentPage += 1;
+        setPage(currentPage);
+        setHasMore(more);
+
+        if (container) {
+          container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+        }
+
+        if (containsTarget) {
+          more = false;
+        }
+
+        await new Promise((r) => setTimeout(r, 60));
+        targetElement = document.getElementById(`msg-${targetId}`);
+        if (!targetElement && containsTarget) {
+          await new Promise((r) => setTimeout(r, 100));
+          targetElement = document.getElementById(`msg-${targetId}`);
+        }
+      }
+
+      if (targetElement) {
+        performJump(targetElement);
+      } else {
+        isJumpingRef.current = false;
+        showToastNotice('Quoted message could not be found in recent history.', 'info');
+      }
+    } catch (err) {
+      console.error('Failed to load older messages for reply jump:', err);
+      isJumpingRef.current = false;
+      showToastNotice('Failed to load message history for quoted reply.', 'error');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cleanupJumpHighlight, groupId, hasMore, loadingMore, page, showToastNotice]);
+
   useEffect(() => {
     if (pinnedMessages.length > 0 && currentPinnedIndex >= pinnedMessages.length) {
       setCurrentPinnedIndex(0);
@@ -111,6 +256,10 @@ export default function ChatPage() {
 
   const loadOlderMessages = async () => {
     if (loadingMore || !hasMore) return;
+    const container = chatContainerRef.current;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+
     setLoadingMore(true);
     try {
       const res = await groupApi.getMessages(groupId, page + 1, 50);
@@ -118,8 +267,18 @@ export default function ChatPage() {
         ? res.data.data.messages
         : (Array.isArray(res?.data?.data) ? res.data.data : []);
       if (newMsgs.length < 50) setHasMore(false);
-      setMessages(prev => [...[...newMsgs].reverse(), ...prev]);
-      setPage(p => p + 1);
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const uniqueOlder = [...newMsgs].reverse().filter((m) => !existingIds.has(m.id));
+        return [...uniqueOlder, ...prev];
+      });
+      setPage((p) => p + 1);
+
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+        }
+      });
     } catch (err) {
       console.error(err);
     } finally {
@@ -264,16 +423,50 @@ export default function ChatPage() {
       }),
       onEvent('message:edit', (updatedMsg) => {
         if (updatedMsg.groupId !== groupId) return;
-        setMessages((prev) => prev.map((m) => (m.id === updatedMsg.id ? { ...m, ...updatedMsg } : m)));
+        setMessages((prev) =>
+          prev.map((m) => {
+            const isTarget = m.id === updatedMsg.id;
+            const isQuoting = m.replyToId === updatedMsg.id || m.replyTo?.id === updatedMsg.id;
+            if (!isTarget && !isQuoting) return m;
+
+            let updated = { ...m };
+            if (isTarget) {
+              updated = {
+                ...updated,
+                ...updatedMsg,
+                replyTo: updatedMsg.replyTo || m.replyTo,
+              };
+            }
+            if (isQuoting) {
+              updated = {
+                ...updated,
+                replyTo: { ...(updated.replyTo || {}), content: updatedMsg.content },
+              };
+            }
+            return updated;
+          })
+        );
       }),
       onEvent('message:delete', ({ messageId, groupId: gId }) => {
         if (gId !== groupId) return;
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === messageId
-              ? { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null }
-              : m
-          )
+          prev.map((m) => {
+            const isTarget = m.id === messageId;
+            const isQuoting = m.replyToId === messageId || m.replyTo?.id === messageId;
+            if (!isTarget && !isQuoting) return m;
+
+            let updated = { ...m };
+            if (isTarget) {
+              updated = { ...updated, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null };
+            }
+            if (isQuoting) {
+              updated = {
+                ...updated,
+                replyTo: { ...(updated.replyTo || {}), isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null },
+              };
+            }
+            return updated;
+          })
         );
       }),
       onEvent('message:reaction', ({ messageId, reactions }) => {
@@ -296,12 +489,45 @@ export default function ChatPage() {
     return () => cleanups.forEach((fn) => fn?.());
   }, [connected, onEvent, groupId, markRead]);
 
-  // Auto-scroll on new message
+  // Scroll listener to track if user is near bottom
+  const handleScroll = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const threshold = 150;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    isAtBottomRef.current = atBottom;
+  }, []);
+
   useEffect(() => {
-    if (!loadingMore) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = chatContainerRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
+
+  // Intelligent auto-scroll
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const lastMsg = messages[messages.length - 1];
+    const isInitial = prevLastMessageIdRef.current === null;
+    const isAppended = prevLastMessageIdRef.current !== null && lastMsg?.id !== prevLastMessageIdRef.current;
+    prevLastMessageIdRef.current = lastMsg?.id;
+
+    if (isJumpingRef.current || loadingMore) return;
+
+    if (isInitial) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      return;
     }
-  }, [messages.length, loadingMore]);
+
+    if (isAppended) {
+      const isSentByMe = lastMsg?.authorId === user?.id || (isAnon && (lastMsg?.author?.id === myIdentity?.identityId || lastMsg?.anonAuthorId === myIdentity?.identityId));
+      if (isSentByMe || isAtBottomRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  }, [messages, loadingMore, user?.id, isAnon, myIdentity?.identityId]);
 
   const handleSendMessage = async (e) => {
     e?.preventDefault();
@@ -412,7 +638,29 @@ export default function ChatPage() {
 
   const handleEdit = async (messageId, content) => {
     try {
-      await groupApi.editMessage(groupId, messageId, content);
+      const res = await groupApi.editMessage(groupId, messageId, content);
+      const updatedMsg = res.data?.data;
+      setMessages((prev) =>
+        prev.map((m) => {
+          const isTarget = m.id === messageId;
+          const isQuoting = m.replyToId === messageId || m.replyTo?.id === messageId;
+          if (!isTarget && !isQuoting) return m;
+
+          let updated = { ...m };
+          if (isTarget) {
+            updated = updatedMsg
+              ? { ...updated, ...updatedMsg, replyTo: updatedMsg.replyTo || m.replyTo }
+              : { ...updated, content, editedAt: new Date().toISOString() };
+          }
+          if (isQuoting) {
+            updated = {
+              ...updated,
+              replyTo: { ...(updated.replyTo || {}), content },
+            };
+          }
+          return updated;
+        })
+      );
     } catch { /* ignore */ }
   };
 
@@ -420,6 +668,25 @@ export default function ChatPage() {
     if (!window.confirm('Delete message?')) return;
     try {
       await groupApi.deleteMessage(groupId, messageId);
+      setMessages((prev) =>
+        prev.map((m) => {
+          const isTarget = m.id === messageId;
+          const isQuoting = m.replyToId === messageId || m.replyTo?.id === messageId;
+          if (!isTarget && !isQuoting) return m;
+
+          let updated = { ...m };
+          if (isTarget) {
+            updated = { ...updated, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null };
+          }
+          if (isQuoting) {
+            updated = {
+              ...updated,
+              replyTo: { ...(updated.replyTo || {}), isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null },
+            };
+          }
+          return updated;
+        })
+      );
     } catch { /* ignore */ }
   };
 
@@ -436,12 +703,7 @@ export default function ChatPage() {
   };
 
   const jumpToMessage = (messageId) => {
-    const el = document.getElementById(`msg-${messageId}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('bg-[var(--palette-teal)]/15');
-      setTimeout(() => el.classList.remove('bg-[var(--palette-teal)]/15'), 2000);
-    }
+    handleJumpToMessage(messageId);
   };
 
   const handleForwardSearch = async (val) => {
@@ -558,7 +820,7 @@ export default function ChatPage() {
       )}
 
       {/* Main Chat Feed */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[var(--color-bg-primary)]/40">
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--color-bg-primary)]/40 relative">
         {/* Chat Top Header */}
         <div className="p-3.5 px-5 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-bg-card)]/70 backdrop-blur-md z-10">
           <div className="flex items-center gap-3 min-w-0">
@@ -613,6 +875,41 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {/* Visual feedback toast notice (e.g. quoted message not found) */}
+        <AnimatePresence>
+          {toastNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: -6, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.96 }}
+              className="absolute top-16 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-none"
+            >
+              <div
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg border backdrop-blur-md pointer-events-auto ${
+                  toastNotice.type === 'error'
+                    ? 'bg-[var(--color-bg-card)] border-[var(--color-danger)] text-[var(--color-danger)]'
+                    : 'bg-[var(--color-bg-card)] border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                }`}
+              >
+                {toastNotice.type === 'error' ? (
+                  <AlertCircle size={14} className="text-[var(--color-danger)] flex-shrink-0" />
+                ) : (
+                  <Check size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+                )}
+                <span className="flex-1 truncate">{toastNotice.message}</span>
+                <button
+                  onClick={() => setToastNotice(null)}
+                  className="p-0.5 rounded hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)]"
+                  title="Dismiss"
+                  aria-label="Dismiss notification"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Pinned Messages Carousel Banner */}
         {pinnedMessages.length > 0 && (
           <div className="px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]/70 flex items-center justify-between text-xs backdrop-blur-xs">
@@ -655,41 +952,57 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
-            <div key={msg.id} id={`msg-${msg.id}`} className="transition-colors rounded-2xl">
-              <MessageBubble
-                message={msg}
-                currentUserId={user?.id}
-                permissions={membership?.permissions || {}}
-                isAdmin={isAdmin}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-                onPin={handlePin}
-                onUserClick={(uid) => setSelectedUserId(uid)}
-                members={members}
-                badgeMap={badgeMap}
-                onReply={(m) => setReplyingTo(m)}
-                onForward={(m) => setForwardingMsg(m)}
-                anonMode={isAnon}
-                myIdentityId={myIdentity?.identityId}
-                isAnonCreator={group?.creatorId === user?.id}
-                onReport={(identityIdOrObj, alias) => {
-                  if (typeof identityIdOrObj === 'object' && identityIdOrObj !== null) {
-                    setReportTarget({
-                      identityId: identityIdOrObj.identityId || identityIdOrObj.id,
-                      alias: identityIdOrObj.alias || identityIdOrObj.displayName || 'Anonymous',
-                    });
-                  } else {
-                    setReportTarget({
-                      identityId: identityIdOrObj,
-                      alias: alias || 'Anonymous',
-                    });
-                  }
-                }}
-                onReact={handleReact}
-              />
-            </div>
-          ))}
+          {messages.map((msg) => {
+            const liveTarget = msg.replyToId ? messageMap.get(msg.replyToId) : null;
+            const replyMsg = liveTarget
+              ? {
+                  id: liveTarget.id,
+                  content: liveTarget.isDeleted ? '[Message deleted]' : liveTarget.content,
+                  isDeleted: Boolean(liveTarget.isDeleted),
+                  msgType: liveTarget.msgType || 'text',
+                  fileName: liveTarget.isDeleted ? null : liveTarget.fileName,
+                  fileUrl: liveTarget.isDeleted ? null : liveTarget.fileUrl,
+                  author: liveTarget.author || msg.replyTo?.author || null,
+                }
+              : (msg.replyTo || null);
+            return (
+              <div key={msg.id} className="transition-colors rounded-2xl">
+                <MessageBubble
+                  message={msg}
+                  replyMessage={replyMsg}
+                  onJumpToMessage={handleJumpToMessage}
+                  currentUserId={user?.id}
+                  permissions={membership?.permissions || {}}
+                  isAdmin={isAdmin}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onPin={handlePin}
+                  onUserClick={(uid) => setSelectedUserId(uid)}
+                  members={members}
+                  badgeMap={badgeMap}
+                  onReply={(m) => setReplyingTo(m)}
+                  onForward={(m) => setForwardingMsg(m)}
+                  anonMode={isAnon}
+                  myIdentityId={myIdentity?.identityId}
+                  isAnonCreator={group?.creatorId === user?.id}
+                  onReport={(identityIdOrObj, alias) => {
+                    if (typeof identityIdOrObj === 'object' && identityIdOrObj !== null) {
+                      setReportTarget({
+                        identityId: identityIdOrObj.identityId || identityIdOrObj.id,
+                        alias: identityIdOrObj.alias || identityIdOrObj.displayName || 'Anonymous',
+                      });
+                    } else {
+                      setReportTarget({
+                        identityId: identityIdOrObj,
+                        alias: alias || 'Anonymous',
+                      });
+                    }
+                  }}
+                  onReact={handleReact}
+                />
+              </div>
+            );
+          })}
           <div ref={messagesEndRef} />
         </div>
 
@@ -699,10 +1012,18 @@ export default function ChatPage() {
             <div className="px-4 py-2 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex items-center justify-between text-xs">
               <div className="flex items-center gap-2 truncate">
                 <CornerDownLeft size={14} className="text-[var(--color-accent)]" />
-                <span className="font-bold">Replying to: </span>
-                <span className="truncate text-[var(--color-text-secondary)]">{replyingTo.content || '[Attachment]'}</span>
+                <span className="font-bold">
+                  Replying to {replyingTo.author?.displayName
+                    ? `${replyingTo.author.displayName}${replyingTo.author.aliasTag ? `#${replyingTo.author.aliasTag}` : ''}`
+                    : (replyingTo.author?.isAnonymous ? 'Anonymous' : (replyingTo.authorId === user?.id ? 'yourself' : 'message'))}:
+                </span>
+                <span className="truncate text-[var(--color-text-secondary)]">
+                  {replyingTo.isDeleted
+                    ? '[Message deleted]'
+                    : (replyingTo.content || replyingTo.fileName || 'Attachment')}
+                </span>
               </div>
-              <button onClick={() => setReplyingTo(null)} className="p-1 hover:text-[var(--color-danger)]">
+              <button onClick={() => setReplyingTo(null)} className="p-1 hover:text-[var(--color-danger)]" title="Cancel reply" aria-label="Cancel reply">
                 <X size={14} />
               </button>
             </div>

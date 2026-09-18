@@ -8,6 +8,47 @@
 const prisma = require('../prisma');
 const notificationService = require('./notificationService');
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+function isValidMongoId(id) {
+  return typeof id === 'string' && ID_RE.test(id);
+}
+
+/**
+ * Format a referenced message preview for quoted replies.
+ * In anonymous groups or for anon authors, surfaces frozen alias snapshot as author.
+ * Deleted messages sanitize content and file attachments.
+ */
+function formatReplyPreview(msg, isAnon = false) {
+  if (!msg) return null;
+  const isAnonMsg = msg.authorType === 'anon' || isAnon;
+  const snapshot = msg.authorSnapshot || null;
+
+  return {
+    id: msg.id,
+    content: msg.isDeleted ? '[Message deleted]' : (msg.content || ''),
+    msgType: msg.msgType || 'text',
+    fileName: msg.isDeleted ? null : (msg.fileName || null),
+    fileUrl: msg.isDeleted ? null : (msg.fileUrl || null),
+    isDeleted: Boolean(msg.isDeleted),
+    author: isAnonMsg
+      ? {
+          id: msg.anonAuthorId,
+          displayName: snapshot?.alias || 'Anonymous',
+          aliasTag: snapshot?.aliasTag || null,
+          avatarUrl: snapshot?.avatarUrl || null,
+          isAnonymous: true,
+        }
+      : (msg.author
+          ? {
+              id: msg.author.id,
+              displayName: msg.author.displayName || 'Unknown',
+              avatarUrl: msg.author.avatarUrl || null,
+              globalRing: typeof msg.author.globalRing === 'number' ? msg.author.globalRing : 3,
+            }
+          : null),
+  };
+}
+
 /**
  * Get paginated messages for a group (newest first).
  * In anonymous groups, message authors resolve to their frozen alias snapshot.
@@ -35,8 +76,39 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
     prisma.message.count({ where: { groupId } }),
   ]);
 
+  // Batch-fetch referenced reply messages within this group (IDOR-safe & ObjectId-safe)
+  const replyIds = [...new Set(messages.map(m => m.replyToId).filter(isValidMongoId))];
+  let replyMap = new Map();
+  if (replyIds.length > 0) {
+    const replies = await prisma.message.findMany({
+      where: { id: { in: replyIds }, groupId },
+      include: isAnon ? {} : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true, globalRing: true,
+          },
+        },
+      },
+    });
+    replyMap = new Map(replies.map(r => [r.id, formatReplyPreview(r, isAnon)]));
+    // Tombstone fallback for hard-deleted or cross-group messages
+    for (const rid of replyIds) {
+      if (!replyMap.has(rid)) {
+        replyMap.set(rid, {
+          id: rid,
+          content: '[Message deleted]',
+          msgType: 'text',
+          fileName: null,
+          fileUrl: null,
+          isDeleted: true,
+          author: null,
+        });
+      }
+    }
+  }
+
   return {
-    messages: messages.map(msg => formatMessage(msg, currentUserId)),
+    messages: messages.map(msg => formatMessage(msg, currentUserId, replyMap.get(msg.replyToId) || null)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
 }
@@ -74,7 +146,35 @@ async function getMessage(messageId, groupId = null, isAnon = false) {
       };
   const msg = await prisma.message.findUnique({ where: { id: messageId }, include });
   if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
-  return formatMessage(msg);
+
+  let replyPreview = null;
+  if (isValidMongoId(msg.replyToId)) {
+    const replyMsg = await prisma.message.findFirst({
+      where: { id: msg.replyToId, ...(groupId ? { groupId } : {}) },
+      include: isAnon ? {} : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true, globalRing: true,
+          },
+        },
+      },
+    });
+    if (replyMsg) {
+      replyPreview = formatReplyPreview(replyMsg, isAnon);
+    } else {
+      replyPreview = {
+        id: msg.replyToId,
+        content: '[Message deleted]',
+        msgType: 'text',
+        fileName: null,
+        fileUrl: null,
+        isDeleted: true,
+        author: null,
+      };
+    }
+  }
+
+  return formatMessage(msg, null, replyPreview);
 }
 
 /**
@@ -87,6 +187,7 @@ async function getMessage(messageId, groupId = null, isAnon = false) {
 async function sendMessage(groupId, authorId, params, anon = null) {
   const { content, mentions = [], attachments = [], replyToId, forwarded = false, msgType = 'text', fileUrl, fileName, fileSize, mimetype } = params;
 
+  const cleanReplyToId = isValidMongoId(replyToId) ? replyToId : null;
   const isAnon = !!anon;
   const data = isAnon
     ? {
@@ -97,11 +198,11 @@ async function sendMessage(groupId, authorId, params, anon = null) {
         authorSnapshot: { alias: anon.alias, aliasTag: anon.aliasTag, avatarUrl: anon.avatarUrl || null },
         content, attachments,
         mentions: [], // mentions leak identity — never allowed in anon groups
-        replyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
+        replyToId: cleanReplyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
       }
     : {
         groupId, authorId, content, mentions, attachments,
-        replyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
+        replyToId: cleanReplyToId, forwarded, msgType, fileUrl, fileName, fileSize, mimetype,
       };
 
   const msg = await prisma.message.create({
@@ -116,8 +217,36 @@ async function sendMessage(groupId, authorId, params, anon = null) {
     },
   });
 
+  // Resolve reply preview if cleanReplyToId is provided
+  let replyPreview = null;
+  if (cleanReplyToId) {
+    const replyMsg = await prisma.message.findFirst({
+      where: { id: cleanReplyToId, groupId },
+      include: isAnon ? {} : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true, globalRing: true,
+          },
+        },
+      },
+    });
+    if (replyMsg) {
+      replyPreview = formatReplyPreview(replyMsg, isAnon);
+    } else {
+      replyPreview = {
+        id: cleanReplyToId,
+        content: '[Message deleted]',
+        msgType: 'text',
+        fileName: null,
+        fileUrl: null,
+        isDeleted: true,
+        author: null,
+      };
+    }
+  }
+
   if (isAnon) {
-    return formatMessage(msg);
+    return formatMessage(msg, null, replyPreview);
   }
 
   // Notify mentioned users (excluding the author) — fire-and-forget
@@ -144,7 +273,7 @@ async function sendMessage(groupId, authorId, params, anon = null) {
     }
   }
 
-  return formatMessage(msg);
+  return formatMessage(msg, null, replyPreview);
 }
 
 /**
@@ -182,7 +311,35 @@ async function editMessage(messageId, userId, newContent, groupId = null, anon =
     data: { content: newContent, editedAt: new Date() },
     include,
   });
-  return formatMessage(updated);
+
+  let replyPreview = null;
+  if (isValidMongoId(updated.replyToId)) {
+    const replyMsg = await prisma.message.findFirst({
+      where: { id: updated.replyToId, ...(groupId ? { groupId } : {}) },
+      include: anon ? {} : {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true, globalRing: true,
+          },
+        },
+      },
+    });
+    if (replyMsg) {
+      replyPreview = formatReplyPreview(replyMsg, !!anon);
+    } else {
+      replyPreview = {
+        id: updated.replyToId,
+        content: '[Message deleted]',
+        msgType: 'text',
+        fileName: null,
+        fileUrl: null,
+        isDeleted: true,
+        author: null,
+      };
+    }
+  }
+
+  return formatMessage(updated, null, replyPreview);
 }
 
 /**
@@ -219,7 +376,15 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId
 
   return prisma.message.update({
     where: { id: messageId },
-    data: { isDeleted: true, content: '[Message deleted]' },
+    data: {
+      isDeleted: true,
+      content: '[Message deleted]',
+      fileUrl: null,
+      fileName: null,
+      fileSize: null,
+      mimetype: null,
+      attachments: [],
+    },
   });
 }
 
@@ -363,7 +528,37 @@ async function getPinnedMessages(groupId) {
       },
     },
   });
-  return messages.map(formatMessage);
+
+  const replyIds = [...new Set(messages.map(m => m.replyToId).filter(isValidMongoId))];
+  let replyMap = new Map();
+  if (replyIds.length > 0) {
+    const replies = await prisma.message.findMany({
+      where: { id: { in: replyIds }, groupId },
+      include: {
+        author: {
+          select: {
+            id: true, displayName: true, avatarUrl: true, globalRing: true,
+          },
+        },
+      },
+    });
+    replyMap = new Map(replies.map(r => [r.id, formatReplyPreview(r, false)]));
+    for (const rid of replyIds) {
+      if (!replyMap.has(rid)) {
+        replyMap.set(rid, {
+          id: rid,
+          content: '[Message deleted]',
+          msgType: 'text',
+          fileName: null,
+          fileUrl: null,
+          isDeleted: true,
+          author: null,
+        });
+      }
+    }
+  }
+
+  return messages.map(msg => formatMessage(msg, null, replyMap.get(msg.replyToId) || null));
 }
 
 // ============================================================
@@ -374,7 +569,7 @@ async function getPinnedMessages(groupId) {
  * Format a message for API response.
  * Anonymous-group messages surface the frozen alias snapshot as `author`.
  */
-function formatMessage(msg, currentUserId = null) {
+function formatMessage(msg, currentUserId = null, replyTo = null) {
   const isAnonMsg = msg.authorType === 'anon';
   const snapshot = msg.authorSnapshot || null;
 
@@ -392,8 +587,8 @@ function formatMessage(msg, currentUserId = null) {
         }
       : (msg.author || null),
     content: msg.isDeleted ? '[Message deleted]' : msg.content,
-    attachments: msg.attachments || [],
-    mentions: msg.mentions || [],
+    attachments: msg.isDeleted ? [] : (msg.attachments || []),
+    mentions: msg.isDeleted ? [] : (msg.mentions || []),
     isPinned: msg.isPinned,
     pinnedAt: msg.pinnedAt || null,
     isDeleted: msg.isDeleted,
@@ -402,13 +597,14 @@ function formatMessage(msg, currentUserId = null) {
     
     // Extensions
     replyToId: msg.replyToId || null,
+    replyTo: replyTo !== null ? replyTo : (msg.replyTo ? formatReplyPreview(msg.replyTo, isAnonMsg) : null),
     reactions: msg.reactions || {},
     forwarded: msg.forwarded || false,
-    msgType: msg.msgType || 'text',
-    fileUrl: msg.fileUrl || null,
-    fileName: msg.fileName || null,
-    fileSize: msg.fileSize || null,
-    mimetype: msg.mimetype || null,
+    msgType: msg.isDeleted ? 'text' : (msg.msgType || 'text'),
+    fileUrl: msg.isDeleted ? null : (msg.fileUrl || null),
+    fileName: msg.isDeleted ? null : (msg.fileName || null),
+    fileSize: msg.isDeleted ? null : (msg.fileSize || null),
+    mimetype: msg.isDeleted ? null : (msg.mimetype || null),
   };
 
   return base;
@@ -417,4 +613,5 @@ function formatMessage(msg, currentUserId = null) {
 module.exports = {
   getMessages, getMessage, sendMessage, editMessage, deleteMessage,
   pinMessage, unpinMessage, getPinnedMessages, toggleReaction,
+  formatReplyPreview, formatMessage,
 };

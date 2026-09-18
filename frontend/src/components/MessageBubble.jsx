@@ -189,6 +189,7 @@ export default function MessageBubble({
   onForward,
   onUserClick,
   replyMessage,
+  onJumpToMessage,
   members = [],
   badgeMap = {},
   anonMode = false,
@@ -201,6 +202,15 @@ export default function MessageBubble({
   const [copied, setCopied] = useState(false);
   const [showEmojiTray, setShowEmojiTray] = useState(false);
   const emojiTrayRef = useRef(null);
+  const highlightTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const author = message.author || {};
   const isAnonMsg = Boolean(author.isAnonymous) || (anonMode && !message.authorId);
@@ -358,18 +368,39 @@ export default function MessageBubble({
     (Array.isArray(message.readBy) && message.readBy.length > 0)
   );
 
+  const targetReply = replyMessage || message.replyTo || null;
+
   // Scroll to referenced message when clicking quote
-  const scrollToRepliedMessage = () => {
-    if (!replyMessage?.id) return;
-    const targetElement = document.getElementById(`msg-${replyMessage.id}`);
+  const scrollToRepliedMessage = (e) => {
+    e?.stopPropagation();
+    if (!targetReply?.id) return;
+    if (onJumpToMessage) {
+      onJumpToMessage(targetReply.id);
+      return;
+    }
+    const targetElement = document.getElementById(`msg-${targetReply.id}`);
     if (targetElement) {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
       targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      targetElement.classList.add('ring-2', 'ring-[var(--color-accent)]');
-      setTimeout(() => {
-        targetElement.classList.remove('ring-2', 'ring-[var(--color-accent)]');
+      targetElement.classList.add('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+      highlightTimeoutRef.current = setTimeout(() => {
+        targetElement.classList.remove('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+        highlightTimeoutRef.current = null;
       }, 1500);
     }
   };
+
+  const replyAuthorLabel = targetReply?.author?.displayName
+    ? `${targetReply.author.displayName}${targetReply.author.aliasTag ? `#${targetReply.author.aliasTag}` : ''}`
+    : (targetReply?.author?.isAnonymous ? 'Anonymous' : 'Unknown');
+
+  const replyAuthorColor = targetReply?.author?.isAnonymous
+    ? 'var(--color-text-primary)'
+    : (targetReply?.author
+        ? (RING_COLORS[Math.min(targetReply.author.globalRing ?? 3, 3)] || 'var(--color-text-primary)')
+        : 'var(--color-text-muted)');
 
   return (
     <div
@@ -411,31 +442,28 @@ export default function MessageBubble({
         )}
 
         {/* Quoted Reply Preview */}
-        {replyMessage && (
+        {targetReply && (
           <div
             onClick={scrollToRepliedMessage}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => e.key === 'Enter' && scrollToRepliedMessage()}
-            className="flex flex-col px-3 py-1.5 mb-2 rounded-xl border-l-3 bg-[var(--color-bg-card)] border-[var(--color-accent)] text-xs cursor-pointer hover:bg-[var(--color-bg-matte)] transition-all shadow-xs"
+            aria-label={`Jump to message quoted from ${replyAuthorLabel}`}
+            onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && scrollToRepliedMessage(e)}
+            className="flex flex-col px-3 py-1.5 mb-2 rounded-xl border-l-3 bg-[var(--color-bg-card)] border-[var(--color-accent)] text-xs cursor-pointer hover:bg-[var(--color-bg-matte)] transition-all shadow-xs select-none"
             title="Jump to message"
           >
             <div className="flex items-center gap-1.5 font-semibold text-[11px]">
               <Reply size={11} className="text-[var(--color-accent)]" />
-              <span
-                style={{
-                  color:
-                    RING_COLORS[Math.min(replyMessage.author?.globalRing ?? 3, 3)] ||
-                    'var(--color-text-primary)',
-                }}
-              >
-                {replyMessage.author?.displayName || 'Unknown'}
+              <span style={{ color: replyAuthorColor }}>
+                {replyAuthorLabel}
               </span>
             </div>
-            <span className="text-[var(--color-text-secondary)] truncate mt-0.5">
-              {replyMessage.msgType === 'text' || !replyMessage.msgType
-                ? replyMessage.content
-                : `[${replyMessage.msgType}] ${replyMessage.fileName || replyMessage.content || ''}`}
+            <span className={`truncate mt-0.5 ${targetReply.isDeleted ? 'italic text-[var(--color-text-muted)]' : 'text-[var(--color-text-secondary)]'}`}>
+              {targetReply.isDeleted
+                ? '[Message deleted]'
+                : (targetReply.msgType === 'text' || !targetReply.msgType
+                    ? (targetReply.content || 'Attachment')
+                    : `[${targetReply.msgType}] ${targetReply.fileName || targetReply.content || ''}`)}
             </span>
           </div>
         )}

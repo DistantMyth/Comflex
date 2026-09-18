@@ -49,9 +49,39 @@ async function requireFriendship(userId, otherUserId) {
   return friendship;
 }
 
+const ID_RE = /^[0-9a-fA-F]{24}$/;
+function isValidMongoId(id) {
+  return typeof id === 'string' && ID_RE.test(id);
+}
+
 // Lazy-require chatSocketService to prevent circular dependency issues
 function getSocketService() {
   return require('./chatSocketService');
+}
+
+/**
+ * Format a referenced direct message preview for quoted replies.
+ * Deleted messages sanitize content and file attachments.
+ */
+function formatDmReplyPreview(dm, author = null) {
+  if (!dm) return null;
+  return {
+    id: dm.id,
+    content: dm.isDeleted ? '[Message deleted]' : (dm.content || ''),
+    msgType: dm.msgType || 'text',
+    fileName: dm.isDeleted ? null : (dm.fileName || null),
+    fileUrl: dm.isDeleted ? null : (dm.fileUrl || null),
+    isDeleted: Boolean(dm.isDeleted),
+    author: author
+      ? {
+          id: author.id,
+          displayName: author.displayName || author.username || 'User',
+          username: author.username,
+          avatarUrl: author.avatarUrl || null,
+          globalRing: typeof author.globalRing === 'number' ? author.globalRing : 3,
+        }
+      : null,
+  };
 }
 
 /**
@@ -76,12 +106,14 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
     await requireFriendship(senderId, receiverId);
   }
 
+  const cleanReplyToId = isValidMongoId(data.replyToId) ? data.replyToId : null;
+
   const message = await prisma.directMessage.create({
     data: {
       senderId,
       receiverId,
       content: data.content || '',
-      replyToId: data.replyToId || null,
+      replyToId: cleanReplyToId,
       forwarded: data.forwarded || false,
       msgType: data.msgType || 'text',
       fileUrl: data.fileUrl || null,
@@ -96,10 +128,42 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
     select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true, displayBadges: true },
   });
 
+  // Resolve reply preview if cleanReplyToId is provided
+  let replyPreview = null;
+  if (cleanReplyToId) {
+    const repliedDm = await prisma.directMessage.findFirst({
+      where: {
+        id: cleanReplyToId,
+        OR: [
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId },
+        ],
+      },
+    });
+    if (repliedDm) {
+      const replyAuthor = await prisma.user.findUnique({
+        where: { id: repliedDm.senderId },
+        select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true },
+      });
+      replyPreview = formatDmReplyPreview(repliedDm, replyAuthor);
+    } else {
+      replyPreview = {
+        id: cleanReplyToId,
+        content: '[Message deleted]',
+        msgType: 'text',
+        fileName: null,
+        fileUrl: null,
+        isDeleted: true,
+        author: null,
+      };
+    }
+  }
+
   const payload = {
     ...message,
     author: sender,
     senderDisplayName: sender?.displayName,
+    replyTo: replyPreview,
   };
 
   // Broadcast real-time Socket.IO event to both participants
@@ -166,8 +230,44 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
     select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true, displayBadges: true },
   });
 
+  // Batch-fetch referenced reply messages within the conversation (IDOR-safe & ObjectId-safe)
+  const replyIds = [...new Set(messages.map(m => m.replyToId).filter(isValidMongoId))];
+  let replyMap = new Map();
+  if (replyIds.length > 0) {
+    const repliedDms = await prisma.directMessage.findMany({
+      where: {
+        id: { in: replyIds },
+        OR: [
+          { senderId: userId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: userId },
+        ],
+      },
+    });
+    const replySenderIds = [...new Set(repliedDms.map(r => r.senderId))];
+    const replySenders = await prisma.user.findMany({
+      where: { id: { in: replySenderIds } },
+      select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true },
+    });
+    const replySenderMap = new Map(replySenders.map(s => [s.id, s]));
+    replyMap = new Map(repliedDms.map(r => [r.id, formatDmReplyPreview(r, replySenderMap.get(r.senderId))]));
+    for (const rid of replyIds) {
+      if (!replyMap.has(rid)) {
+        replyMap.set(rid, {
+          id: rid,
+          content: '[Message deleted]',
+          msgType: 'text',
+          fileName: null,
+          fileUrl: null,
+          isDeleted: true,
+          author: null,
+        });
+      }
+    }
+  }
+
   const messagesWithAuthor = messages.map(msg => {
     const author = senders.find(s => s.id === msg.senderId);
+    const replyTo = msg.replyToId ? (replyMap.get(msg.replyToId) || null) : null;
     if (msg.isDeleted) {
       return {
         ...msg,
@@ -177,9 +277,10 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
         fileSize: null,
         mimetype: null,
         author,
+        replyTo,
       };
     }
-    return { ...msg, author };
+    return { ...msg, author, replyTo };
   });
 
   const total = await prisma.directMessage.count({
@@ -311,7 +412,14 @@ async function deleteDM(messageId, userId) {
 
   await prisma.directMessage.update({
     where: { id: messageId },
-    data: { isDeleted: true },
+    data: {
+      isDeleted: true,
+      content: '[Message deleted]',
+      fileUrl: null,
+      fileName: null,
+      fileSize: null,
+      mimetype: null,
+    },
   });
 
   try {
@@ -345,15 +453,59 @@ async function editDM(messageId, userId, newContent) {
     data: { content: newContent, editedAt: new Date() },
   });
 
+  let replyPreview = null;
+  if (isValidMongoId(updated.replyToId)) {
+    const repliedDm = await prisma.directMessage.findFirst({
+      where: {
+        id: updated.replyToId,
+        OR: [
+          { senderId: message.senderId, receiverId: message.receiverId },
+          { senderId: message.receiverId, receiverId: message.senderId },
+        ],
+      },
+    });
+    if (repliedDm) {
+      const replyAuthor = await prisma.user.findUnique({
+        where: { id: repliedDm.senderId },
+        select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true },
+      });
+      replyPreview = formatDmReplyPreview(repliedDm, replyAuthor);
+    } else {
+      replyPreview = {
+        id: updated.replyToId,
+        content: '[Message deleted]',
+        msgType: 'text',
+        fileName: null,
+        fileUrl: null,
+        isDeleted: true,
+        author: null,
+      };
+    }
+  }
+
+  const sender = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, displayName: true, username: true, avatarUrl: true, globalRing: true, displayBadges: true },
+  });
+
+  const payload = {
+    ...updated,
+    author: sender,
+    replyTo: replyPreview,
+  };
+
   try {
     const socketService = getSocketService();
-    socketService.emitToUser(message.receiverId, 'dm:edit', updated);
-    socketService.emitToUser(message.senderId, 'dm:edit', updated);
+    socketService.emitToUser(message.receiverId, 'dm:edit', payload);
+    socketService.emitToUser(message.senderId, 'dm:edit', payload);
   } catch (err) {
     console.error('[DM] Socket edit emission failed:', err.message);
   }
 
-  return updated;
+  return payload;
 }
 
-module.exports = { sendDM, getConversation, listConversations, markAsRead, deleteDM, editDM, requireFriendship };
+module.exports = {
+  sendDM, getConversation, listConversations, markAsRead, deleteDM, editDM, requireFriendship,
+  formatDmReplyPreview,
+};

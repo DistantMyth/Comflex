@@ -131,10 +131,13 @@ function initSocket(httpServer, frontendUrl) {
     // ── message:send (group messages) ─────────────────────
     socket.on('message:send', async (data, callback) => {
       try {
-        const { groupId, content, mentions = [], attachments: rawAttachments = [], replyToId, forwarded, msgType } = data;
+        const { groupId, content, mentions = [], attachments: rawAttachments = [], replyToId: rawReplyToId, forwarded, msgType } = data;
         if (!groupId || (!content?.trim() && !rawAttachments.length)) {
           return callback?.({ error: 'groupId and content are required.' });
         }
+        const cleanReplyToId = (typeof rawReplyToId === 'string' && /^[0-9a-fA-F]{24}$/.test(rawReplyToId.trim()))
+          ? rawReplyToId.trim()
+          : undefined;
         // Cap media attachments per message.
         const attachments = Array.isArray(rawAttachments) ? rawAttachments.slice(0, 5) : [];
 
@@ -190,7 +193,7 @@ function initSocket(httpServer, frontendUrl) {
             content: content?.trim()?.slice(0, 8000) || '',
             mentions: [],
             attachments,
-            replyToId,
+            replyToId: cleanReplyToId,
             forwarded,
             msgType,
           }, { identityId: freshIdentity.id, alias: freshIdentity.alias, aliasTag: freshIdentity.aliasTag, avatarUrl: freshIdentity.avatarUrl });
@@ -256,7 +259,7 @@ function initSocket(httpServer, frontendUrl) {
           content: content?.trim()?.slice(0, 8000) || '',
           mentions: cleanMentions,
           attachments,
-          replyToId,
+          replyToId: cleanReplyToId,
           forwarded,
           msgType
         });
@@ -360,9 +363,13 @@ function initSocket(httpServer, frontendUrl) {
           return callback?.({ error: 'Invalid receiverId.' });
         }
 
+        const cleanReplyToId = (typeof data.replyToId === 'string' && /^[0-9a-fA-F]{24}$/.test(data.replyToId.trim()))
+          ? data.replyToId.trim()
+          : undefined;
+
         const message = await dmService.sendDM(socket.user.id, receiverId, {
           content: content ? content.trim() : '',
-          replyToId: data.replyToId,
+          replyToId: cleanReplyToId,
           forwarded: data.forwarded,
           msgType: data.msgType,
           fileUrl: data.fileUrl,

@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Send, Search, Coins, ArrowLeft, CornerDownLeft, X, CornerUpRight,
   Pencil, Trash2, Check, CheckCheck, Loader2, Share2, Sparkles, MessageSquare,
-  Paperclip, FileText, Download
+  Paperclip, FileText, Download, AlertCircle
 } from 'lucide-react';
 import { dmApi } from '../api/dmApi';
 import { storeApi } from '../api/storeApi';
@@ -41,7 +41,51 @@ export default function MessagesPage() {
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState('');
 
+  const [toastNotice, setToastNotice] = useState(null);
+  const toastTimeoutRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const prevLastMessageIdRef = useRef(null);
+  const isJumpingRef = useRef(false);
+  const isAtBottomRef = useRef(true);
+  const jumpHighlightTimeoutRef = useRef(null);
+  const jumpHighlightedElRef = useRef(null);
+
+  const cleanupJumpHighlight = useCallback(() => {
+    if (jumpHighlightTimeoutRef.current) {
+      clearTimeout(jumpHighlightTimeoutRef.current);
+      jumpHighlightTimeoutRef.current = null;
+    }
+    if (jumpHighlightedElRef.current) {
+      jumpHighlightedElRef.current.classList.remove('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+      jumpHighlightedElRef.current = null;
+    }
+    isJumpingRef.current = false;
+  }, []);
+
+  const showToastNotice = useCallback((message, type = 'info') => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastNotice({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastNotice(null);
+      toastTimeoutRef.current = null;
+    }, 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      cleanupJumpHighlight();
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = null;
+      }
+    };
+  }, [cleanupJumpHighlight]);
+
+  useEffect(() => {
+    cleanupJumpHighlight();
+    setToastNotice(null);
+  }, [activeUserId, cleanupJumpHighlight]);
+
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
@@ -61,6 +105,7 @@ export default function MessagesPage() {
     try {
       const res = await dmApi.getMessages(activeUserId, 1, 50);
       const fetched = res.data?.data?.messages || [];
+      prevLastMessageIdRef.current = null;
       setMessages(fetched);
       setPage(1);
       const totalPages = res.data?.data?.pagination?.totalPages || 1;
@@ -83,21 +128,141 @@ export default function MessagesPage() {
 
   const loadOlderMessages = async () => {
     if (loadingOlder || !hasMore || !activeUserId) return;
+    const container = scrollContainerRef.current;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+
     setLoadingOlder(true);
     try {
       const nextPage = page + 1;
       const res = await dmApi.getMessages(activeUserId, nextPage, 50);
       const older = res.data?.data?.messages || [];
-      setMessages(prev => [...older, ...prev]);
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
+        return [...uniqueOlder, ...prev];
+      });
       setPage(nextPage);
       const totalPages = res.data?.data?.pagination?.totalPages || 1;
       setHasMore(nextPage < totalPages);
+
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+        }
+      });
     } catch (err) {
       console.error('Failed to load older messages:', err);
     } finally {
       setLoadingOlder(false);
     }
   };
+
+  const messageMap = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
+
+  const scrollToRepliedMessage = useCallback(async (targetId) => {
+    if (!targetId) return;
+
+    const performJump = (el) => {
+      cleanupJumpHighlight();
+      isJumpingRef.current = true;
+      jumpHighlightedElRef.current = el;
+
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+
+      jumpHighlightTimeoutRef.current = setTimeout(() => {
+        if (jumpHighlightedElRef.current === el) {
+          el.classList.remove('ring-2', 'ring-[var(--color-accent)]', 'ring-offset-2');
+          jumpHighlightedElRef.current = null;
+        }
+        isJumpingRef.current = false;
+        jumpHighlightTimeoutRef.current = null;
+      }, 1500);
+    };
+
+    let targetElement = document.getElementById(`msg-${targetId}`);
+    if (targetElement) {
+      performJump(targetElement);
+      return;
+    }
+
+    if (!hasMore) {
+      isJumpingRef.current = false;
+      showToastNotice('Quoted message could not be found in conversation history.', 'info');
+      return;
+    }
+
+    if (loadingOlder) {
+      isJumpingRef.current = false;
+      showToastNotice('Loading conversation history... please try again in a moment.', 'info');
+      return;
+    }
+
+    if (!activeUserId) {
+      isJumpingRef.current = false;
+      return;
+    }
+
+    isJumpingRef.current = true;
+    setLoadingOlder(true);
+    try {
+      let currentPage = page;
+      let more = hasMore;
+      const container = scrollContainerRef.current;
+
+      while (!targetElement && more && currentPage < page + 4) {
+        const prevScrollHeight = container ? container.scrollHeight : 0;
+        const prevScrollTop = container ? container.scrollTop : 0;
+
+        const nextPage = currentPage + 1;
+        const res = await dmApi.getMessages(activeUserId, nextPage, 50);
+        const older = res.data?.data?.messages || [];
+        if (older.length < 50) more = false;
+        if (older.length === 0) break;
+
+        const containsTarget = older.some((m) => m.id === targetId);
+
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
+          return [...uniqueOlder, ...prev];
+        });
+
+        currentPage = nextPage;
+        setPage(currentPage);
+        setHasMore(more);
+
+        if (container) {
+          container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+        }
+
+        if (containsTarget) {
+          more = false;
+        }
+
+        await new Promise((r) => setTimeout(r, 60));
+        targetElement = document.getElementById(`msg-${targetId}`);
+        if (!targetElement && containsTarget) {
+          await new Promise((r) => setTimeout(r, 100));
+          targetElement = document.getElementById(`msg-${targetId}`);
+        }
+      }
+
+      if (targetElement) {
+        performJump(targetElement);
+      } else {
+        isJumpingRef.current = false;
+        showToastNotice('Quoted message could not be found in recent history.', 'info');
+      }
+    } catch (err) {
+      console.error('Failed to load older DMs for reply jump:', err);
+      isJumpingRef.current = false;
+      showToastNotice('Failed to load message history for quoted reply.', 'error');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [activeUserId, cleanupJumpHighlight, hasMore, loadingOlder, page, showToastNotice]);
 
   useEffect(() => { fetchConversations(); }, [fetchConversations]);
   useEffect(() => { fetchMessages(); }, [fetchMessages]);
@@ -136,25 +301,91 @@ export default function MessagesPage() {
         }
       }),
       onEvent('dm:edit', (updatedMsg) => {
-        setMessages(prev => prev.map(m => m.id === updatedMsg.id ? { ...m, ...updatedMsg } : m));
+        setMessages(prev => prev.map(m => {
+          const isTarget = m.id === updatedMsg.id;
+          const isQuoting = m.replyToId === updatedMsg.id || m.replyTo?.id === updatedMsg.id;
+          if (!isTarget && !isQuoting) return m;
+
+          let updated = { ...m };
+          if (isTarget) {
+            updated = {
+              ...updated,
+              ...updatedMsg,
+              replyTo: updatedMsg.replyTo || m.replyTo,
+            };
+          }
+          if (isQuoting) {
+            updated = {
+              ...updated,
+              replyTo: { ...(updated.replyTo || {}), content: updatedMsg.content },
+            };
+          }
+          return updated;
+        }));
       }),
       onEvent('dm:delete', ({ messageId }) => {
-        setMessages(prev => prev.map(m =>
-          m.id === messageId
-            ? { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null }
-            : m
-        ));
+        setMessages(prev => prev.map(m => {
+          const isTarget = m.id === messageId;
+          const isQuoting = m.replyToId === messageId || m.replyTo?.id === messageId;
+          if (!isTarget && !isQuoting) return m;
+
+          let updated = { ...m };
+          if (isTarget) {
+            updated = { ...updated, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null };
+          }
+          if (isQuoting) {
+            updated = {
+              ...updated,
+              replyTo: { ...(updated.replyTo || {}), isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null },
+            };
+          }
+          return updated;
+        }));
       }),
     ];
 
     return () => cleanups.forEach(fn => fn?.());
   }, [connected, onEvent, activeUserId, currentUser?.id, markDMRead, fetchConversations]);
 
+  // Scroll listener to track if user is near bottom
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const threshold = 150;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    isAtBottomRef.current = atBottom;
+  }, []);
+
   useEffect(() => {
-    if (!loadingOlder) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
+
+  // Intelligent auto-scroll
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const lastMsg = messages[messages.length - 1];
+    const isInitial = prevLastMessageIdRef.current === null;
+    const isAppended = prevLastMessageIdRef.current !== null && lastMsg?.id !== prevLastMessageIdRef.current;
+    prevLastMessageIdRef.current = lastMsg?.id;
+
+    if (isJumpingRef.current || loadingOlder) return;
+
+    if (isInitial) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      return;
     }
-  }, [messages.length, loadingOlder]);
+
+    if (isAppended) {
+      const isSentByMe = lastMsg?.senderId === currentUser?.id;
+      if (isSentByMe || isAtBottomRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  }, [messages, loadingOlder, currentUser?.id]);
 
   useEffect(() => {
     if (!activeUserId) return;
@@ -328,7 +559,7 @@ export default function MessagesPage() {
       </div>
 
       {/* Main Conversation Stream */}
-      <div className={`flex-1 flex flex-col ${!activeUserId ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`flex-1 flex flex-col ${!activeUserId ? 'hidden md:flex' : 'flex'} relative`}>
         {activeUserId ? (
           <>
             {/* Chat Top Header */}
@@ -372,6 +603,41 @@ export default function MessagesPage() {
               </button>
             </div>
 
+            {/* Visual feedback toast notice (e.g. quoted message not found) */}
+            <AnimatePresence>
+              {toastNotice && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.96 }}
+                  className="absolute top-16 left-1/2 -translate-x-1/2 z-30 max-w-sm w-[90%] pointer-events-none"
+                >
+                  <div
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-lg border backdrop-blur-md pointer-events-auto ${
+                      toastNotice.type === 'error'
+                        ? 'bg-[var(--color-bg-card)] border-[var(--color-danger)] text-[var(--color-danger)]'
+                        : 'bg-[var(--color-bg-card)] border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    {toastNotice.type === 'error' ? (
+                      <AlertCircle size={14} className="text-[var(--color-danger)] flex-shrink-0" />
+                    ) : (
+                      <Check size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+                    )}
+                    <span className="flex-1 truncate">{toastNotice.message}</span>
+                    <button
+                      onClick={() => setToastNotice(null)}
+                      className="p-0.5 rounded hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)]"
+                      title="Dismiss"
+                      aria-label="Dismiss notification"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Messages Scroll View */}
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0 bg-[var(--color-bg-primary)]/40">
               {hasMore && (
@@ -395,13 +661,25 @@ export default function MessagesPage() {
 
               {messages.map((msg) => {
                 const isMine = msg.senderId === currentUser?.id;
-                const repliedMessage = msg.replyToId ? messages.find(m => m.id === msg.replyToId) : null;
+                const repliedMessage = (msg.replyToId ? messageMap.get(msg.replyToId) : null) || msg.replyTo;
+                const replyAuthor = repliedMessage?.senderId === currentUser?.id
+                  ? 'You'
+                  : (repliedMessage?.author?.displayName || activePartner?.displayName || 'User');
 
                 const handleSaveEdit = async () => {
                   if (!editContent.trim()) return;
                   try {
                     const res = await dmApi.editMessage(msg.id, editContent.trim());
-                    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, ...res.data.data } : m));
+                    const updated = res.data.data;
+                    setMessages(prev => prev.map(m => {
+                      if (m.id === msg.id) {
+                        return { ...m, ...updated, replyTo: updated?.replyTo || m.replyTo };
+                      }
+                      if ((m.replyToId === msg.id || m.replyTo?.id === msg.id) && m.replyTo) {
+                        return { ...m, replyTo: { ...m.replyTo, content: updated?.content || editContent.trim() } };
+                      }
+                      return m;
+                    }));
                     setEditingId(null);
                   } catch {
                     alert('Failed to edit message.');
@@ -409,7 +687,7 @@ export default function MessagesPage() {
                 };
 
                 return (
-                  <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group items-end gap-1.5`}>
+                  <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group items-end gap-1.5 transition-all rounded-2xl`}>
                     {!isMine && !msg.isDeleted && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-1">
                         <button
@@ -444,10 +722,31 @@ export default function MessagesPage() {
                             </p>
                           )}
 
-                          {msg.replyToId && (
-                            <div className="text-[11px] px-2.5 py-1.5 mb-2 rounded-xl border-l-2 bg-black/15 border-white/40 truncate">
-                              <span className="font-bold">{repliedMessage?.author?.displayName || 'Quoted'}: </span>
-                              <span>{repliedMessage?.content || '[Attachment]'}</span>
+                          {repliedMessage && (
+                            <div
+                              onClick={() => scrollToRepliedMessage(repliedMessage.id || msg.replyToId)}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Jump to quoted message from ${replyAuthor}`}
+                              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && scrollToRepliedMessage(repliedMessage.id || msg.replyToId)}
+                              className={`text-[11px] px-2.5 py-1.5 mb-2 rounded-xl border-l-2 truncate cursor-pointer transition-all hover:opacity-90 select-none ${
+                                isMine
+                                  ? 'bg-black/20 border-white/60 text-white'
+                                  : 'bg-[var(--color-bg-secondary)] border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                              }`}
+                              title="Jump to message"
+                            >
+                              <div className="flex items-center gap-1 font-bold">
+                                <CornerDownLeft size={10} className={isMine ? 'text-white/80' : 'text-[var(--color-accent)]'} />
+                                <span>{replyAuthor}: </span>
+                              </div>
+                              <span className={`truncate ${repliedMessage.isDeleted ? 'italic opacity-70' : ''}`}>
+                                {repliedMessage.isDeleted
+                                  ? '[Message deleted]'
+                                  : (repliedMessage.msgType === 'text' || !repliedMessage.msgType
+                                      ? (repliedMessage.content || '[Attachment]')
+                                      : `[${repliedMessage.msgType}] ${repliedMessage.fileName || repliedMessage.content || ''}`)}
+                              </span>
                             </div>
                           )}
 
@@ -528,7 +827,15 @@ export default function MessagesPage() {
                             if (!window.confirm('Delete message?')) return;
                             try {
                               await dmApi.deleteMessage(msg.id);
-                              setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, isDeleted: true, content: '[Message deleted]' } : m));
+                              setMessages(prev => prev.map(m => {
+                                if (m.id === msg.id) {
+                                  return { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null };
+                                }
+                                if ((m.replyToId === msg.id || m.replyTo?.id === msg.id) && m.replyTo) {
+                                  return { ...m, replyTo: { ...m.replyTo, isDeleted: true, content: '[Message deleted]', fileUrl: null, fileName: null, fileSize: null } };
+                                }
+                                return m;
+                              }));
                             } catch { /* ignore */ }
                           }}
                           className="p-1 rounded-lg hover:bg-[var(--color-bg-secondary)] text-[var(--color-danger)]"
@@ -549,10 +856,21 @@ export default function MessagesPage() {
               <div className="px-4 py-2 border-t border-[var(--color-border)] bg-[var(--color-bg-secondary)]/80 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2 truncate">
                   <CornerDownLeft size={14} className="text-[var(--color-accent)]" />
-                  <span className="font-bold">Replying to: </span>
-                  <span className="truncate text-[var(--color-text-secondary)]">{replyingTo.content}</span>
+                  <span className="font-bold">
+                    Replying to {replyingTo.author?.displayName || (replyingTo.senderId === currentUser?.id ? 'yourself' : (activePartner?.displayName || 'message'))}:
+                  </span>
+                  <span className="truncate text-[var(--color-text-secondary)]">
+                    {replyingTo.isDeleted
+                      ? '[Message deleted]'
+                      : (replyingTo.content || replyingTo.fileName || 'Attachment')}
+                  </span>
                 </div>
-                <button onClick={() => setReplyingTo(null)} className="p-1 hover:text-[var(--color-danger)]">
+                <button
+                  onClick={() => setReplyingTo(null)}
+                  className="p-1 hover:text-[var(--color-danger)]"
+                  title="Cancel reply"
+                  aria-label="Cancel reply"
+                >
                   <X size={14} />
                 </button>
               </div>

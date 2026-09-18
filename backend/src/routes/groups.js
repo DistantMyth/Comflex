@@ -1363,10 +1363,13 @@ router.post(
         }
       }
 
+      const rawReplyToId = typeof req.body.replyToId === 'string' ? req.body.replyToId.trim() : null;
+      const cleanReplyToId = (rawReplyToId && /^[0-9a-fA-F]{24}$/.test(rawReplyToId)) ? rawReplyToId : undefined;
+
       const params = {
         content,
         mentions: req.anonIdentity ? [] : parseMentions(req.body.mentions),
-        replyToId: req.body.replyToId || undefined,
+        replyToId: cleanReplyToId,
         forwarded: req.body.forwarded === 'true' || req.body.forwarded === true,
         msgType: req.body.msgType || 'text',
         fileUrl: bodyFileUrl || undefined,
