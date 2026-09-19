@@ -1329,8 +1329,8 @@ router.patch('/:id/messages/:msgId/react', requireGroupMember, async (req, res, 
 
     const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji, req.params.id, req.anonIdentity || null);
     // Notify clients instantly of the updated reaction strip (support both event names)
-    emitToGroup(req.params.id, 'message:reaction', { messageId: msg.id, reactions: msg.reactions });
-    emitToGroup(req.params.id, 'message:react', { messageId: msg.id, reactions: msg.reactions });
+    emitToGroup(req.params.id, 'message:reaction', { messageId: msg.id, reactions: msg.reactions, groupId: req.params.id });
+    emitToGroup(req.params.id, 'message:react', { messageId: msg.id, reactions: msg.reactions, groupId: req.params.id });
     
     return success(res, msg);
   } catch (err) {
@@ -1374,6 +1374,7 @@ router.post(
       }
 
       const rawReplyToId = typeof req.body.replyToId === 'string' ? req.body.replyToId.trim() : null;
+      const cleanReplyToId = (rawReplyToId && /^[0-9a-fA-F]{24}$/.test(rawReplyToId)) ? rawReplyToId : undefined;
       const isAnonGroup = Boolean(req.group?.isAnonymous);
       const params = {
         content,

@@ -180,17 +180,80 @@ export function SocketProvider({ children }) {
       clientCache.invalidate('notifications');
     });
 
-    socket.on('dm:new', () => {
-      clientCache.invalidate('dm:conversations');
+    socket.on('message:react', ({ messageId, reactions, groupId }) => {
+      if (!groupId) return;
+      clientCache.mutate(`messages:group:${groupId}:recent`, (current) => {
+        if (!current) return current;
+        const payload = current?.data?.data || current?.data || current;
+        const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+        if (!list) return current;
+
+        const updatedList = list.map((m) => (m.id === messageId ? { ...m, reactions } : m));
+        if (payload?.messages) {
+          if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+          if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+        }
+        return updatedList;
+      });
     });
-    socket.on('dm:readUpdate', () => {
+
+    socket.on('dm:new', (msg) => {
       clientCache.invalidate('dm:conversations');
+      if (msg) {
+        const currentUserId = getCurrentUserId();
+        const partnerId = msg.senderId === currentUserId ? msg.receiverId : msg.senderId;
+        if (partnerId) {
+          clientCache.invalidate(`messages:dm:${partnerId}:recent`);
+          clientCache.mutate(`messages:dm:${partnerId}:recent`, (current) => {
+            if (!current) return current;
+            const payload = current?.data?.data || current?.data || current;
+            const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+            if (!list) return current;
+            if (list.some((m) => m.id === msg.id)) return current;
+            const updatedList = [msg, ...list];
+            if (payload?.messages) {
+              if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+              if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+            }
+            return updatedList;
+          });
+        }
+      }
     });
-    socket.on('dm:delete', () => {
+    socket.on('dm:readUpdate', (data) => {
       clientCache.invalidate('dm:conversations');
+      const partnerId = data?.partnerId || data?.senderId;
+      if (partnerId) {
+        clientCache.invalidate(`messages:dm:${partnerId}:recent`);
+      }
     });
-    socket.on('dm:edit', () => {
+    socket.on('dm:delete', (data) => {
       clientCache.invalidate('dm:conversations');
+      const partnerId = data?.partnerId || data?.userId;
+      if (partnerId) {
+        clientCache.invalidate(`messages:dm:${partnerId}:recent`);
+        if (data?.messageId) {
+          clientCache.mutate(`messages:dm:${partnerId}:recent`, (current) => {
+            if (!current) return current;
+            const payload = current?.data?.data || current?.data || current;
+            const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+            if (!list) return current;
+            const updatedList = list.map((m) => (m.id === data.messageId ? { ...m, isDeleted: true, content: '[Message deleted]' } : m));
+            if (payload?.messages) {
+              if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+              if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+            }
+            return updatedList;
+          });
+        }
+      }
+    });
+    socket.on('dm:edit', (data) => {
+      clientCache.invalidate('dm:conversations');
+      const partnerId = data?.partnerId || data?.userId;
+      if (partnerId) {
+        clientCache.invalidate(`messages:dm:${partnerId}:recent`);
+      }
     });
     socket.on('anon:banned', (data) => {
       if (data?.groupId) {

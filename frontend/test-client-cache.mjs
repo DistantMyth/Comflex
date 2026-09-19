@@ -423,5 +423,25 @@ await test('Error cooldown prevents tight infinite revalidation / notify loop', 
   assert.strictEqual(callCount, 1, 'Should not hammer network during error cooldown');
 });
 
+await test('getCurrentUserId alias and getUserId consistency', async () => {
+  currentTestUserId = 'user_test_456';
+  assert.strictEqual(clientCache.getUserId(), 'user_test_456');
+  assert.strictEqual(clientCache.getCurrentUserId(), 'user_test_456');
+});
+
+await test('clientCache.clear() removes all subscribers and active entries', async () => {
+  let notified = false;
+  const unsubscribe = clientCache.subscribe('sub:test:key', () => {
+    notified = true;
+  });
+
+  assert.strictEqual(clientCache.subscribers.size > 0, true);
+  clientCache.clear();
+  assert.strictEqual(clientCache.subscribers.size, 0, 'Subscribers must be cleared on clear()');
+  assert.strictEqual(clientCache.entries.size, 0, 'Entries must be cleared on clear()');
+  assert.strictEqual(notified, true, 'Subscribers must receive notification on clear()');
+  unsubscribe();
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed.\n`);
 if (failed > 0) process.exit(1);

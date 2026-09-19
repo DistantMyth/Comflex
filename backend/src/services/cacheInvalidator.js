@@ -111,6 +111,20 @@ class CacheInvalidator extends EventEmitter {
   }
 
   /**
+   * Clear all L1 memory locally and broadcast cluster-wide across all worker nodes.
+   */
+  async clearAll() {
+    cacheService.clearL1();
+    if (this.isPubSubReady && this.pub) {
+      try {
+        await this.pub.publish('comflex:cache:invalidate', JSON.stringify({ clearAll: true, originNodeId: this.nodeId }));
+      } catch (err) {
+        console.warn('[CacheInvalidator] Publish failed for clearAll:', err.message);
+      }
+    }
+  }
+
+  /**
    * Invalidate user profile and permissions.
    */
   async invalidateUser(userId, options = {}) {

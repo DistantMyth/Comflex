@@ -67,6 +67,10 @@ class ClientCache {
     return null;
   }
 
+  getCurrentUserId() {
+    return this.getUserId();
+  }
+
   getScopedKey(rawKey) {
     const uid = this.getUserId() || 'global';
     return `${uid}:${rawKey}`;

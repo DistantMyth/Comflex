@@ -153,7 +153,7 @@ router.post('/cache/invalidate', async (req, res, next) => {
       const { key, clearAll, userId, groupId } = req.body;
 
       if (clearAll) {
-        cacheService.clearL1();
+        await cacheInvalidator.clearAll();
         return { status: 'l1_cleared' };
       }
 
@@ -236,8 +236,8 @@ router.post('/payments', async (req, res, next) => {
     const { userId, credits, txHash, referenceId } = req.body;
     const creditNum = parseInt(credits, 10);
 
-    if (!userId || isNaN(creditNum) || creditNum <= 0) {
-      return error(res, 'VALIDATION_ERROR', 'Valid userId and positive credits required.', 400);
+    if (!userId || !/^[0-9a-fA-F]{24}$/.test(userId) || isNaN(creditNum) || creditNum <= 0) {
+      return error(res, 'VALIDATION_ERROR', 'Valid 24-hex ObjectId userId and positive credits required.', 400);
     }
 
     const paymentRef = txHash || referenceId;

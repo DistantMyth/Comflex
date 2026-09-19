@@ -79,8 +79,10 @@ class Singleflight {
       const timer = setTimeout(() => ac.abort(), timeoutMs);
       timer.unref?.();
       try {
+        const fetcherPromise = Promise.resolve().then(() => fetcher({ signal: ac.signal }));
+        fetcherPromise.catch(() => {}); // Suppress unhandled rejection if fetcher fails after timeout
         return await Promise.race([
-          fetcher({ signal: ac.signal }),
+          fetcherPromise,
           new Promise((_, reject) => {
             ac.signal.addEventListener('abort', () =>
               reject(new Error(`Singleflight timeout for key: ${key}`))

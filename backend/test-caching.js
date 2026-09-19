@@ -309,6 +309,14 @@ async function runTests() {
   assert.strictEqual(verifyWithSecrets(sigWithPrimary, [fallbackSecret]), false);
   console.log('   ✅ Dual-secret rotation verification logic verified.');
 
+  // 17. Test cacheInvalidator.clearAll()
+  console.log('\n17. Testing Cache Invalidator clearAll()...');
+  await cacheService.set('test:clearall:key1', { a: 1 }, 60);
+  assert.strictEqual(cacheService.l1.has('test:clearall:key1'), true);
+  await cacheInvalidator.clearAll();
+  assert.strictEqual(cacheService.l1.has('test:clearall:key1'), false);
+  console.log('   ✅ Cache Invalidator clearAll() successfully cleared local L1 cache.');
+
   console.log('\n🎉 ALL CACHING & WEBHOOK VERIFICATION TESTS PASSED!\n');
 }
 

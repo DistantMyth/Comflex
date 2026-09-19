@@ -26,7 +26,7 @@ export function useClientCache(key, fetcherFn, options = {}) {
 
   const prevDataRef = useRef(initialData);
 
-  const currentUid = clientCache.getCurrentUserId();
+  const currentUid = clientCache.getUserId ? clientCache.getUserId() : null;
   const epoch = clientCache.epoch;
 
   // Subscribe to external store via standard React 19 API
