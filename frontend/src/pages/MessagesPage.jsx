@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Send, Search, Coins, ArrowLeft, CornerDownLeft, X, CornerUpRight,
   Pencil, Trash2, Check, CheckCheck, Loader2, Share2, Sparkles, MessageSquare,
-  Paperclip, FileText, Download, AlertCircle
+  Paperclip, FileText, Download, AlertCircle, Smile
 } from 'lucide-react';
 import { dmApi } from '../api/dmApi';
 import { storeApi } from '../api/storeApi';
@@ -12,8 +12,39 @@ import { userApi } from '../api/userApi';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
 import { useClientCache } from '../hooks/useClientCache';
+import { clientCache } from '../utils/clientCache';
 import Avatar from '../components/Avatar';
 import resolveAsset from '../utils/resolveAsset';
+
+const POPULAR_REACTIONS = ['👍', '❤️', '🔥', '😂', '👏', '🎉'];
+
+function reconcileMessages(currentMessages, incomingRecent) {
+  if (!incomingRecent || incomingRecent.length === 0) return currentMessages;
+  
+  const incomingTimestamps = incomingRecent
+    .map(m => new Date(m.createdAt).getTime())
+    .filter(t => !isNaN(t));
+  const minIncomingTime = incomingTimestamps.length > 0
+    ? Math.min(...incomingTimestamps)
+    : 0;
+
+  const historical = currentMessages.filter(m => {
+    const t = new Date(m.createdAt).getTime();
+    return !isNaN(t) && t < minIncomingTime;
+  });
+
+  const seenIds = new Set();
+  const merged = [];
+  for (const m of [...historical, ...incomingRecent]) {
+    if (m && m.id && !seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      merged.push(m);
+    }
+  }
+
+  merged.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return merged;
+}
 
 export default function MessagesPage() {
   const { userId: activeUserId } = useParams();
@@ -47,6 +78,7 @@ export default function MessagesPage() {
   const [forwardUsers, setForwardUsers] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState('');
+  const [activeReactionMsgId, setActiveReactionMsgId] = useState(null);
 
   const [toastNotice, setToastNotice] = useState(null);
   const toastTimeoutRef = useRef(null);
@@ -91,7 +123,18 @@ export default function MessagesPage() {
   useEffect(() => {
     cleanupJumpHighlight();
     setToastNotice(null);
+    setActiveReactionMsgId(null);
   }, [activeUserId, cleanupJumpHighlight]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (activeReactionMsgId && !e.target.closest('.reaction-picker-tray')) {
+        setActiveReactionMsgId(null);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [activeReactionMsgId]);
 
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -105,14 +148,72 @@ export default function MessagesPage() {
     }
   }, [refreshConversations]);
 
+  const handleReact = useCallback(async (messageId, emoji) => {
+    if (!currentUser?.id) return;
+    const myId = currentUser.id;
+    setActiveReactionMsgId(null);
+
+    // 0ms Optimistic UI update
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const currentReactions = { ...(m.reactions || {}) };
+        let users = Array.isArray(currentReactions[emoji]) ? [...currentReactions[emoji]] : [];
+        if (users.includes(myId)) {
+          users = users.filter((id) => id !== myId);
+        } else {
+          users.push(myId);
+        }
+        if (users.length === 0) {
+          delete currentReactions[emoji];
+        } else {
+          currentReactions[emoji] = users;
+        }
+        return { ...m, reactions: currentReactions };
+      })
+    );
+
+    try {
+      const res = await dmApi.reactToMessage(messageId, emoji);
+      const serverReactions = res?.data?.data?.reactions;
+      if (serverReactions) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, reactions: serverReactions } : m))
+        );
+      }
+    } catch (err) {
+      console.error('Failed to toggle DM reaction:', err);
+    }
+  }, [currentUser?.id]);
+
   const fetchMessages = useCallback(async (silent = false) => {
     if (!activeUserId) return;
-    if (!silent) setLoading(true);
+    const cacheKey = `messages:dm:${activeUserId}:recent`;
+
+    // 0ms Cache Hydration from SWR cache
+    if (!silent) {
+      const cached = clientCache.get(cacheKey);
+      if (cached?.data) {
+        const cachedPayload = cached.data?.data?.data || cached.data?.data || cached.data;
+        const cachedList = Array.isArray(cachedPayload?.messages)
+          ? cachedPayload.messages
+          : (Array.isArray(cachedPayload) ? cachedPayload : []);
+        if (cachedList.length > 0) {
+          setMessages(cachedList);
+          setLoading(false);
+        } else {
+          setLoading(true);
+        }
+      } else {
+        setLoading(true);
+      }
+    }
+
     try {
-      const res = await dmApi.getMessages(activeUserId, 1, 50);
+      const res = await clientCache.getOrFetch(cacheKey, () => dmApi.getMessages(activeUserId, 1, 50), { ttl: 60000 });
       const fetched = res.data?.data?.messages || [];
       prevLastMessageIdRef.current = null;
-      setMessages(fetched);
+      setMessages((prev) => reconcileMessages(prev, fetched));
       setPage(1);
       const totalPages = res.data?.data?.pagination?.totalPages || 1;
       setHasMore(totalPages > 1);
@@ -347,6 +448,9 @@ export default function MessagesPage() {
           }
           return updated;
         }));
+      }),
+      onEvent('dm:reaction', ({ messageId, reactions }) => {
+        setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, reactions } : m)));
       }),
     ];
 
@@ -693,9 +797,32 @@ export default function MessagesPage() {
                 };
 
                 return (
-                  <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group items-end gap-1.5 transition-all rounded-2xl`}>
+                  <div key={msg.id} id={`msg-${msg.id}`} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group items-end gap-1.5 transition-all rounded-2xl relative`}>
+                    {activeReactionMsgId === msg.id && (
+                      <div className={`reaction-picker-tray absolute z-30 p-1.5 rounded-2xl bg-[var(--color-bg-matte)] backdrop-blur-xl border border-[var(--color-border)] shadow-xl flex items-center gap-1 -top-9 ${isMine ? 'right-10' : 'left-10'} animate-in fade-in zoom-in-95 duration-150`}>
+                        {POPULAR_REACTIONS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => handleReact(msg.id, emoji)}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-sm hover:bg-[var(--color-bg-secondary)] hover:scale-125 transition-all cursor-pointer select-none"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
                     {!isMine && !msg.isDeleted && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveReactionMsgId(activeReactionMsgId === msg.id ? null : msg.id)}
+                          className="p-1 rounded-lg hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                          title="React"
+                        >
+                          <Smile size={13} />
+                        </button>
                         <button
                           onClick={() => setReplyingTo(msg)}
                           className="p-1 rounded-lg hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)]"
@@ -807,6 +934,33 @@ export default function MessagesPage() {
                             </>
                           )}
 
+                          {/* Active Reaction Pills */}
+                          {msg.reactions && typeof msg.reactions === 'object' && Object.keys(msg.reactions).length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                              {Object.entries(msg.reactions).map(([emoji, userIds]) => {
+                                const count = Array.isArray(userIds) ? userIds.length : 0;
+                                if (count === 0) return null;
+                                const hasReacted = Array.isArray(userIds) && userIds.includes(currentUser?.id);
+                                return (
+                                  <button
+                                    key={emoji}
+                                    type="button"
+                                    onClick={() => handleReact(msg.id, emoji)}
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-all cursor-pointer select-none ${
+                                      hasReacted
+                                        ? (isMine ? 'bg-white/30 border-white text-white font-bold' : 'bg-[var(--color-accent)]/20 border-[var(--color-accent)] text-[var(--color-accent)] font-bold')
+                                        : (isMine ? 'bg-black/20 border-white/30 text-white/90 hover:bg-black/30' : 'bg-[var(--color-bg-secondary)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)]')
+                                    }`}
+                                    title={hasReacted ? `Remove ${emoji}` : `React with ${emoji}`}
+                                  >
+                                    <span>{emoji}</span>
+                                    <span>{count}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
                           <div className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${isMine ? 'text-white/80' : 'text-[var(--color-text-muted)]'}`}>
                             <span>{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                             {isMine && (
@@ -821,6 +975,14 @@ export default function MessagesPage() {
 
                     {isMine && !msg.isDeleted && (
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity pb-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveReactionMsgId(activeReactionMsgId === msg.id ? null : msg.id)}
+                          className="p-1 rounded-lg hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                          title="React"
+                        >
+                          <Smile size={13} />
+                        </button>
                         <button
                           onClick={() => { setEditingId(msg.id); setEditContent(msg.content); }}
                           className="p-1 rounded-lg hover:bg-[var(--color-bg-secondary)] text-[var(--color-text-muted)]"

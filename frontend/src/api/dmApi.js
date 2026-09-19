@@ -26,6 +26,9 @@ export const dmApi = {
 
   deleteMessage: (msgId) =>
     client.delete(`/dm/messages/${msgId}`),
+
+  reactToMessage: (msgId, emoji) =>
+    client.patch(`/dm/messages/${msgId}/react`, { emoji }),
 };
 
 export default dmApi;

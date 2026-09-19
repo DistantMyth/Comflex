@@ -8,6 +8,9 @@
 const prisma = require('../prisma');
 const notificationService = require('./notificationService');
 const seqCounterService = require('./seqCounterService');
+const cacheService = require('./cacheService');
+const cacheInvalidator = require('./cacheInvalidator');
+const { validateEmoji } = require('../utils/validators');
 
 const ID_RE = /^[0-9a-fA-F]{24}$/;
 function isValidMongoId(id) {
@@ -54,7 +57,7 @@ function formatReplyPreview(msg, isAnon = false) {
  * Get paginated messages for a group (newest first).
  * In anonymous groups, message authors resolve to their frozen alias snapshot.
  */
-async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId = null, isAnon = false) {
+async function fetchMessagesFromDb(groupId, { page = 1, limit = 50 } = {}, currentUserId = null, isAnon = false) {
   const baseInclude = isAnon
     ? {}
     : {
@@ -112,6 +115,15 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
     messages: messages.map(msg => formatMessage(msg, currentUserId, replyMap.get(msg.replyToId) || null)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
+}
+
+async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId = null, isAnon = false) {
+  if (page === 1 && limit === 50) {
+    return cacheService.getOrSet(`group:messages:recent:${groupId}`, async () => {
+      return fetchMessagesFromDb(groupId, { page, limit }, currentUserId, isAnon);
+    }, 60, 5000);
+  }
+  return fetchMessagesFromDb(groupId, { page, limit }, currentUserId, isAnon);
 }
 
 /**
@@ -242,6 +254,7 @@ async function sendMessage(groupId, authorId, params, anon = null) {
 
     // Never pass real authorId for anonymous messages (strict zero-knowledge isolation)
     await seqCounterService.syncCommittedMessageSeq(groupId, committedSeq, isAnon ? null : authorId);
+    await cacheInvalidator.invalidateKey(`group:messages:recent:${groupId}`);
 
   // Resolve reply preview if cleanReplyToId is provided
   let replyPreview = null;
@@ -365,6 +378,14 @@ async function editMessage(messageId, userId, newContent, groupId = null, anon =
     }
   }
 
+  const effectiveGroupId = groupId || updated.groupId;
+  if (effectiveGroupId) {
+    await cacheInvalidator.invalidateKey(`group:messages:recent:${effectiveGroupId}`);
+    if (updated.isPinned) {
+      await cacheInvalidator.invalidateKey(`group:messages:pinned:${effectiveGroupId}`);
+    }
+  }
+
   return formatMessage(updated, null, replyPreview);
 }
 
@@ -400,7 +421,7 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId
     }
   }
 
-  return prisma.message.update({
+  const deleted = await prisma.message.update({
     where: { id: messageId },
     data: {
       isDeleted: true,
@@ -412,57 +433,108 @@ async function deleteMessage(messageId, userId, canDeleteOthers = false, groupId
       attachments: [],
     },
   });
+
+  const effectiveGroupId = groupId || msg.groupId;
+  if (effectiveGroupId) {
+    await cacheInvalidator.invalidateKey(`group:messages:recent:${effectiveGroupId}`);
+    if (msg.isPinned) {
+      await cacheInvalidator.invalidateKey(`group:messages:pinned:${effectiveGroupId}`);
+    }
+  }
+
+  return deleted;
 }
 
 /**
- * Toggle a reaction on a message.
+ * Toggle a reaction on a message with Optimistic Concurrency Control (OCC).
  * Anonymous groups: reactions are keyed by identity (anon:<identityId>) so
  * reactor identities never appear in payloads.
  */
 async function toggleReaction(messageId, reactorId, emoji, groupId = null, anon = null) {
   await assertMessageInGroup(messageId, groupId);
-  const msg = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
-
+  const cleanEmoji = validateEmoji(emoji);
   const reactorKey = anon ? `anon:${anon.identityId}` : reactorId;
 
-  // Reactions are structured as { "👍": ["userId1", "userId2"] }
-  const currentReactions = msg.reactions || {};
-  let usersForEmoji = currentReactions[emoji] || [];
+  const MAX_RETRIES = 5;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const msg = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        reactions: true,
+        version: true,
+        groupId: true,
+      },
+    });
+    if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'MESSAGE_NOT_FOUND' });
 
-  if (usersForEmoji.includes(reactorKey)) {
-    // Remove if already reacted
-    usersForEmoji = usersForEmoji.filter(id => id !== reactorKey);
-  } else {
-    // Add reaction
-    usersForEmoji.push(reactorKey);
+    const currentReactions = (msg.reactions && typeof msg.reactions === 'object' && !Array.isArray(msg.reactions))
+      ? { ...msg.reactions }
+      : {};
+    let usersForEmoji = Array.isArray(currentReactions[cleanEmoji]) ? [...currentReactions[cleanEmoji]] : [];
+
+    if (usersForEmoji.includes(reactorKey)) {
+      usersForEmoji = usersForEmoji.filter(id => id !== reactorKey);
+    } else {
+      usersForEmoji.push(reactorKey);
+    }
+
+    const updatedReactions = { ...currentReactions };
+    if (usersForEmoji.length === 0) {
+      delete updatedReactions[cleanEmoji];
+    } else {
+      updatedReactions[cleanEmoji] = usersForEmoji;
+    }
+
+    const currentVer = msg.version ?? 0;
+    const nextVer = currentVer + 1;
+
+    const whereClause = {
+      id: messageId,
+      OR: [
+        { version: currentVer },
+        ...(currentVer === 0 ? [{ version: null }, { version: { isSet: false } }] : []),
+      ],
+    };
+
+    const updateRes = await prisma.message.updateMany({
+      where: whereClause,
+      data: {
+        reactions: updatedReactions,
+        version: nextVer,
+      },
+    });
+
+    if (updateRes.count > 0) {
+      const effectiveGroupId = groupId || msg.groupId;
+      if (effectiveGroupId) {
+        await cacheInvalidator.invalidateKey(`group:messages:recent:${effectiveGroupId}`);
+      }
+
+      const include = anon
+        ? {}
+        : {
+            author: {
+              select: {
+                id: true, displayName: true, avatarUrl: true,
+                globalRing: true, displayBadges: true,
+              },
+            },
+          };
+
+      const updatedMsg = await prisma.message.findUnique({
+        where: { id: messageId },
+        include,
+      });
+      return formatMessage(updatedMsg);
+    }
+
+    // Jittered backoff (10ms - 30ms) before retry
+    const jitter = Math.floor(Math.random() * 20) + 10;
+    await new Promise(res => setTimeout(res, jitter));
   }
 
-  // If no users left, remove the emoji key entirely
-  const updatedReactions = { ...currentReactions };
-  if (usersForEmoji.length === 0) {
-    delete updatedReactions[emoji];
-  } else {
-    updatedReactions[emoji] = usersForEmoji;
-  }
-
-  const include = anon
-    ? {}
-    : {
-        author: {
-          select: {
-            id: true, displayName: true, avatarUrl: true,
-            globalRing: true, displayBadges: true,
-          },
-        },
-      };
-
-  const updatedMsg = await prisma.message.update({
-    where: { id: messageId },
-    data: { reactions: updatedReactions },
-    include,
-  });
-  return formatMessage(updatedMsg);
+  throw Object.assign(new Error('Concurrent reaction update conflict. Please retry.'), { statusCode: 409, code: 'REACTION_CONFLICT' });
 }
 
 /**
@@ -524,6 +596,12 @@ async function pinMessage(messageId, groupId = null) {
     },
   });
   
+  const effectiveGroupId = groupId || msg.groupId;
+  if (effectiveGroupId) {
+    await cacheInvalidator.invalidateKey(`group:messages:recent:${effectiveGroupId}`);
+    await cacheInvalidator.invalidateKey(`group:messages:pinned:${effectiveGroupId}`);
+  }
+
   return { msg: formatMessage(updatedMsg), unpinnedIds };
 }
 
@@ -532,16 +610,22 @@ async function pinMessage(messageId, groupId = null) {
  */
 async function unpinMessage(messageId, groupId = null) {
   await assertMessageInGroup(messageId, groupId);
-  return prisma.message.update({
+  const updated = await prisma.message.update({
     where: { id: messageId },
     data: { isPinned: false, pinnedAt: null },
   });
+  const effectiveGroupId = groupId || updated.groupId;
+  if (effectiveGroupId) {
+    await cacheInvalidator.invalidateKey(`group:messages:recent:${effectiveGroupId}`);
+    await cacheInvalidator.invalidateKey(`group:messages:pinned:${effectiveGroupId}`);
+  }
+  return updated;
 }
 
 /**
  * Get all pinned messages in a group.
  */
-async function getPinnedMessages(groupId) {
+async function fetchPinnedMessagesFromDb(groupId) {
   const messages = await prisma.message.findMany({
     where: { groupId, isPinned: true, isDeleted: false },
     orderBy: { pinnedAt: 'desc' },
@@ -585,6 +669,12 @@ async function getPinnedMessages(groupId) {
   }
 
   return messages.map(msg => formatMessage(msg, null, replyMap.get(msg.replyToId) || null));
+}
+
+async function getPinnedMessages(groupId) {
+  return cacheService.getOrSet(`group:messages:pinned:${groupId}`, async () => {
+    return fetchPinnedMessagesFromDb(groupId);
+  }, 300, 5000);
 }
 
 // ============================================================

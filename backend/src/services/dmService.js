@@ -7,6 +7,14 @@
 
 const prisma = require('../prisma');
 const notificationService = require('./notificationService');
+const cacheService = require('./cacheService');
+const cacheInvalidator = require('./cacheInvalidator');
+const { validateEmoji } = require('../utils/validators');
+
+function getDmCacheKey(u1, u2) {
+  const [minId, maxId] = [String(u1), String(u2)].sort();
+  return `dm:messages:recent:${minId}:${maxId}`;
+}
 
 // Serialize the "check-then-create" burst-dedupe per (receiver, sender) pair so
 // concurrent DMs can't both pass the unread-check and create duplicate bells.
@@ -166,6 +174,9 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
     replyTo: replyPreview,
   };
 
+  // Invalidate recent DM cache for this conversation pair
+  await cacheInvalidator.invalidateKey(getDmCacheKey(senderId, receiverId));
+
   // Broadcast real-time Socket.IO event to both participants
   try {
     const socketService = getSocketService();
@@ -203,12 +214,9 @@ async function sendDM(senderId, receiverId, data, bypassFriendship = false) {
 }
 
 /**
- * Get paginated conversation between two users.
- * Requires an accepted friendship — blocks reading another user's DMs.
+ * Fetch paginated conversation from database.
  */
-async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {}) {
-  await requireFriendship(userId, otherUserId);
-
+async function fetchConversationFromDb(userId, otherUserId, { page = 1, limit = 50 } = {}) {
   const skip = (page - 1) * limit;
 
   const messages = await prisma.directMessage.findMany({
@@ -293,9 +301,23 @@ async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {
   });
 
   return {
-    messages: messagesWithAuthor.reverse(), // Return in chronological order
+    messages: [...messagesWithAuthor].reverse(), // Return in chronological order (non-mutating)
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
+}
+
+/**
+ * Get paginated conversation between two users.
+ * Requires an accepted friendship — blocks reading another user's DMs.
+ */
+async function getConversation(userId, otherUserId, { page = 1, limit = 50 } = {}) {
+  await requireFriendship(userId, otherUserId);
+  if (page === 1 && limit === 50) {
+    return cacheService.getOrSet(getDmCacheKey(userId, otherUserId), async () => {
+      return fetchConversationFromDb(userId, otherUserId, { page, limit });
+    }, 60, 5000);
+  }
+  return fetchConversationFromDb(userId, otherUserId, { page, limit });
 }
 
 /**
@@ -385,6 +407,8 @@ async function markAsRead(userId, otherUserId) {
     data: { isRead: true, readAt: new Date() },
   });
 
+  await cacheInvalidator.invalidateKey(getDmCacheKey(userId, otherUserId));
+
   try {
     const socketService = getSocketService();
     socketService.emitToUser(otherUserId, 'dm:readUpdate', {
@@ -422,6 +446,8 @@ async function deleteDM(messageId, userId) {
     },
   });
 
+  await cacheInvalidator.invalidateKey(getDmCacheKey(message.senderId, message.receiverId));
+
   try {
     const socketService = getSocketService();
     socketService.emitToUser(message.receiverId, 'dm:delete', { messageId, senderId: userId });
@@ -452,6 +478,8 @@ async function editDM(messageId, userId, newContent) {
     where: { id: messageId },
     data: { content: newContent, editedAt: new Date() },
   });
+
+  await cacheInvalidator.invalidateKey(getDmCacheKey(message.senderId, message.receiverId));
 
   let replyPreview = null;
   if (isValidMongoId(updated.replyToId)) {
@@ -505,7 +533,107 @@ async function editDM(messageId, userId, newContent) {
   return payload;
 }
 
+/**
+ * Toggle a reaction on a DM with Optimistic Concurrency Control (OCC).
+ */
+async function toggleReaction(messageId, userId, emoji) {
+  const cleanEmoji = validateEmoji(emoji);
+  const existingMsg = await prisma.directMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true, senderId: true, receiverId: true, isDeleted: true },
+  });
+  if (!existingMsg || existingMsg.isDeleted) {
+    throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'NOT_FOUND' });
+  }
+  if (existingMsg.senderId !== userId && existingMsg.receiverId !== userId) {
+    throw Object.assign(new Error('Forbidden.'), { statusCode: 403, code: 'FORBIDDEN' });
+  }
+
+  const MAX_RETRIES = 5;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const msg = await prisma.directMessage.findUnique({
+      where: { id: messageId },
+      select: {
+        id: true,
+        reactions: true,
+        version: true,
+        senderId: true,
+        receiverId: true,
+      },
+    });
+    if (!msg) throw Object.assign(new Error('Message not found.'), { statusCode: 404, code: 'NOT_FOUND' });
+
+    const currentReactions = (msg.reactions && typeof msg.reactions === 'object' && !Array.isArray(msg.reactions))
+      ? { ...msg.reactions }
+      : {};
+    let usersForEmoji = Array.isArray(currentReactions[cleanEmoji]) ? [...currentReactions[cleanEmoji]] : [];
+
+    if (usersForEmoji.includes(userId)) {
+      usersForEmoji = usersForEmoji.filter(id => id !== userId);
+    } else {
+      usersForEmoji.push(userId);
+    }
+
+    const updatedReactions = { ...currentReactions };
+    if (usersForEmoji.length === 0) {
+      delete updatedReactions[cleanEmoji];
+    } else {
+      updatedReactions[cleanEmoji] = usersForEmoji;
+    }
+
+    const currentVer = msg.version ?? 0;
+    const nextVer = currentVer + 1;
+
+    const whereClause = {
+      id: messageId,
+      OR: [
+        { version: currentVer },
+        ...(currentVer === 0 ? [{ version: null }, { version: { isSet: false } }] : []),
+      ],
+    };
+
+    const updateRes = await prisma.directMessage.updateMany({
+      where: whereClause,
+      data: {
+        reactions: updatedReactions,
+        version: nextVer,
+      },
+    });
+
+    if (updateRes.count > 0) {
+      await cacheInvalidator.invalidateKey(getDmCacheKey(msg.senderId, msg.receiverId));
+
+      const updatedMsg = await prisma.directMessage.findUnique({
+        where: { id: messageId },
+      });
+
+      const partnerId = msg.senderId === userId ? msg.receiverId : msg.senderId;
+      const socketPayload = {
+        messageId,
+        reactions: updatedReactions,
+        userId,
+        emoji: cleanEmoji,
+      };
+
+      try {
+        const socketService = getSocketService();
+        socketService.emitToUser(userId, 'dm:reaction', socketPayload);
+        socketService.emitToUser(partnerId, 'dm:reaction', socketPayload);
+      } catch (err) {
+        console.error('[DM] Reaction socket emission failed:', err.message);
+      }
+
+      return updatedMsg;
+    }
+
+    const jitter = Math.floor(Math.random() * 20) + 10;
+    await new Promise(res => setTimeout(res, jitter));
+  }
+
+  throw Object.assign(new Error('Concurrent reaction update conflict. Please retry.'), { statusCode: 409, code: 'REACTION_CONFLICT' });
+}
+
 module.exports = {
   sendDM, getConversation, listConversations, markAsRead, deleteDM, editDM, requireFriendship,
-  formatDmReplyPreview,
+  formatDmReplyPreview, toggleReaction,
 };

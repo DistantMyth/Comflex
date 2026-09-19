@@ -1326,7 +1326,8 @@ router.patch('/:id/messages/:msgId/react', requireGroupMember, async (req, res, 
     }
 
     const msg = await messageService.toggleReaction(req.params.msgId, req.user.id, emoji, req.params.id, req.anonIdentity || null);
-    // Notify clients instantly of the updated reaction strip
+    // Notify clients instantly of the updated reaction strip (support both event names)
+    emitToGroup(req.params.id, 'message:reaction', { messageId: msg.id, reactions: msg.reactions });
     emitToGroup(req.params.id, 'message:react', { messageId: msg.id, reactions: msg.reactions });
     
     return success(res, msg);

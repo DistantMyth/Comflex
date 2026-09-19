@@ -117,7 +117,7 @@ export default function StorePage() {
         setPricingConfig(configRes || null);
       }
       if (activeTab === 'admin') {
-        const badgesRes = await clientCache.getOrFetch('store:badges', () => storeApi.getAllBadges().then(r => r.data?.data || []), { ttl: 60000 });
+        const badgesRes = await storeApi.getAllBadges().then(r => r.data?.data || []);
         setAllBadges(badgesRes || []);
       }
       if (activeTab === 'inventory') {

@@ -285,3 +285,4 @@ class ClientCache {
 }
 
 export const clientCache = new ClientCache();
+export default clientCache;

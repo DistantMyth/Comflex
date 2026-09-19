@@ -259,9 +259,9 @@ async function markGroupRead(groupId, userId) {
 }
 
 /**
- * Get a single group with member count.
+ * Get a single group with member count (cached).
  */
-async function getGroup(groupId) {
+async function fetchGroupFromDb(groupId) {
   const group = await prisma.cohortGroup.findUnique({
     where: { id: groupId },
     include: { _count: { select: { members: true, anonIdentities: { where: { ...NOT_BANNED } } } } },
@@ -270,6 +270,12 @@ async function getGroup(groupId) {
   const memberCount = group.isAnonymous ? group._count.anonIdentities : group._count.members;
   const { _count, ...safe } = group;
   return { ...sanitizeGroup(safe), memberCount };
+}
+
+async function getGroup(groupId) {
+  return cacheService.getOrSet(`group:meta:${groupId}`, async () => {
+    return fetchGroupFromDb(groupId);
+  }, 300, 5000);
 }
 
 /**
@@ -432,6 +438,7 @@ async function addMember(groupId, userId, addedByUserId, ringInput, bypassFriend
   await seqCounterService.seedNewMemberCursor(userId, groupId);
   await cacheInvalidator.invalidateGroup(groupId);
   await cacheInvalidator.invalidateUser(userId);
+  await cacheInvalidator.invalidateMemberPermissions(groupId, userId);
 
   return { ...member, invited: false };
 }
@@ -452,6 +459,7 @@ async function removeMember(groupId, userId) {
 
   await cacheInvalidator.invalidateGroup(groupId);
   await cacheInvalidator.invalidateUser(userId);
+  await cacheInvalidator.invalidateMemberPermissions(groupId, userId);
   await cacheInvalidator.broadcastWsControl({ action: 'EVICT_USER_GROUP', userId, groupId });
 }
 
@@ -635,6 +643,7 @@ async function acceptInvite(inviteId, userId, alias, avatarUrl) {
   await seqCounterService.seedNewMemberCursor(userId, invite.groupId);
   await cacheInvalidator.invalidateGroup(invite.groupId);
   await cacheInvalidator.invalidateUser(userId);
+  await cacheInvalidator.invalidateMemberPermissions(invite.groupId, userId);
 
   // Update invite status
   await prisma.groupInvite.update({

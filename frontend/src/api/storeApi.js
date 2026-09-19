@@ -1,11 +1,12 @@
 import api from './client';
+import { clientCache } from '../utils/clientCache';
 
 export const storeApi = {
   // Store Config (Dynamic Pricing)
   getStoreConfig: () => api.get('/store/config'),
 
   // Store
-  getAllBadges: () => api.get('/store/badges'),
+  getAllBadges: () => clientCache.getOrFetch('store:badges', () => api.get('/store/badges'), { ttl: 600000 }),
   getListings: () => api.get('/store/listings'),
   purchaseBadge: (listingId) => api.post('/store/purchase', { listingId }),
 

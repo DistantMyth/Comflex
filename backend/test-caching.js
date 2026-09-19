@@ -216,6 +216,50 @@ async function runTests() {
   assert.strictEqual(nullFetches, 1, 'Negative cache must prevent re-querying missing entities');
   console.log('   ✅ Negative caching correctly caches missing entity without database hits.');
 
+  // 12. Test Emoji Validator & Prototype Pollution Defense
+  console.log('\n12. Testing Emoji Validator & Security Guard...');
+  const { validateEmoji } = require('./src/utils/validators');
+  assert.strictEqual(validateEmoji('👍'), '👍');
+  assert.strictEqual(validateEmoji('❤️'), '❤️');
+  assert.strictEqual(validateEmoji('🔥'), '🔥');
+  assert.strictEqual(validateEmoji('😂'), '😂');
+  assert.strictEqual(validateEmoji('🎉'), '🎉');
+  assert.strictEqual(validateEmoji('👏🏽'), '👏🏽');
+  assert.strictEqual(validateEmoji('🇮🇳'), '🇮🇳');
+  assert.strictEqual(validateEmoji('👨‍👩‍👧‍👦'), '👨‍👩‍👧‍👦');
+  assert.strictEqual(validateEmoji('1️⃣'), '1️⃣');
+
+  assert.throws(() => validateEmoji('__proto__'));
+  assert.throws(() => validateEmoji('constructor'));
+  assert.throws(() => validateEmoji('prototype'));
+  assert.throws(() => validateEmoji('$where'));
+  assert.throws(() => validateEmoji('a.b'));
+  assert.throws(() => validateEmoji('hello'));
+  assert.throws(() => validateEmoji(''));
+  assert.throws(() => validateEmoji(null));
+  assert.throws(() => validateEmoji('👍👍'));
+  console.log('   ✅ Emoji validation and prototype pollution defense passed.');
+
+  // 13. Test Cache Invalidation for Group and DM Messages
+  console.log('\n13. Testing Message & Member Permission Invalidation...');
+  await cacheService.set('group:messages:recent:g123', [{ id: 'm1' }], 60);
+  await cacheService.set('group:messages:pinned:g123', [{ id: 'm1' }], 60);
+  await cacheService.set('group:member:g123:u456', { ring: 2 }, 60);
+  await cacheService.set('group:meta:g123', { name: 'Test' }, 60);
+
+  await cacheInvalidator.invalidateKey('group:messages:recent:g123');
+  assert.strictEqual(await cacheService.get('group:messages:recent:g123'), null);
+
+  await cacheInvalidator.invalidateKey('group:messages:pinned:g123');
+  assert.strictEqual(await cacheService.get('group:messages:pinned:g123'), null);
+
+  await cacheInvalidator.invalidateMemberPermissions('g123', 'u456');
+  assert.strictEqual(await cacheService.get('group:member:g123:u456'), null);
+
+  await cacheInvalidator.invalidateGroup('g123');
+  assert.strictEqual(await cacheService.get('group:meta:g123'), null);
+  console.log('   ✅ Message and member permission cache invalidations verified.');
+
   console.log('\n🎉 ALL CACHING & WEBHOOK VERIFICATION TESTS PASSED!\n');
 }
 

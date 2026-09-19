@@ -264,6 +264,7 @@ model Message {
   // Chat Actions & Multimedia
   replyToId   String?  @db.ObjectId
   reactions   Json?    
+  version     Int?     @default(0)
   forwarded   Boolean  @default(false)
   msgType     String   @default("text") // text, image, document, sticker
   fileUrl     String?
@@ -324,6 +325,7 @@ model DirectMessage {
   // Chat Actions & Multimedia
   replyToId   String?  @db.ObjectId
   reactions   Json?    
+  version     Int?     @default(0)
   forwarded   Boolean  @default(false)
   msgType     String   @default("text") // text, image, document, sticker
   fileUrl     String?

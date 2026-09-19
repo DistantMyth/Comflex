@@ -193,6 +193,21 @@ async function backfillGroupMessageSequences() {
   }
 }
 
+async function backfillMessageVersions() {
+  try {
+    await prisma.message.updateMany({
+      where: { OR: [{ version: null }, { version: { isSet: false } }] },
+      data: { version: 0 },
+    });
+    await prisma.directMessage.updateMany({
+      where: { OR: [{ version: null }, { version: { isSet: false } }] },
+      data: { version: 0 },
+    });
+  } catch (err) {
+    console.warn('[DB] Could not backfill message versions (continuing):', err.message);
+  }
+}
+
 async function startServer() {
   // Bounded backoff: a transient DB/DNS outage at boot (e.g. Atlas resume,
   // DNS propagation) must not put the service into an instant crash loop —
@@ -209,6 +224,9 @@ async function startServer() {
 
       // Ensure historical groups have messageSeq initialized
       await backfillGroupMessageSequences();
+
+      // Self-healing backfill for message OCC versions
+      await backfillMessageVersions();
 
       // Initialize Cloudinary storage layer early and log status
       const { getCloudinary, isCloudinaryConfigured } = require('./utils/fileStorage');

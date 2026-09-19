@@ -131,6 +131,7 @@ class CacheInvalidator extends EventEmitter {
    * Invalidate member permissions in group.
    */
   async invalidateMemberPermissions(groupId, userId) {
+    await this.invalidateKey(`group:member:${groupId}:${userId}`);
     await this.invalidateKey(`group:perms:${groupId}:${userId}`);
     await this.invalidateKey(`group:mute:${groupId}:${userId}`);
   }

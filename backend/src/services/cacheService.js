@@ -20,7 +20,8 @@ const KNOWN_DATE_KEYS = new Set([
   'pinnedAt', 'editedAt', 'readAt', 'grantedAt', 'submittedAt',
   'evaluatedAt', 'acquiredAt', 'startDate', 'endDate',
   'inviteTokenExpiry', 'emailVerifyExpiry', 'resetTokenExpiry',
-  'walletNonceExpiry', 'usernameChangedAt', 'lastUploadDate', 'bannedAt'
+  'walletNonceExpiry', 'usernameChangedAt', 'lastUploadDate', 'bannedAt',
+  'date', 'lastPointDate'
 ]);
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;

@@ -19,6 +19,7 @@
 const prisma = require('../prisma');
 const { error } = require('../utils/apiResponse');
 const groupService = require('../services/groupService');
+const cacheService = require('../services/cacheService');
 
 /**
  * Validate that every "id-like" route param is a MongoDB ObjectId.
@@ -56,10 +57,12 @@ async function requireGroupMember(req, res, next) {
     const groupId = req.params.id || req.params.groupId;
     if (!groupId) return error(res, 'MISSING_GROUP', 'Group ID is required.', 400);
 
-    const group = await prisma.cohortGroup.findUnique({
-      where: { id: groupId },
-      select: { id: true, isAnonymous: true, creatorId: true, ringConfig: true },
-    });
+    const group = await cacheService.getOrSet(`group:meta:${groupId}`, async () => {
+      return prisma.cohortGroup.findUnique({
+        where: { id: groupId },
+        select: { id: true, isAnonymous: true, creatorId: true, ringConfig: true },
+      });
+    }, 300, 5000);
     if (!group) return error(res, 'GROUP_NOT_FOUND', 'Group not found.', 404);
     req.group = group;
 
@@ -114,10 +117,12 @@ async function requireGroupMember(req, res, next) {
       return next();
     }
 
-    const membership = await prisma.groupMember.findUnique({
-      where: { userId_groupId: { userId: req.user.id, groupId } },
-      include: { group: { select: { ringConfig: true, creatorId: true } } },
-    });
+    const membership = await cacheService.getOrSet(`group:member:${groupId}:${req.user.id}`, async () => {
+      return prisma.groupMember.findUnique({
+        where: { userId_groupId: { userId: req.user.id, groupId } },
+        select: { id: true, userId: true, groupId: true, ring: true, permissions: true },
+      });
+    }, 300, 5000);
 
     if (!membership) {
       return error(res, 'NOT_A_MEMBER', 'You are not a member of this group.', 403);
@@ -149,7 +154,7 @@ function requireGroupPermission(permissionKey) {
 
     // Evaluate permissions: explicit member override > ring permission > default ring permission
     const memberPerms = membership.permissions || {};
-    const ringPerms = membership.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
+    const ringPerms = req.group?.ringConfig?.ringPermissions?.[membership.ring] || {};
     const defaultPerms = groupService.getDefaultPermissions(membership.ring);
 
     let hasPermission = false;
@@ -161,7 +166,7 @@ function requireGroupPermission(permissionKey) {
       hasPermission = defaultPerms[permissionKey] === true;
     }
 
-    const isCreator = req.group?.creatorId === req.user.id || membership.group?.creatorId === req.user.id;
+    const isCreator = req.group?.creatorId === req.user.id;
     if (!hasPermission && !isCreator) {
       return error(res, 'PERMISSION_DENIED', `You do not have the "${permissionKey}" permission in this group.`, 403);
     }

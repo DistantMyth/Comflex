@@ -63,7 +63,7 @@ async function verifyWebhook(req, res, next) {
     }
 
     // Atomic idempotency deduplication with dual-mode fallback
-    const eventId = req.headers['x-comflex-event-id'] || req.body?.eventId;
+    const eventId = req.headers['x-comflex-event-id'] || req.body?.eventId || crypto.createHash('sha256').update(`${timestamp}.${rawBody}`).digest('hex');
     if (eventId && typeof eventId === 'string') {
       const redis = cacheService.getRedisClient();
       if (redis) {

@@ -227,4 +227,31 @@ router.delete('/messages/:msgId', async (req, res, next) => {
   }
 });
 
+/**
+ * PATCH /api/v1/dm/messages/:msgId/react — Toggle reaction on a DM.
+ * Body: { emoji: string }
+ */
+router.patch(
+  '/messages/:msgId/react',
+  [
+    body('emoji').trim().notEmpty().withMessage('Emoji is required.').isLength({ max: 32 }).withMessage('Emoji too long.'),
+  ],
+  async (req, res, next) => {
+    try {
+      if (!ID_RE.test(req.params.msgId)) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid message id.', 400);
+      }
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return error(res, 'VALIDATION_ERROR', 'Invalid input.', 400, errors.array().map(e => ({ field: e.path, issue: e.msg })));
+      }
+      const updated = await dmService.toggleReaction(req.params.msgId, req.user.id, req.body.emoji);
+      return success(res, { reactions: updated.reactions });
+    } catch (err) {
+      if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
+      next(err);
+    }
+  }
+);
+
 module.exports = router;

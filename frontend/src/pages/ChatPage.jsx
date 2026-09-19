@@ -18,6 +18,35 @@ import UserProfilePanel from '../components/UserProfilePanel';
 import GroupSettingsPanel from '../components/GroupSettingsPanel';
 import AnonGroupPanel from '../components/AnonGroupPanel';
 import resolveAsset from '../utils/resolveAsset';
+import { clientCache } from '../utils/clientCache';
+
+function reconcileMessages(currentMessages, incomingRecent) {
+  if (!incomingRecent || incomingRecent.length === 0) return currentMessages;
+  
+  const incomingTimestamps = incomingRecent
+    .map(m => new Date(m.createdAt).getTime())
+    .filter(t => !isNaN(t));
+  const minIncomingTime = incomingTimestamps.length > 0
+    ? Math.min(...incomingTimestamps)
+    : 0;
+
+  const historical = currentMessages.filter(m => {
+    const t = new Date(m.createdAt).getTime();
+    return !isNaN(t) && t < minIncomingTime;
+  });
+
+  const seenIds = new Set();
+  const merged = [];
+  for (const m of [...historical, ...incomingRecent]) {
+    if (m && m.id && !seenIds.has(m.id)) {
+      seenIds.add(m.id);
+      merged.push(m);
+    }
+  }
+
+  merged.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  return merged;
+}
 
 export default function ChatPage() {
   const { id: groupId } = useParams();
@@ -293,11 +322,25 @@ export default function ChatPage() {
     setHasMore(true);
 
     const loadData = async () => {
-      setLoading(true);
+      // 0ms Cache Hydration from SWR cache
+      const cached = clientCache.get(`messages:group:${groupId}:recent`);
+      if (cached?.data) {
+        const cachedPayload = cached.data?.data?.data || cached.data?.data || cached.data;
+        const cachedList = Array.isArray(cachedPayload?.messages)
+          ? cachedPayload.messages
+          : (Array.isArray(cachedPayload) ? cachedPayload : []);
+        if (cachedList.length > 0) {
+          setMessages([...cachedList].reverse());
+          setLoading(false);
+        }
+      } else {
+        setLoading(true);
+      }
+
       try {
         const [groupRes, msgsRes, friendsRes, badgesRes] = await Promise.all([
           groupApi.getGroup(groupId),
-          groupApi.getMessages(groupId, 1, 50),
+          clientCache.getOrFetch(`messages:group:${groupId}:recent`, () => groupApi.getMessages(groupId, 1, 50), { ttl: 60000 }),
           friendApi.listFriends().catch(() => ({ data: { data: [] } })),
           storeApi.getAllBadges().catch(() => ({ data: { data: [] } })),
         ]);
@@ -306,7 +349,8 @@ export default function ChatPage() {
         const msgList = Array.isArray(msgsRes?.data?.data?.messages)
           ? msgsRes.data.data.messages
           : (Array.isArray(msgsRes?.data?.data) ? msgsRes.data.data : []);
-        setMessages([...msgList].reverse());
+        const incomingChronological = [...msgList].reverse();
+        setMessages((prev) => reconcileMessages(prev, incomingChronological));
         if (msgList.length < 50) setHasMore(false);
         setFriendIds((friendsRes?.data?.data || []).map(f => f.id));
 
@@ -474,6 +518,11 @@ export default function ChatPage() {
           prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
         );
       }),
+      onEvent('message:react', ({ messageId, reactions }) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+        );
+      }),
       onEvent('message:pin', ({ messageId, isPinned, pinnedAt }) => {
         setMessages((prev) =>
           prev.map((m) => (m.id === messageId ? { ...m, isPinned, pinnedAt } : m))
@@ -625,8 +674,37 @@ export default function ChatPage() {
   };
 
   const handleReact = async (messageId, emoji) => {
+    const reactorKey = isAnon ? (myIdentity ? `anon:${myIdentity.identityId}` : null) : user?.id;
+    if (!reactorKey) return;
+
+    // 0ms Optimistic UI update
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const currentReactions = { ...(m.reactions || {}) };
+        let users = Array.isArray(currentReactions[emoji]) ? [...currentReactions[emoji]] : [];
+        if (users.includes(reactorKey)) {
+          users = users.filter((id) => id !== reactorKey);
+        } else {
+          users.push(reactorKey);
+        }
+        if (users.length === 0) {
+          delete currentReactions[emoji];
+        } else {
+          currentReactions[emoji] = users;
+        }
+        return { ...m, reactions: currentReactions };
+      })
+    );
+
     try {
-      await groupApi.reactToMessage(groupId, messageId, emoji);
+      const res = await groupApi.reactToMessage(groupId, messageId, emoji);
+      const serverReactions = res?.data?.data?.reactions;
+      if (serverReactions) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, reactions: serverReactions } : m))
+        );
+      }
     } catch { /* ignore */ }
   };
 
