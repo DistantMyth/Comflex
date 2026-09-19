@@ -33,6 +33,8 @@ export default function GroupsPage() {
   const {
     data: groupsData,
     loading: groupsLoading,
+    error: groupsError,
+    refresh: refreshGroups,
   } = useClientCache(
     'groups:list',
     () => groupApi.listGroups().then((res) => res?.data?.data || res?.data || []),
@@ -277,6 +279,17 @@ export default function GroupsPage() {
         <div className="py-16 flex justify-center items-center gap-2 text-xs text-[var(--color-text-muted)]">
           <Loader2 size={18} className="animate-spin text-[var(--color-accent)]" />
           <span>Synchronizing campus channels...</span>
+        </div>
+      ) : groupsError ? (
+        <div className="glass-card p-8 text-center border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/5">
+          <AlertCircle size={32} className="mx-auto text-[var(--color-danger)] mb-2" />
+          <h3 className="text-sm font-bold text-[var(--color-text-primary)]">Unable to load campus groups</h3>
+          <p className="text-xs text-[var(--color-text-secondary)] mt-1 mb-4">
+            {groupsError.response?.data?.error?.message || groupsError.message || 'The server took too long to respond. Please try again.'}
+          </p>
+          <button onClick={() => refreshGroups()} className="btn btn-secondary text-xs py-1.5 px-4 shadow-xs">
+            Retry Connection
+          </button>
         </div>
       ) : groups.length === 0 ? (
         <div className="glass-card p-12 text-center border border-[var(--color-border)]">

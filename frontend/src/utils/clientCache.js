@@ -13,7 +13,7 @@
 
 export const COLD_SNAPSHOT = Object.freeze({
   data: undefined,
-  loading: false,
+  loading: true,
   isRevalidating: false,
   error: null,
   version: 0,
@@ -64,8 +64,8 @@ class ClientCache {
   updateEntrySnapshot(entry) {
     entry.snapshot = Object.freeze({
       data: entry.data,
-      loading: entry.data === undefined && entry.promise !== null,
-      isRevalidating: entry.promise !== null,
+      loading: Boolean(entry.isCold && !entry.error),
+      isRevalidating: Boolean(entry.promise !== null && !entry.isCold),
       error: entry.error,
       version: entry.version,
     });
@@ -116,7 +116,7 @@ class ClientCache {
   isStale(rawKey, ttl = 60000) {
     const scopedKey = this.getScopedKey(rawKey);
     const entry = this.entries.get(scopedKey);
-    if (!entry || entry.timestamp === 0) return true;
+    if (!entry || entry.timestamp === 0 || entry.isCold) return true;
     return (Date.now() - entry.timestamp) >= ttl;
   }
 
@@ -128,8 +128,9 @@ class ClientCache {
     if (!entry) {
       this.evictLRU();
       entry = {
-        data: initialData,
-        timestamp: initialData !== undefined ? Date.now() : 0,
+        data: initialData !== undefined ? initialData : undefined,
+        timestamp: 0,
+        isCold: true,
         promise: null,
         error: null,
         version: 1,
@@ -144,14 +145,14 @@ class ClientCache {
       this.entries.set(scopedKey, entry);
     }
 
-    const isStale = (Date.now() - entry.timestamp) >= ttl || entry.timestamp === 0;
+    const isStale = (Date.now() - entry.timestamp) >= ttl || entry.timestamp === 0 || entry.isCold;
 
     // Singleflight coalescing check: only coalesce if the in-flight promise matches CURRENT version
     if (entry.promise && entry.inFlightVersion === entry.version) {
       return entry.promise;
     }
 
-    if (!isStale && entry.data !== undefined) {
+    if (!isStale && !entry.isCold && entry.data !== undefined) {
       return entry.data;
     }
 
@@ -176,6 +177,7 @@ class ClientCache {
           currentEntry.data = result;
           currentEntry.error = null;
           currentEntry.timestamp = Date.now();
+          currentEntry.isCold = false;
           this.updateEntrySnapshot(currentEntry);
           this.notify(scopedKey);
         }
@@ -184,6 +186,7 @@ class ClientCache {
         const currentEntry = this.entries.get(scopedKey);
         if (currentEntry && currentEntry.version === requestVersion && this.epoch === requestEpoch) {
           currentEntry.error = err;
+          currentEntry.isCold = false;
           this.updateEntrySnapshot(currentEntry);
           this.notify(scopedKey);
         }
@@ -215,6 +218,7 @@ class ClientCache {
       entry = {
         data: typeof updater === 'function' ? updater(undefined) : updater,
         timestamp: Date.now(),
+        isCold: false,
         promise: null,
         error: null,
         version: 1,
@@ -226,6 +230,8 @@ class ClientCache {
     } else {
       entry.data = typeof updater === 'function' ? updater(entry.data) : updater;
       entry.timestamp = Date.now();
+      entry.isCold = false;
+      entry.error = null;
       entry.version++;
       this.updateEntrySnapshot(entry);
     }

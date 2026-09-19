@@ -80,8 +80,7 @@ export function useClientCache(key, fetcherFn, options = {}) {
   );
 
   const data = snapshot?.data !== undefined ? snapshot.data : initialData;
-  // Prevent 1-frame cold-start paint flash
-  const loading = enabled && ((snapshot?.data === undefined && !snapshot?.error) || Boolean(snapshot?.loading));
+  const loading = enabled && Boolean(key) && Boolean(snapshot?.loading);
   const isRevalidating = Boolean(snapshot?.isRevalidating);
   const error = snapshot?.error ?? null;
 

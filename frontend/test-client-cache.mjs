@@ -285,5 +285,99 @@ await test('Protected LRU eviction preserves active subscribers and in-flight pr
   unsub1();
 });
 
+await test('initialData cold fetch: fetcher is ALWAYS invoked and initialData is not treated as fresh server data', async () => {
+  let fetcherCalled = false;
+  const fetcher = async () => {
+    fetcherCalled = true;
+    return [{ id: 'g_fresh', name: 'Fresh Server Cohort' }];
+  };
+
+  // Calling getOrFetch with initialData: []
+  const promise = clientCache.getOrFetch('groups:list', fetcher, { ttl: 5000, initialData: [] });
+
+  // While in flight, the entry snapshot has data = [], loading = true
+  const inFlightSnap = clientCache.getSnapshot('groups:list');
+  assert.deepStrictEqual(inFlightSnap.data, []);
+  assert.strictEqual(inFlightSnap.loading, true, 'Snapshot MUST be loading on cold fetch');
+  assert.strictEqual(inFlightSnap.isRevalidating, false, 'Cold start is loading, not background revalidating');
+
+  const result = await promise;
+  assert.strictEqual(fetcherCalled, true, 'Fetcher MUST be called even if initialData is provided');
+  assert.deepStrictEqual(result, [{ id: 'g_fresh', name: 'Fresh Server Cohort' }]);
+
+  // After completion: loading is false, data is fresh server data
+  const resolvedSnap = clientCache.getSnapshot('groups:list');
+  assert.strictEqual(resolvedSnap.loading, false, 'Loading MUST clear to false after fetch');
+  assert.strictEqual(resolvedSnap.isRevalidating, false);
+  assert.deepStrictEqual(resolvedSnap.data, [{ id: 'g_fresh', name: 'Fresh Server Cohort' }]);
+});
+
+await test('Snapshot loading clears immediately on fetch rejection (no hanging spinner)', async () => {
+  const failingFetcher = async () => {
+    throw new Error('500 Internal Server Error');
+  };
+
+  try {
+    await clientCache.getOrFetch('failing:endpoint', failingFetcher, { ttl: 5000, initialData: [] });
+    assert.fail('Should have thrown error');
+  } catch (err) {
+    assert.strictEqual(err.message, '500 Internal Server Error');
+  }
+
+  const snap = clientCache.getSnapshot('failing:endpoint');
+  assert.strictEqual(snap.loading, false, 'Loading MUST be false when fetch fails');
+  assert.strictEqual(snap.isRevalidating, false);
+  assert.strictEqual(snap.error?.message, '500 Internal Server Error');
+  assert.deepStrictEqual(snap.data, []);
+});
+
+await test('Warm cache hit vs Stale background revalidation loading flags', async () => {
+  let calls = 0;
+  const fetcher = async () => {
+    calls++;
+    return { version: calls };
+  };
+
+  // Cold fetch
+  await clientCache.getOrFetch('data:key', fetcher, { ttl: 100 });
+  assert.strictEqual(calls, 1);
+
+  // Warm hit (within TTL): loading: false, isRevalidating: false
+  const warmData = await clientCache.getOrFetch('data:key', fetcher, { ttl: 100 });
+  assert.strictEqual(calls, 1, 'Should return cached data without calling fetcher');
+  assert.deepStrictEqual(warmData, { version: 1 });
+  const warmSnap = clientCache.getSnapshot('data:key');
+  assert.strictEqual(warmSnap.loading, false);
+  assert.strictEqual(warmSnap.isRevalidating, false);
+
+  // Invalidate to trigger stale state
+  clientCache.invalidate('data:key');
+  assert.strictEqual(clientCache.isStale('data:key', 100), true);
+
+  // Background revalidation: loading MUST be false, isRevalidating MUST be true
+  let finishReval;
+  const slowFetcher = () =>
+    new Promise((r) => {
+      finishReval = () => {
+        calls++;
+        r({ version: calls });
+      };
+    });
+
+  const revalPromise = clientCache.getOrFetch('data:key', slowFetcher, { ttl: 100 });
+  const revalSnap = clientCache.getSnapshot('data:key');
+  assert.strictEqual(revalSnap.loading, false, 'Loading MUST NOT be true when data already exists');
+  assert.strictEqual(revalSnap.isRevalidating, true, 'isRevalidating MUST be true during background refresh');
+  assert.deepStrictEqual(revalSnap.data, { version: 1 }, 'Stale data preserved while revalidating');
+
+  finishReval();
+  await revalPromise;
+
+  const finalSnap = clientCache.getSnapshot('data:key');
+  assert.strictEqual(finalSnap.loading, false);
+  assert.strictEqual(finalSnap.isRevalidating, false);
+  assert.deepStrictEqual(finalSnap.data, { version: 2 });
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed.\n`);
 if (failed > 0) process.exit(1);
