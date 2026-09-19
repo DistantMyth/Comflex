@@ -22,6 +22,7 @@ const prisma = require('../prisma');
 const env = require('../config/env');
 const { extractCohortYear, extractBranch } = require('../services/cohortService');
 const { emitToGroup } = require('../services/chatSocketService');
+const cacheInvalidator = require('../services/cacheInvalidator');
 const { success, error } = require('../utils/apiResponse');
 const { storeFile } = require('../utils/fileStorage');
 const { validateStoredFile } = require('../utils/fileMagic');
@@ -1178,12 +1179,12 @@ router.post('/:id/anons/:identityId/ban', requireGroupMember, requireAnonCreator
     const { evictAnonIdentityFromGroup } = require('../services/chatSocketService');
     evictAnonIdentityFromGroup(target.id, req.params.id);
 
-    const cacheInvalidator = require('../services/cacheInvalidator');
     await cacheInvalidator.broadcastWsControl({
       action: 'EVICT_ANON_IDENTITY',
       groupId: req.params.id,
       identityId: target.id,
     });
+    await cacheInvalidator.invalidateGroup(req.params.id);
 
     emitToGroup(req.params.id, 'anon:moderation', {
       type: 'ban', identityId: target.id,
@@ -1212,6 +1213,7 @@ router.post('/:id/anons/:identityId/unban', requireGroupMember, requireAnonCreat
       where: { id: target.id },
       data: { bannedAt: null },
     });
+    await cacheInvalidator.invalidateGroup(req.params.id);
     emitToGroup(req.params.id, 'anon:moderation', {
       type: 'unban', identityId: target.id,
       groupId: req.params.id, at: new Date().toISOString(),
@@ -1245,6 +1247,7 @@ router.put('/:id/wordbans', requireGroupMember, requireAnonCreator, [
       where: { id: req.params.id },
       data: { wordBanList: words },
     });
+    await cacheInvalidator.invalidateGroup(req.params.id);
     return success(res, { message: 'Word ban list updated.', words });
   } catch (err) {
     next(err);
@@ -1437,7 +1440,7 @@ router.post(
 router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => {
   try {
     // Anonymous groups have no per-user unread tracking — skip.
-    if (req.anonIdentity) return success(res, { success: true, anonSkipped: true });
+    if (req.anonIdentity || req.group?.isAnonymous) return success(res, { success: true, anonSkipped: true });
     await groupService.markGroupRead(req.params.id, req.user.id);
     return success(res, { success: true });
   } catch (err) {
@@ -1449,15 +1452,15 @@ router.post('/:id/messages/read', requireGroupMember, async (req, res, next) => 
  * GET /api/v1/groups/:id/unread — Get unread count for current user.
  */
 // Anonymous groups have no per-user unread tracking — report 0.
-    router.get('/:id/unread', requireGroupMember, async (req, res, next) => {
-      try {
-        if (req.anonIdentity) return success(res, { unreadCount: 0 });
-        const count = await groupService.getUnreadCount(req.params.id, req.user.id);
-        return success(res, { unreadCount: count });
-      } catch (err) {
-        next(err);
-      }
-    });
+router.get('/:id/unread', requireGroupMember, async (req, res, next) => {
+  try {
+    if (req.anonIdentity || req.group?.isAnonymous) return success(res, { unreadCount: 0 });
+    const count = await groupService.getUnreadCount(req.params.id, req.user.id);
+    return success(res, { unreadCount: count });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * PATCH /api/v1/groups/:id/messages/:msgId — Edit own message.

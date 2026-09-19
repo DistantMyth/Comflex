@@ -835,10 +835,12 @@ async function updateRingConfig(groupId, config) {
     ringPermissions: cleanRingPermissions,
     defaultRing: safeDefaultRing 
   };
-  return prisma.cohortGroup.update({
+  const updated = await prisma.cohortGroup.update({
     where: { id: groupId },
     data: { ringConfig },
   });
+  await cacheInvalidator.invalidateGroup(groupId);
+  return updated;
 }
 
 function getDefaultRingLabel(ring) {

@@ -61,7 +61,7 @@ export function useClientCache(key, fetcherFn, options = {}) {
         // Errors are captured inside the cache snapshot error property
       });
     }
-  }, [key, enabled, ttl, snapshot.version]);
+  }, [key, enabled, ttl, snapshot.version, currentUid, epoch]);
 
   // Fire onSuccess when fresh data arrives
   useEffect(() => {

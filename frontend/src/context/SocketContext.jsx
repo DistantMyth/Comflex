@@ -6,7 +6,7 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback } f
 import { io } from 'socket.io-client';
 import { useAuth } from '../hooks/useAuth';
 import { socketOrigin } from '../utils/resolveAsset';
-import { getAccessToken, getAnonSessions, refreshAccessToken, getCurrentUserId, removeAnonSession } from '../api/client';
+import { getAccessToken, getAnonSessions, refreshAccessToken, getCurrentUserId, removeAnonSession, clearAccessToken } from '../api/client';
 import { clientCache } from '../utils/clientCache';
 
 const SOCKET_URL = socketOrigin();
@@ -67,6 +67,19 @@ export function SocketProvider({ children }) {
         } catch {
           // Refresh failed
         }
+      }
+    });
+
+    socket.on('auth:error', () => {
+      clearAccessToken();
+      clientCache.clear();
+      const PUBLIC_PREFIXES = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email'];
+      const isPublicPage = typeof window !== 'undefined' && (
+        window.location.pathname === '/' ||
+        PUBLIC_PREFIXES.some((p) => window.location.pathname.startsWith(p))
+      );
+      if (!isPublicPage && typeof window !== 'undefined') {
+        window.location.href = '/login';
       }
     });
 

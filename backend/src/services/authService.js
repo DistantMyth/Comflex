@@ -286,8 +286,12 @@ async function setPassword(userId, newPassword, currentPassword) {
       password: hashedPw,
       hasPassword: true,
       refreshToken: null, // Invalidate all sessions after a password change
+      secVersion: { increment: 1 },
     },
   });
+
+  const cacheInvalidator = require('./cacheInvalidator');
+  await cacheInvalidator.invalidateUser(userId, { disconnect: true });
 
   return { message: 'Password has been set successfully.' };
 }
