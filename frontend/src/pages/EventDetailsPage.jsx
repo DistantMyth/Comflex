@@ -10,6 +10,7 @@ import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
 import { userApi } from '../api/userApi';
 import { storeApi } from '../api/storeApi';
+import { clientCache } from '../utils/clientCache';
 import Avatar from '../components/Avatar';
 import resolveAsset from '../utils/resolveAsset';
 
@@ -286,6 +287,7 @@ export default function EventDetailsPage() {
     setActionLoading(true);
     try {
       await eventApi.updateEventStatus(id, status);
+      clientCache.invalidate('events:list');
       setMessage(`Event transitioned to ${status}.`);
       fetchEventData();
     } catch (err) {

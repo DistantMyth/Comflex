@@ -7,41 +7,43 @@ import {
 } from 'lucide-react';
 import { friendApi } from '../api/friendApi';
 import { userApi } from '../api/userApi';
+import { useClientCache } from '../hooks/useClientCache';
+import { clientCache } from '../utils/clientCache';
 import Avatar from '../components/Avatar';
 
 export default function FriendsPage() {
   const [tab, setTab] = useState('friends');
-  const [friends, setFriends] = useState([]);
-  const [requests, setRequests] = useState([]);
-  const [sent, setSent] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
   const [message, setMessage] = useState('');
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [friendsRes, requestsRes, sentRes] = await Promise.all([
+  const {
+    data: friendsData,
+    loading,
+    refresh: refreshFriends,
+  } = useClientCache(
+    'friends:all',
+    () =>
+      Promise.all([
         friendApi.listFriends(),
         friendApi.listRequests(),
         friendApi.listSent(),
-      ]);
-      setFriends(friendsRes.data?.data || []);
-      setRequests(requestsRes.data?.data || []);
-      setSent(sentRes.data?.data || []);
-    } catch (err) {
-      console.error('Failed to fetch friends data:', err);
-    } finally {
-      setLoading(false);
+      ]).then(([f, r, s]) => ({
+        friends: f.data?.data || [],
+        requests: r.data?.data || [],
+        sent: s.data?.data || [],
+      })),
+    {
+      ttl: 45000,
+      initialData: { friends: [], requests: [], sent: [] },
     }
-  }, []);
+  );
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const friends = friendsData?.friends || [];
+  const requests = friendsData?.requests || [];
+  const sent = friendsData?.sent || [];
 
   useEffect(() => {
     if (tab !== 'search' || searchQuery.trim().length < 2) {
@@ -87,7 +89,8 @@ export default function FriendsPage() {
           setMessage('Friend request sent!');
           break;
       }
-      await fetchData();
+      clientCache.invalidate('friends:all');
+      await refreshFriends();
       if (tab === 'search' && searchQuery.trim().length >= 2) {
         const res = await userApi.searchUsers(searchQuery);
         setSearchResults(res.data?.data || []);

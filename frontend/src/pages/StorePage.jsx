@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { storeApi } from '../api/storeApi';
+import { clientCache } from '../utils/clientCache';
 import resolveAsset from '../utils/resolveAsset';
 
 export default function StorePage() {
@@ -92,7 +93,7 @@ export default function StorePage() {
       await storeApi.buyCredits({ txHash: tx.hash, amount });
       showPopup(`Successfully minted ${amount} credits!`);
       refreshProfile();
-      fetchData();
+      fetchData(true);
     } catch (err) {
       console.error(err);
       showPopup(err.response?.data?.error?.message || err.message || 'Credit purchase failed', true);
@@ -101,28 +102,30 @@ export default function StorePage() {
     }
   };
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (force = false) => {
+    if (force) {
+      clientCache.invalidatePrefix('store:');
+    }
     setLoading(true);
     try {
       if (activeTab === 'store' || activeTab === 'admin') {
-        const res = await storeApi.getListings();
-        setListings(res.data?.data || []);
+        const [listingsRes, configRes] = await Promise.all([
+          clientCache.getOrFetch('store:listings', () => storeApi.getListings().then(r => r.data?.data || []), { ttl: 60000 }),
+          clientCache.getOrFetch('store:config', () => storeApi.getStoreConfig().then(r => r.data?.data || null), { ttl: 60000 }),
+        ]);
+        setListings(listingsRes || []);
+        setPricingConfig(configRes || null);
       }
       if (activeTab === 'admin') {
-        const bRes = await storeApi.getAllBadges();
-        setAllBadges(bRes.data?.data || []);
+        const badgesRes = await clientCache.getOrFetch('store:badges', () => storeApi.getAllBadges().then(r => r.data?.data || []), { ttl: 60000 });
+        setAllBadges(badgesRes || []);
       }
       if (activeTab === 'inventory') {
-        const res = await storeApi.getInventory();
-        setInventory(res.data?.data || []);
+        const invRes = await clientCache.getOrFetch('store:inventory', () => storeApi.getInventory().then(r => r.data?.data || []), { ttl: 60000 });
+        setInventory(invRes || []);
       } else if (activeTab === 'ledger') {
-        const res = await storeApi.getLedger();
-        setLedger(res.data?.data || { balance: 0, transactions: [] });
-      }
-
-      if (activeTab === 'store' || activeTab === 'admin') {
-        const cRes = await storeApi.getStoreConfig();
-        setPricingConfig(cRes.data?.data);
+        const ledRes = await clientCache.getOrFetch('store:ledger', () => storeApi.getLedger().then(r => r.data?.data || { balance: 0, transactions: [] }), { ttl: 60000 });
+        setLedger(ledRes || { balance: 0, transactions: [] });
       }
     } catch (err) {
       console.error(err);
@@ -141,7 +144,7 @@ export default function StorePage() {
     try {
       await storeApi.purchaseBadge(listingId);
       showPopup('Badge unlocked successfully!');
-      fetchData();
+      fetchData(true);
       refreshProfile();
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Purchase failed', true);
@@ -161,7 +164,7 @@ export default function StorePage() {
         try {
           await storeApi.adminDeleteListing(listingId);
           showPopup(`"${badgeName}" was delisted from the store.`);
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showPopup(err.response?.data?.error?.message || 'Failed to delist item.', true);
         }
@@ -188,7 +191,7 @@ export default function StorePage() {
       });
       setEditModal({ show: false, listingId: '', badgeName: '', price: 0, quantity: -1 });
       showPopup(`Listing "${editModal.badgeName}" updated.`);
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Failed to update listing.', true);
     }
@@ -205,7 +208,7 @@ export default function StorePage() {
         try {
           await storeApi.adminDeleteBadge(badgeId);
           showPopup(`Badge "${badgeName}" deleted.`);
-          fetchData();
+          fetchData(true);
         } catch (err) {
           showPopup(err.response?.data?.error?.message || 'Failed to delete badge.', true);
         }
@@ -227,7 +230,7 @@ export default function StorePage() {
       setBadgeForm({ name: '', description: '', imageUrl: '', isEventBadge: false });
       setBadgeImage(null);
       showPopup('Badge created successfully!');
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Creation failed', true);
     }
@@ -243,7 +246,7 @@ export default function StorePage() {
       });
       showPopup('Listing published to the store!');
       setListingForm({ badgeId: '', price: 0, quantity: -1 });
-      fetchData();
+      fetchData(true);
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Creation failed', true);
     }
@@ -254,7 +257,7 @@ export default function StorePage() {
     try {
       await storeApi.mintCredits(mintForm.userId, parseInt(mintForm.amount, 10));
       setMintForm({ userId: '', amount: 100 });
-      fetchData();
+      fetchData(true);
       showPopup('Credits minted successfully!');
     } catch (err) {
       showPopup(err.response?.data?.error?.message || 'Mint failed', true);

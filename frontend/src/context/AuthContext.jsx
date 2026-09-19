@@ -7,6 +7,7 @@ import { authApi } from '../api/authApi';
 import { userApi } from '../api/userApi';
 import { adminApi } from '../api/adminApi';
 import { getAccessToken, setAccessToken, clearAccessToken, refreshAccessToken } from '../api/client';
+import { clientCache } from '../utils/clientCache';
 
 export const AuthContext = createContext(null);
 
@@ -91,6 +92,7 @@ export function AuthProvider({ children }) {
       await authApi.logout();
     } catch { /* ignore */ }
     clearAccessToken();
+    clientCache.clear();
     setUser(null);
   }, []);
 

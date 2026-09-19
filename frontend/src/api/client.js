@@ -3,6 +3,7 @@
  */
 
 import axios from 'axios';
+import { clientCache } from '../utils/clientCache';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 const API_BASE = `${BACKEND_URL}/api/v1`;
@@ -43,6 +44,7 @@ export function clearAccessToken() {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
   } catch { /* ignore */ }
+  clientCache.clear();
 }
 
 const client = axios.create({
@@ -139,6 +141,8 @@ export function getCurrentUserId() {
     return 'global';
   }
 }
+
+clientCache.setUserIdProvider(getCurrentUserId);
 
 function normalizeSessionsStore(raw) {
   const result = {};
@@ -268,6 +272,7 @@ export function setAnonSession(groupId, session, targetUserId) {
     delete all['global'][gid];
   }
   writeAllSessions(all);
+  clientCache.invalidate('groups:list');
 }
 
 export function updateAnonSession(groupId, patch, targetUserId) {
@@ -286,6 +291,7 @@ export function updateAnonSession(groupId, patch, targetUserId) {
   }
   Object.assign(all[uid][gid], patch);
   writeAllSessions(all);
+  clientCache.invalidate('groups:list');
 }
 
 export function removeAnonSession(groupId, targetUserId) {
@@ -304,6 +310,7 @@ export function removeAnonSession(groupId, targetUserId) {
   }
   if (changed) {
     writeAllSessions(all);
+    clientCache.invalidate('groups:list');
   }
 }
 

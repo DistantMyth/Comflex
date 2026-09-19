@@ -11,6 +11,7 @@ import { storeApi } from '../api/storeApi';
 import { userApi } from '../api/userApi';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
+import { useClientCache } from '../hooks/useClientCache';
 import Avatar from '../components/Avatar';
 import resolveAsset from '../utils/resolveAsset';
 
@@ -20,7 +21,13 @@ export default function MessagesPage() {
   const navigate = useNavigate();
   const { connected, markDMRead, onEvent } = useSocket();
 
-  const [conversations, setConversations] = useState([]);
+  const { data: cachedConversations, refresh: refreshConversations } = useClientCache(
+    'dm:conversations',
+    () => dmApi.listConversations().then((res) => res.data?.data || []),
+    { ttl: 30000, initialData: [] }
+  );
+  const conversations = cachedConversations || [];
+
   const [search, setSearch] = useState('');
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
@@ -92,12 +99,11 @@ export default function MessagesPage() {
 
   const fetchConversations = useCallback(async () => {
     try {
-      const res = await dmApi.listConversations();
-      setConversations(res.data?.data || []);
+      await refreshConversations();
     } catch (err) {
       console.error('Failed to fetch conversations:', err);
     }
-  }, []);
+  }, [refreshConversations]);
 
   const fetchMessages = useCallback(async (silent = false) => {
     if (!activeUserId) return;

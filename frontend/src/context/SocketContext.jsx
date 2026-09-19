@@ -6,7 +6,8 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback } f
 import { io } from 'socket.io-client';
 import { useAuth } from '../hooks/useAuth';
 import { socketOrigin } from '../utils/resolveAsset';
-import { getAccessToken, getAnonSessions, refreshAccessToken } from '../api/client';
+import { getAccessToken, getAnonSessions, refreshAccessToken, getCurrentUserId, removeAnonSession } from '../api/client';
+import { clientCache } from '../utils/clientCache';
 
 const SOCKET_URL = socketOrigin();
 
@@ -79,6 +80,71 @@ export function SocketProvider({ children }) {
     };
     window.addEventListener('storage', handleStorage);
 
+    // Real-time client cache synchronization
+    socket.on('message:new', (message) => {
+      if (!message?.groupId) return;
+      clientCache.mutate('groups:list', (groups) => {
+        if (!Array.isArray(groups)) return groups;
+        const index = groups.findIndex((g) => g.id === message.groupId);
+        if (index === -1) {
+          // Unrecognized group: trigger background revalidation
+          clientCache.invalidate('groups:list');
+          return groups;
+        }
+
+        const currentGroup = groups[index];
+        const currentUserId = getCurrentUserId();
+        const localAnonId = getAnonSessions()[message.groupId]?.identityId || currentGroup.myIdentity?.identityId;
+        const isCurrentSender =
+          (message.authorId && message.authorId === currentUserId) ||
+          (message.author?.id && (message.author.id === currentUserId || message.author.id === localAnonId)) ||
+          (message.anonAuthorId && message.anonAuthorId === localAnonId);
+        const isInsideActiveGroup = typeof window !== 'undefined' && window.location.pathname === `/groups/${message.groupId}`;
+        const shouldIncrement = !isCurrentSender && !isInsideActiveGroup;
+
+        const updatedGroup = {
+          ...currentGroup,
+          unreadCount: shouldIncrement ? (currentGroup.unreadCount || 0) + 1 : (currentGroup.unreadCount || 0),
+          lastMessage: message,
+          lastMessageAt: message.createdAt || new Date().toISOString(),
+        };
+
+        const nextGroups = [...groups];
+        nextGroups.splice(index, 1);
+        return [updatedGroup, ...nextGroups];
+      });
+    });
+
+    socket.on('notification:new', (notification) => {
+      if (!notification?.type) return;
+      if (notification.type.includes('invite') || notification.type === 'group_invite') {
+        clientCache.invalidate('groups:invites');
+      }
+      if (notification.type.includes('friend') || notification.type === 'friend_request' || notification.type === 'friend_accept') {
+        clientCache.invalidate('friends:all');
+      }
+      clientCache.invalidate('notifications');
+    });
+
+    socket.on('dm:new', () => {
+      clientCache.invalidate('dm:conversations');
+    });
+    socket.on('dm:readUpdate', () => {
+      clientCache.invalidate('dm:conversations');
+    });
+    socket.on('dm:delete', () => {
+      clientCache.invalidate('dm:conversations');
+    });
+    socket.on('dm:edit', () => {
+      clientCache.invalidate('dm:conversations');
+    });
+    socket.on('anon:banned', (data) => {
+      if (data?.groupId) {
+        removeAnonSession(data.groupId);
+      }
+      clientCache.invalidate('groups:list');
+    });
+
     socketRef.current = socket;
     setSocketInstance(socket);
 
@@ -129,25 +195,45 @@ export function SocketProvider({ children }) {
   }, []);
 
   const markRead = useCallback((groupId) => {
+    // 1. Optimistically zero cache immediately (0ms)
+    clientCache.mutate('groups:list', (groups) => {
+      if (!Array.isArray(groups)) return groups;
+      return groups.map((g) => (g.id === groupId ? { ...g, unreadCount: 0 } : g));
+    });
+
+    // 2. Transmit read receipt over socket
     return new Promise((resolve, reject) => {
       if (!socketRef.current?.connected) {
         return reject(new Error('Not connected'));
       }
       socketRef.current.emit('message:read', { groupId }, (response) => {
-        if (response?.error) reject(new Error(response.error));
-        else resolve(response);
+        if (response?.error) {
+          reject(new Error(response.error));
+        } else {
+          resolve(response);
+        }
       });
     });
   }, []);
 
   const markDMRead = useCallback((userId) => {
+    // 1. Optimistically zero cache immediately (0ms)
+    clientCache.mutate('dm:conversations', (convs) => {
+      if (!Array.isArray(convs)) return convs;
+      return convs.map((c) => (c.partner?.id === userId ? { ...c, unreadCount: 0 } : c));
+    });
+
+    // 2. Transmit read receipt over socket
     return new Promise((resolve, reject) => {
       if (!socketRef.current?.connected) {
         return reject(new Error('Not connected'));
       }
       socketRef.current.emit('dm:read', { userId }, (response) => {
-        if (response?.error) reject(new Error(response.error));
-        else resolve(response);
+        if (response?.error) {
+          reject(new Error(response.error));
+        } else {
+          resolve(response);
+        }
       });
     });
   }, []);

@@ -8,6 +8,8 @@ import {
 import { groupApi } from '../api/groupApi';
 import { setAnonSession, removeAnonSession } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import { useClientCache } from '../hooks/useClientCache';
+import { clientCache } from '../utils/clientCache';
 import CreateGroupModal from '../components/CreateGroupModal';
 import CreateCohortGroupModal from '../components/CreateCohortGroupModal';
 import BackupKeyModal from '../components/BackupKeyModal';
@@ -17,10 +19,7 @@ const TYPE_LABELS = { primary: 'Academic Cohort', 'cross-year': 'Cross-Cohort', 
 const TYPE_ICONS = { primary: '🎓', 'cross-year': '🔗', custom: '✨' };
 
 export default function GroupsPage() {
-  const [groups, setGroups] = useState([]);
   const [search, setSearch] = useState('');
-  const [invites, setInvites] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showCreateCohort, setShowCreateCohort] = useState(false);
   const [aliasGroupId, setAliasGroupId] = useState(null);
@@ -31,20 +30,27 @@ export default function GroupsPage() {
   const navigate = useNavigate();
   const isAdmin = user?.globalRing === 0;
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [groupsRes, invitesRes] = await Promise.all([
-        groupApi.listGroups().catch(() => ({ data: { data: [] } })),
-        groupApi.listMyInvites().catch(() => ({ data: { data: [] } })),
-      ]);
-      setGroups(groupsRes?.data?.data || groupsRes?.data || []);
-      setInvites(invitesRes?.data?.data || invitesRes?.data || []);
-    } catch { /* ignore */ }
-    setLoading(false);
-  }, []);
+  const {
+    data: groupsData,
+    loading: groupsLoading,
+  } = useClientCache(
+    'groups:list',
+    () => groupApi.listGroups().then((res) => res?.data?.data || res?.data || []),
+    { ttl: 60000, initialData: [] }
+  );
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const {
+    data: invitesData,
+    loading: invitesLoading,
+  } = useClientCache(
+    'groups:invites',
+    () => groupApi.listMyInvites().then((res) => res?.data?.data || res?.data || []),
+    { ttl: 30000, initialData: [] }
+  );
+
+  const groups = groupsData || [];
+  const invites = invitesData || [];
+  const loading = groupsLoading || invitesLoading;
 
   const handleAcceptInvite = async (groupId, inviteId) => {
     try {
@@ -61,7 +67,8 @@ export default function GroupsPage() {
         setPendingAnon({ inviteId, groupId, identity: payload });
         return;
       }
-      fetchData();
+      clientCache.invalidate('groups:list');
+      clientCache.invalidate('groups:invites');
     } catch (err) {
       const apiErr = err.response?.data?.error;
       if (apiErr?.code === 'ALIAS_REQUIRED') {
@@ -75,7 +82,7 @@ export default function GroupsPage() {
   const handleRejectInvite = async (groupId, inviteId) => {
     try {
       await groupApi.rejectInvite(groupId, inviteId);
-      setInvites(prev => prev.filter(i => i.id !== inviteId));
+      clientCache.mutate('groups:invites', (prev) => (prev || []).filter(i => i.id !== inviteId));
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to reject invite.');
     }
@@ -119,7 +126,8 @@ export default function GroupsPage() {
       avatarUrl: identity.avatarUrl,
     });
     setPendingAnon(null);
-    fetchData();
+    clientCache.invalidate('groups:list');
+    clientCache.invalidate('groups:invites');
   };
 
   const canDeleteGroup = (group) =>
@@ -137,7 +145,7 @@ export default function GroupsPage() {
       if (group.isAnonymous) {
         removeAnonSession(group.id);
       }
-      setGroups(prev => prev.filter(g => g.id !== group.id));
+      clientCache.mutate('groups:list', (prev) => (prev || []).filter(g => g.id !== group.id));
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete group.');
     }
@@ -369,7 +377,7 @@ export default function GroupsPage() {
         <CreateGroupModal
           onClose={() => setShowCreate(false)}
           onCreated={(group) => {
-            fetchData();
+            clientCache.invalidate('groups:list');
             if (group?.id) navigate(`/groups/${group.id}`);
           }}
         />
@@ -379,7 +387,7 @@ export default function GroupsPage() {
         <CreateCohortGroupModal
           onClose={() => setShowCreateCohort(false)}
           onCreated={(group) => {
-            fetchData();
+            clientCache.invalidate('groups:list');
             if (group?.id) navigate(`/groups/${group.id}`);
           }}
         />

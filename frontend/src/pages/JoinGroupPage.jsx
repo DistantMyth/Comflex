@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { Loader2, CheckCircle2, AlertTriangle, ArrowRight, Users, KeyRound } from 'lucide-react';
 import { setAnonSession } from '../api/client';
 import { groupApi } from '../api/groupApi';
+import { clientCache } from '../utils/clientCache';
 import BackupKeyModal from '../components/BackupKeyModal';
 
 export default function JoinGroupPage() {
@@ -16,6 +17,7 @@ export default function JoinGroupPage() {
 
   const handleJoinSuccess = useCallback((data) => {
     const payload = data.data;
+    clientCache.invalidate('groups:list');
     if (payload?.identityId && payload?.secret) {
       setAnonSession(payload.groupId, {
         identityId: payload.identityId,

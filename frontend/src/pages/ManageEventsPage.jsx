@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { eventApi } from '../api/eventApi';
+import { clientCache } from '../utils/clientCache';
 
 function InviteLinkButton({ eventId }) {
   const [copied, setCopied] = useState(false);
@@ -106,6 +107,7 @@ export default function ManageEventsPage() {
       };
 
       await eventApi.createEvent(payload);
+      clientCache.invalidate('events:list');
       setMessage('Event successfully created!');
       setShowForm(false);
       setForm({
@@ -125,6 +127,7 @@ export default function ManageEventsPage() {
     if (!confirm(`Delete event "${title}"? This cannot be undone.`)) return;
     try {
       await eventApi.deleteEvent(id);
+      clientCache.invalidate('events:list');
       fetchEvents();
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete event.');

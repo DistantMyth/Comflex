@@ -44,6 +44,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { groupApi } from '../api/groupApi';
+import { clientCache } from '../utils/clientCache';
 import Avatar from './Avatar';
 import { cn } from '../utils/cn';
 
@@ -576,6 +577,7 @@ export default function GroupSettingsPanel({
     try {
       await groupApi.deleteGroup(groupId);
       showToast('Group permanently deleted');
+      clientCache.mutate('groups:list', (prev) => (Array.isArray(prev) ? prev.filter((g) => g.id !== groupId) : prev));
       if (onGroupDeleted) {
         onGroupDeleted();
       } else {

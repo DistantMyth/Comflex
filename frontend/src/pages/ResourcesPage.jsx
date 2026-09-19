@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { resourceApi } from '../api/resourceApi';
+import { clientCache } from '../utils/clientCache';
 
 const getDynamicFolderTree = (user, myYear) => {
   const tree = {
@@ -104,16 +105,27 @@ export default function ResourcesPage() {
   }, [path]);
   const getCurrentSubject = useCallback(() => path.find(p => p.type === 'subject'), [path]);
 
-  const fetchSubjects = useCallback(async () => {
+  const fetchSubjects = useCallback(async (force = false) => {
     if (currentLevel !== 'SUBJECTS') return;
+    const cat = getCurrentCategory();
+    const subCat = getCurrentSubCategory();
+    const yr = getCurrentYearGroup();
+    const cacheKey = `resources:subjects:${cat}:${subCat}:${yr}`;
+
+    if (force) {
+      clientCache.invalidate(cacheKey);
+    }
     setLoading(true);
     try {
-      const res = await resourceApi.getSubjects({
-        category: getCurrentCategory(),
-        subCategory: getCurrentSubCategory(),
-        yearGroup: getCurrentYearGroup(),
-      });
-      setSubjects(res.data?.data || []);
+      const data = await clientCache.getOrFetch(
+        cacheKey,
+        () =>
+          resourceApi
+            .getSubjects({ category: cat, subCategory: subCat, yearGroup: yr })
+            .then((res) => res.data?.data || []),
+        { ttl: 120000 }
+      );
+      setSubjects(data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -121,13 +133,22 @@ export default function ResourcesPage() {
     }
   }, [currentLevel, getCurrentCategory, getCurrentSubCategory, getCurrentYearGroup]);
 
-  const fetchResources = useCallback(async () => {
+  const fetchResources = useCallback(async (force = false) => {
     const subj = getCurrentSubject();
     if (!subj) return;
+    const cacheKey = `resources:files:${subj.id}`;
+
+    if (force) {
+      clientCache.invalidate(cacheKey);
+    }
     setLoading(true);
     try {
-      const res = await resourceApi.getResources(subj.id);
-      setResources(res.data?.data || []);
+      const data = await clientCache.getOrFetch(
+        cacheKey,
+        () => resourceApi.getResources(subj.id).then((res) => res.data?.data || []),
+        { ttl: 120000 }
+      );
+      setResources(data || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -159,7 +180,8 @@ export default function ResourcesPage() {
     if (!confirm('Are you sure you want to delete this subject and all its files?')) return;
     try {
       await resourceApi.deleteSubject(id);
-      fetchSubjects();
+      clientCache.invalidatePrefix('resources:subjects:');
+      fetchSubjects(true);
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete');
     }
@@ -169,7 +191,8 @@ export default function ResourcesPage() {
     if (!confirm('Are you sure you want to delete this file?')) return;
     try {
       await resourceApi.deleteResource(id);
-      fetchResources();
+      clientCache.invalidatePrefix('resources:files:');
+      fetchResources(true);
     } catch (err) {
       alert(err.response?.data?.error?.message || 'Failed to delete');
     }
@@ -227,7 +250,8 @@ export default function ResourcesPage() {
       setShowUploadModal(false);
       setUploadTitle('');
       setUploadFile(null);
-      fetchResources();
+      clientCache.invalidatePrefix('resources:files:');
+      fetchResources(true);
     } catch (err) {
       setUploadError(err.response?.data?.error?.message || 'Failed to upload resource.');
     } finally {
@@ -250,7 +274,8 @@ export default function ResourcesPage() {
       });
       setShowSubjectModal(false);
       setSubjectName('');
-      fetchSubjects();
+      clientCache.invalidatePrefix('resources:subjects:');
+      fetchSubjects(true);
     } catch (err) {
       setSubjectError(err.response?.data?.error?.message || 'Failed to create subject.');
     } finally {

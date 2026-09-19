@@ -6,20 +6,15 @@ import {
   CheckCircle2, Sparkles, AlertCircle
 } from 'lucide-react';
 import { eventApi } from '../api/eventApi';
+import { useClientCache } from '../hooks/useClientCache';
 
 export default function EventsPage() {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchEvents = () => {
-      eventApi.listEvents()
-        .then(res => setEvents(res.data?.data || []))
-        .catch(err => console.error(err))
-        .finally(() => setLoading(false));
-    };
-    fetchEvents();
-  }, []);
+  const { data: eventsData, loading } = useClientCache(
+    'events:list',
+    () => eventApi.listEvents().then((res) => res.data?.data || []),
+    { ttl: 60000, initialData: [] }
+  );
+  const events = eventsData || [];
 
   const now = new Date();
 
