@@ -379,5 +379,49 @@ await test('Warm cache hit vs Stale background revalidation loading flags', asyn
   assert.deepStrictEqual(finalSnap.data, { version: 2 });
 });
 
+await test('clientCache.get() returns direct data structure or null for cold keys', async () => {
+  assert.strictEqual(clientCache.get('nonexistent'), null);
+
+  await clientCache.getOrFetch('sync:key', async () => ({ value: 123 }), { ttl: 5000 });
+  const entry = clientCache.get('sync:key');
+  assert.ok(entry, 'Entry should exist');
+  assert.deepStrictEqual(entry.data, { value: 123 });
+  assert.strictEqual(entry.isCold, false);
+  assert.strictEqual(typeof entry.timestamp, 'number');
+});
+
+await test('clientCache.isInFlight() accurately reflects in-flight network activity', async () => {
+  let finish;
+  const slowFetcher = () => new Promise((resolve) => (finish = resolve));
+
+  assert.strictEqual(clientCache.isInFlight('flight:key'), false);
+
+  const p = clientCache.getOrFetch('flight:key', slowFetcher, { ttl: 5000 });
+  assert.strictEqual(clientCache.isInFlight('flight:key'), true);
+
+  finish('done');
+  await p;
+  assert.strictEqual(clientCache.isInFlight('flight:key'), false);
+});
+
+await test('Error cooldown prevents tight infinite revalidation / notify loop', async () => {
+  let callCount = 0;
+  const failingFetcher = async () => {
+    callCount++;
+    throw new Error('503 Service Unavailable');
+  };
+
+  // First fetch fails
+  await clientCache.getOrFetch('failing:route', failingFetcher, { ttl: 10000 }).catch(() => {});
+  assert.strictEqual(callCount, 1);
+
+  // isStale should now return FALSE because the 5s error cooldown is active!
+  assert.strictEqual(clientCache.isStale('failing:route', 10000), false, 'Should be within error cooldown');
+
+  // Second fetch within cooldown returns the cached error state without calling network
+  await clientCache.getOrFetch('failing:route', failingFetcher, { ttl: 10000 }).catch(() => {});
+  assert.strictEqual(callCount, 1, 'Should not hammer network during error cooldown');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed.\n`);
 if (failed > 0) process.exit(1);

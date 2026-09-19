@@ -23,7 +23,6 @@ import { notificationsApi } from '../api/notificationsApi';
 import Avatar from './Avatar';
 import ComflexLogo from './ComflexLogo';
 import ThemeToggle from './ThemeToggle';
-import LiquidGlassFilter from './LiquidGlassFilter';
 import ErrorBoundary from './ErrorBoundary';
 
 const RING_LABELS = {
@@ -299,7 +298,6 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen flex bg-[var(--color-bg-primary)]">
-      <LiquidGlassFilter />
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-[268px] glass-panel flex-col fixed inset-y-0 left-0 z-30 border-r border-[var(--color-border)] shadow-sm">
         <Logo />

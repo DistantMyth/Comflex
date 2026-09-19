@@ -171,8 +171,8 @@ body {
 .liquid-glass-card {
   position: relative;
   background: var(--color-bg-glass);
-  backdrop-filter: var(--blur-glass) url("#liquid-glass");
-  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass) saturate(160%);
+  -webkit-backdrop-filter: var(--blur-glass) saturate(160%);
   border: 1px solid var(--color-border);
   border-radius: 1.25rem;
   box-shadow: 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LiquidGlassButton.jsx — Official 21st.dev (@designali-in) Liquid Glass Button
  * Enhanced for Comflex with our custom matte + glassy theme & palette.
  */
@@ -6,7 +6,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import LiquidGlassFilter from './LiquidGlassFilter';
 
 export default function LiquidGlassButton({
   children,
@@ -50,12 +49,12 @@ export default function LiquidGlassButton({
           dark:shadow-[0_0_8px_rgba(0,0,0,0.25),0_3px_8px_rgba(0,0,0,0.35),inset_3px_3px_0.5px_-3.5px_rgba(255,255,255,0.12),inset_-3px_-3px_0.5px_-3.5px_rgba(255,255,255,0.8),inset_1px_1px_1px_-0.5px_rgba(104,166,145,0.6),inset_-1px_-1px_1px_-0.5px_rgba(239,199,194,0.6),inset_0_0_8px_4px_rgba(104,166,145,0.15),0_0_16px_rgba(104,166,145,0.25)]"
       />
 
-      {/* SVG Displacement Refraction Filter Layer */}
+      {/* Frosted Refraction Filter Layer */}
       <div
         className="absolute inset-0 isolate -z-10 rounded-full overflow-hidden pointer-events-none"
         style={{
-          backdropFilter: 'url("#container-glass")',
-          WebkitBackdropFilter: 'blur(16px)',
+          backdropFilter: 'blur(16px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(16px) saturate(180%)',
         }}
       />
 
@@ -82,8 +81,6 @@ export default function LiquidGlassButton({
         {Icon && <Icon size={16} className="text-[var(--palette-teal)] transition-transform group-hover:scale-110" />}
         {children}
       </span>
-
-      <LiquidGlassFilter />
     </>
   );
 

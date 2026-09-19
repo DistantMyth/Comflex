@@ -26,6 +26,8 @@ class ClientCache {
     this.maxEntries = maxEntries;
     this.epoch = 0;
     this.userIdProvider = null;
+    this._cachedToken = null;
+    this._cachedUid = null;
   }
 
   setUserIdProvider(fn) {
@@ -39,17 +41,26 @@ class ClientCache {
         if (id) return id;
       } catch { /* ignore */ }
     }
-    // Safe browser fallback without module cycle
+    // Safe browser fallback with token memoization
     if (typeof window !== 'undefined' && window.localStorage) {
       try {
         const token = window.localStorage.getItem('accessToken');
-        if (token) {
-          const parts = token.split('.');
-          if (parts.length === 3) {
-            const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-            const payload = JSON.parse(atob(base64));
-            return payload.sub || payload.userId || payload.id || null;
-          }
+        if (!token) {
+          this._cachedToken = null;
+          this._cachedUid = null;
+          return null;
+        }
+        if (token === this._cachedToken && this._cachedUid !== null) {
+          return this._cachedUid;
+        }
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+          const payload = JSON.parse(atob(base64));
+          const uid = payload.sub || payload.userId || payload.id || null;
+          this._cachedToken = token;
+          this._cachedUid = uid;
+          return uid;
         }
       } catch { /* ignore */ }
     }
@@ -59,6 +70,25 @@ class ClientCache {
   getScopedKey(rawKey) {
     const uid = this.getUserId() || 'global';
     return `${uid}:${rawKey}`;
+  }
+
+  get(rawKey) {
+    const scopedKey = this.getScopedKey(rawKey);
+    const entry = this.entries.get(scopedKey);
+    if (!entry) return null;
+    return {
+      data: entry.data,
+      timestamp: entry.timestamp,
+      isCold: entry.isCold,
+      error: entry.error,
+      version: entry.version,
+    };
+  }
+
+  isInFlight(rawKey) {
+    const scopedKey = this.getScopedKey(rawKey);
+    const entry = this.entries.get(scopedKey);
+    return Boolean(entry?.promise);
   }
 
   updateEntrySnapshot(entry) {
@@ -116,7 +146,15 @@ class ClientCache {
   isStale(rawKey, ttl = 60000) {
     const scopedKey = this.getScopedKey(rawKey);
     const entry = this.entries.get(scopedKey);
-    if (!entry || entry.timestamp === 0 || entry.isCold) return true;
+    if (!entry) return true;
+    // An active in-flight fetch is already handling freshness; avoid spawning duplicate loops
+    if (entry.promise !== null) return false;
+    // Cold or explicitly invalidated
+    if (entry.timestamp === 0 || entry.isCold) return true;
+    // If an error occurred on previous fetch, enforce a 5-second backoff cooldown
+    if (entry.error) {
+      return (Date.now() - entry.timestamp) >= Math.min(ttl, 5000);
+    }
     return (Date.now() - entry.timestamp) >= ttl;
   }
 
@@ -145,14 +183,17 @@ class ClientCache {
       this.entries.set(scopedKey, entry);
     }
 
-    const isStale = (Date.now() - entry.timestamp) >= ttl || entry.timestamp === 0 || entry.isCold;
+    const isStale = this.isStale(rawKey, ttl);
 
     // Singleflight coalescing check: only coalesce if the in-flight promise matches CURRENT version
     if (entry.promise && entry.inFlightVersion === entry.version) {
       return entry.promise;
     }
 
-    if (!isStale && !entry.isCold && entry.data !== undefined) {
+    if (!isStale && !entry.isCold) {
+      if (entry.error && entry.data === undefined) {
+        throw entry.error;
+      }
       return entry.data;
     }
 
@@ -187,6 +228,7 @@ class ClientCache {
         if (currentEntry && currentEntry.version === requestVersion && this.epoch === requestEpoch) {
           currentEntry.error = err;
           currentEntry.isCold = false;
+          currentEntry.timestamp = Date.now(); // Record error timestamp for cooldown
           this.updateEntrySnapshot(currentEntry);
           this.notify(scopedKey);
         }
@@ -276,6 +318,8 @@ class ClientCache {
 
   clear() {
     this.epoch++;
+    this._cachedToken = null;
+    this._cachedUid = null;
     const activeKeys = [...this.subscribers.keys()];
     this.entries.clear();
     for (const k of activeKeys) {

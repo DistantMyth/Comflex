@@ -21,6 +21,9 @@ export function useClientCache(key, fetcherFn, options = {}) {
   const onSuccessRef = useRef(options.onSuccess);
   onSuccessRef.current = options.onSuccess;
 
+  const initialDataRef = useRef(initialData);
+  initialDataRef.current = initialData;
+
   const prevDataRef = useRef(initialData);
 
   // Subscribe to external store via standard React 19 API
@@ -50,12 +53,12 @@ export function useClientCache(key, fetcherFn, options = {}) {
     if (clientCache.isStale(key, ttl)) {
       clientCache.getOrFetch(key, () => fetcherRef.current(), {
         ttl,
-        initialData,
+        initialData: initialDataRef.current,
       }).catch(() => {
         // Errors are captured inside the cache snapshot error property
       });
     }
-  }, [key, enabled, ttl, initialData, snapshot.version]);
+  }, [key, enabled, ttl, snapshot.version]);
 
   // Fire onSuccess when fresh data arrives
   useEffect(() => {
@@ -68,8 +71,11 @@ export function useClientCache(key, fetcherFn, options = {}) {
   const refresh = useCallback(() => {
     if (!key) return Promise.resolve();
     clientCache.invalidate(key);
-    return clientCache.getOrFetch(key, () => fetcherRef.current(), { ttl, initialData });
-  }, [key, ttl, initialData]);
+    return clientCache.getOrFetch(key, () => fetcherRef.current(), {
+      ttl,
+      initialData: initialDataRef.current,
+    });
+  }, [key, ttl]);
 
   const mutate = useCallback(
     (updater) => {

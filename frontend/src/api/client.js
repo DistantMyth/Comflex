@@ -27,8 +27,11 @@ export function getAccessToken() {
   return accessToken;
 }
 
+let cachedUserId = null;
+
 export function setAccessToken(token) {
   accessToken = token || null;
+  cachedUserId = null;
   try {
     if (token) {
       localStorage.setItem('accessToken', token);
@@ -40,6 +43,7 @@ export function setAccessToken(token) {
 
 export function clearAccessToken() {
   accessToken = null;
+  cachedUserId = null;
   try {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
@@ -131,12 +135,15 @@ function safeUserKey(userId) {
 }
 
 export function getCurrentUserId() {
-  if (!accessToken) return 'global';
+  const token = getAccessToken();
+  if (!token) return 'global';
+  if (cachedUserId) return cachedUserId;
   try {
-    const parts = accessToken.split('.');
+    const parts = token.split('.');
     if (parts.length < 2) return 'global';
     const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return payload.sub || 'global';
+    cachedUserId = payload.sub || 'global';
+    return cachedUserId;
   } catch {
     return 'global';
   }
