@@ -9,6 +9,7 @@
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Try loading from standard locations
 dotenv.config();
@@ -118,8 +119,13 @@ const env = {
   // Redis / Distributed Caching (optional in dev, fallback to in-memory)
   REDIS_URL: cleanEnvString(process.env.REDIS_URL),
 
-  // Webhooks
-  WEBHOOK_SECRET: cleanEnvString(process.env.WEBHOOK_SECRET) || 'dev-webhook-secret-comflex',
+  // Webhooks: If WEBHOOK_SECRET is not provided, generate a cryptographically secure random secret
+  // so the server boots cleanly without crashing on production deployments where webhooks aren't yet configured.
+  WEBHOOK_SECRET: cleanEnvString(process.env.WEBHOOK_SECRET) || (
+    (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)
+      ? 'dev-webhook-secret-comflex-development-key-32chars'
+      : crypto.randomBytes(32).toString('hex')
+  ),
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
@@ -143,7 +149,9 @@ function assertStrongSecret(name, value) {
 if (env.NODE_ENV !== 'development') {
   assertStrongSecret('JWT_ACCESS_SECRET', env.JWT_ACCESS_SECRET);
   assertStrongSecret('JWT_REFRESH_SECRET', env.JWT_REFRESH_SECRET);
-  assertStrongSecret('WEBHOOK_SECRET', env.WEBHOOK_SECRET);
+  if (process.env.WEBHOOK_SECRET) {
+    assertStrongSecret('WEBHOOK_SECRET', env.WEBHOOK_SECRET);
+  }
 }
 
 module.exports = env;
