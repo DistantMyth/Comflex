@@ -119,13 +119,15 @@ const env = {
   // Redis / Distributed Caching (optional in dev, fallback to in-memory)
   REDIS_URL: cleanEnvString(process.env.REDIS_URL),
 
-  // Webhooks: If WEBHOOK_SECRET is not provided, generate a cryptographically secure random secret
-  // so the server boots cleanly without crashing on production deployments where webhooks aren't yet configured.
+  // Webhooks: Secret used for HMAC-SHA256 signature verification.
+  // In development, default to a known dev secret. In production, if unset,
+  // webhooks are safely disabled rather than generating ephemeral keys per process.
   WEBHOOK_SECRET: cleanEnvString(process.env.WEBHOOK_SECRET) || (
     (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV)
       ? 'dev-webhook-secret-comflex-development-key-32chars'
-      : crypto.randomBytes(32).toString('hex')
+      : null
   ),
+  WEBHOOK_SECRET_FALLBACK: cleanEnvString(process.env.WEBHOOK_SECRET_FALLBACK) || null,
 };
 
 // ── Fail-fast secrets validation ──────────────────────────────────────────
@@ -149,8 +151,13 @@ function assertStrongSecret(name, value) {
 if (env.NODE_ENV !== 'development') {
   assertStrongSecret('JWT_ACCESS_SECRET', env.JWT_ACCESS_SECRET);
   assertStrongSecret('JWT_REFRESH_SECRET', env.JWT_REFRESH_SECRET);
-  if (process.env.WEBHOOK_SECRET) {
+  if (env.WEBHOOK_SECRET) {
     assertStrongSecret('WEBHOOK_SECRET', env.WEBHOOK_SECRET);
+  } else {
+    console.warn('[ENV] ⚠️ WEBHOOK_SECRET is not configured. Webhook endpoints will be disabled (HTTP 503).');
+  }
+  if (env.WEBHOOK_SECRET_FALLBACK) {
+    assertStrongSecret('WEBHOOK_SECRET_FALLBACK', env.WEBHOOK_SECRET_FALLBACK);
   }
 }
 

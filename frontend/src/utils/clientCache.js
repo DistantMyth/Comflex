@@ -320,11 +320,11 @@ class ClientCache {
     this.epoch++;
     this._cachedToken = null;
     this._cachedUid = null;
-    const activeKeys = [...this.subscribers.keys()];
     this.entries.clear();
-    for (const k of activeKeys) {
-      this.notify(k);
+    for (const [, set] of this.subscribers.entries()) {
+      set.forEach(l => { try { l(); } catch {} });
     }
+    this.subscribers.clear();
   }
 }
 

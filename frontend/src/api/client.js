@@ -47,6 +47,11 @@ export function clearAccessToken() {
   try {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
+    localStorage.removeItem('comflex-anon-sessions');
+    sessionStorage.clear();
+    if (typeof document !== 'undefined') {
+      document.cookie = 'comflex_anon_sessions=; Path=/; Max-Age=0; SameSite=Lax';
+    }
   } catch { /* ignore */ }
   clientCache.clear();
 }

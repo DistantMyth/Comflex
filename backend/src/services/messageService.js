@@ -121,7 +121,7 @@ async function getMessages(groupId, { page = 1, limit = 50 } = {}, currentUserId
   if (page === 1 && limit === 50) {
     return cacheService.getOrSet(`group:messages:recent:${groupId}`, async () => {
       return fetchMessagesFromDb(groupId, { page, limit }, currentUserId, isAnon);
-    }, 60, 5000);
+    }, 60, { l1TtlMs: 5000 });
   }
   return fetchMessagesFromDb(groupId, { page, limit }, currentUserId, isAnon);
 }

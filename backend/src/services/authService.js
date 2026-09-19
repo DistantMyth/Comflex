@@ -544,8 +544,12 @@ async function resetPassword(token, newPassword) {
       resetToken: null,
       resetTokenExpiry: null,
       refreshToken: null, // Invalidate all sessions
+      secVersion: { increment: 1 },
     },
   });
+
+  const cacheInvalidator = require('./cacheInvalidator');
+  await cacheInvalidator.invalidateUser(user.id, { disconnect: true });
 
   return { message: 'Password has been reset successfully. Please log in.' };
 }

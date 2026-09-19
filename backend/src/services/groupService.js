@@ -249,13 +249,7 @@ async function markGroupRead(groupId, userId) {
 
   await seqCounterService.setUserCursor(userId, groupId, currentSeq);
 
-  return prisma.groupMember.update({
-    where: { userId_groupId: { userId, groupId } },
-    data: {
-      lastReadAt: new Date(),
-      lastReadSeq: currentSeq,
-    },
-  });
+  return { lastReadSeq: currentSeq, lastReadAt: new Date() };
 }
 
 /**
@@ -338,8 +332,8 @@ async function deleteGroup(groupId) {
     emitToGroup(groupId, 'group:deleted', { groupId });
   } catch { /* socket emission is best effort */ }
 
-  await cacheInvalidator.invalidateGroup(groupId);
   await prisma.cohortGroup.delete({ where: { id: groupId } });
+  await cacheInvalidator.invalidateGroup(groupId);
 }
 
 /**

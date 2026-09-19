@@ -20,25 +20,44 @@ const POPULAR_REACTIONS = ['👍', '❤️', '🔥', '😂', '👏', '🎉'];
 
 function reconcileMessages(currentMessages, incomingRecent) {
   if (!incomingRecent || incomingRecent.length === 0) return currentMessages;
-  
-  const incomingTimestamps = incomingRecent
-    .map(m => new Date(m.createdAt).getTime())
-    .filter(t => !isNaN(t));
-  const minIncomingTime = incomingTimestamps.length > 0
-    ? Math.min(...incomingTimestamps)
-    : 0;
 
-  const historical = currentMessages.filter(m => {
-    const t = new Date(m.createdAt).getTime();
-    return !isNaN(t) && t < minIncomingTime;
-  });
+  const incomingMap = new Map();
+  for (const m of incomingRecent) {
+    if (m && m.id) {
+      incomingMap.set(m.id, m);
+    }
+  }
 
-  const seenIds = new Set();
   const merged = [];
-  for (const m of [...historical, ...incomingRecent]) {
-    if (m && m.id && !seenIds.has(m.id)) {
-      seenIds.add(m.id);
-      merged.push(m);
+  const seenIds = new Set();
+
+  // 1. Process current messages (preserves order, local optimistic mutations, and temp messages)
+  for (const current of currentMessages) {
+    if (!current || !current.id) continue;
+    seenIds.add(current.id);
+
+    const incoming = incomingMap.get(current.id);
+    if (incoming) {
+      // Merge server message while preserving local optimistic reaction or deletion
+      const isLocallyDeleted = current.isDeleted && !incoming.isDeleted;
+      const mergedMsg = {
+        ...incoming,
+        reactions: current._optimisticReaction ? current.reactions : (incoming.reactions || current.reactions),
+        isDeleted: isLocallyDeleted ? true : incoming.isDeleted,
+        content: isLocallyDeleted ? '[Message deleted]' : incoming.content,
+      };
+      merged.push(mergedMsg);
+    } else {
+      // Message is either historical (older than page 1) or a pending optimistic message
+      merged.push(current);
+    }
+  }
+
+  // 2. Add any newly arrived server messages not yet in currentMessages
+  for (const incoming of incomingRecent) {
+    if (incoming && incoming.id && !seenIds.has(incoming.id)) {
+      seenIds.add(incoming.id);
+      merged.push(incoming);
     }
   }
 

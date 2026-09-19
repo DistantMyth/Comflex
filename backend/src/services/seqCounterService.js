@@ -52,22 +52,29 @@ class SeqCounterService {
   }
 
   /**
-   * Advance a user's read cursor to the specified sequence number.
+   * Advance a user's read cursor to the specified sequence number monotonically.
    */
   async setUserCursor(userId, groupId, seq) {
     const redis = cacheService.getRedisClient();
     if (redis) {
       try {
-        await redis.hset(`user:read_cursors:${userId}`, groupId, seq);
+        await redis.eval(ADVANCE_USER_CURSOR_SCRIPT, 1, `user:read_cursors:${userId}`, groupId, seq);
       } catch (err) {
-        console.warn(`[SeqCounter] Redis hset cursor failed for ${userId}:`, err.message);
+        console.warn(`[SeqCounter] Redis advance cursor failed for ${userId}:`, err.message);
       }
     }
 
-    // Persist to MongoDB GroupMember
+    // Persist to MongoDB GroupMember monotonically (only update if current lastReadSeq < seq or null)
     try {
       await prisma.groupMember.updateMany({
-        where: { userId, groupId },
+        where: {
+          userId,
+          groupId,
+          OR: [
+            { lastReadSeq: { lt: seq } },
+            { lastReadSeq: null },
+          ],
+        },
         data: {
           lastReadSeq: seq,
           lastReadAt: new Date(),

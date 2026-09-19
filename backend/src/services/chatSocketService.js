@@ -42,6 +42,7 @@ function initSocket(httpServer, frontendUrl) {
 
     try {
       const decoded = verifyAccessToken(token);
+      socket.tokenSecVersion = typeof decoded.secVersion === 'number' ? decoded.secVersion : 0;
       socket.user = {
         id: decoded.sub,
         email: decoded.email,
@@ -68,7 +69,11 @@ function initSocket(httpServer, frontendUrl) {
         const sockets = io.sockets.adapter.rooms.get(`user:${payload.userId}`);
         if (sockets) {
           for (const sId of sockets) {
-            io.sockets.sockets.get(sId)?.disconnect(true);
+            const s = io.sockets.sockets.get(sId);
+            if (s) {
+              s.emit('auth:error', { error: 'Session expired due to security changes. Please log in again.' });
+              s.disconnect(true);
+            }
           }
         }
       } else if (payload.action === 'EVICT_ANON_IDENTITY') {
@@ -102,12 +107,18 @@ function initSocket(httpServer, frontendUrl) {
         socket.disconnect(true);
         return;
       }
+      const currentSecVer = typeof dbUser.secVersion === 'number' ? dbUser.secVersion : 0;
+      if (socket.tokenSecVersion < currentSecVer) {
+        socket.emit('auth:error', { error: 'Session expired due to security changes. Please log in again.' });
+        socket.disconnect(true);
+        return;
+      }
       socket.user = {
         id: dbUser.id,
         email: dbUser.email,
         globalRing: dbUser.globalRing,
         displayName: dbUser.displayName || dbUser.email,
-        secVersion: dbUser.secVersion || 0,
+        secVersion: currentSecVer,
       };
     } catch (err) {
       console.error(`[WS] Failed to load user for ${socket.user.id}:`, err.message);

@@ -101,15 +101,7 @@ class Singleflight {
 class CacheService {
   constructor() {
     this.l1 = new LRUCache({
-      max: 5000,
-      maxSize: 64 * 1024 * 1024, // 64 MB maximum heap cap
-      sizeCalculation: (val, key) => {
-        try {
-          return Buffer.byteLength(typeof val === 'string' ? val : JSON.stringify(val)) + Buffer.byteLength(key);
-        } catch {
-          return 512;
-        }
-      },
+      max: 2000,
       ttl: 15 * 1000, // 15s default max micro-burst TTL
       allowStale: false,
       updateAgeOnGet: false,
@@ -225,6 +217,7 @@ class CacheService {
       return l1Hit === '__NULL__' ? null : l1Hit;
     }
 
+    const opts = typeof options === 'number' ? { l1TtlMs: options } : (options || {});
     const slotKey = toSlotKey(key);
     const verKey = toVerKey(key);
 
@@ -238,7 +231,7 @@ class CacheService {
             return null;
           }
           const val = JSON.parse(raw, safeDateReviver);
-          const l1Ttl = options.l1TtlMs || Math.min(ttlSeconds, 15) * 1000;
+          const l1Ttl = opts.l1TtlMs || Math.min(ttlSeconds, 15) * 1000;
           this.l1.set(key, val, { ttl: l1Ttl });
           return val;
         }
@@ -247,80 +240,77 @@ class CacheService {
       }
     }
 
-    // 3. Capture expected version tombstone BEFORE fetching from DB
-    let expectedVer = '0';
-    if (this.isRedisReady) {
-      try {
-        expectedVer = (await this.redis.get(verKey)) || '0';
-      } catch (_) {}
-    }
+    // 3. Singleflight execution: wrap DB fetch + CAS write + L1 population
+    // This guarantees only ONE worker fetches from DB, runs CAS, and writes to L1.
+    // All coalesced callers receive the resolved result directly with L1 already hot.
+    return this.singleflight.do(key, async () => {
+      // Re-check L1 inside flight in case another concurrent flight just set it
+      const existingL1 = this.l1.get(key);
+      if (existingL1 !== undefined) {
+        return existingL1 === '__NULL__' ? null : existingL1;
+      }
 
-    // 4. Singleflight DB fetch (prevents stampedes)
-    let data;
-    try {
-      data = await this.singleflight.do(key, fetcher);
-    } catch (err) {
-      throw err; // Never negative-cache thrown DB errors
-    }
-
-    // Post-Singleflight L1 Check: If a concurrent caller in the same flight
-    // already completed and populated L1 via CAS, return immediately!
-    const postL1 = this.l1.get(key);
-    if (postL1 !== undefined) {
-      return postL1 === '__NULL__' ? null : postL1;
-    }
-
-    // 5. Handle null / missing entities (Negative Caching with Monotonic CAS)
-    if (data === null || data === undefined) {
-      const negTtl = options.negativeTtlMs ? Math.round(options.negativeTtlMs / 1000) : 15;
+      // Capture expected version tombstone BEFORE fetching from DB
+      let expectedVer = '0';
       if (this.isRedisReady) {
         try {
+          expectedVer = (await this.redis.get(verKey)) || '0';
+        } catch (_) {}
+      }
+
+      const data = await fetcher();
+
+      // Negative Caching with Monotonic CAS
+      if (data === null || data === undefined) {
+        const negTtl = opts.negativeTtlMs ? Math.round(opts.negativeTtlMs / 1000) : 15;
+        if (this.isRedisReady) {
+          try {
+            const casResult = await this.redis.eval(
+              CAS_SET_SCRIPT,
+              2,
+              slotKey,
+              verKey,
+              '__NULL__',
+              expectedVer,
+              negTtl
+            );
+            if (casResult === 1) {
+              this.l1.set(key, '__NULL__', { ttl: negTtl * 1000 });
+            }
+          } catch (_) {}
+        } else {
+          this.l1.set(key, '__NULL__', { ttl: negTtl * 1000 });
+        }
+        return null;
+      }
+
+      // Monotonic CAS write to L2 Redis
+      const l1Ttl = opts.l1TtlMs || Math.min(ttlSeconds, 15) * 1000;
+      if (this.isRedisReady) {
+        try {
+          const serialized = JSON.stringify(data);
           const casResult = await this.redis.eval(
             CAS_SET_SCRIPT,
             2,
             slotKey,
             verKey,
-            '__NULL__',
+            serialized,
             expectedVer,
-            negTtl
+            ttlSeconds
           );
           if (casResult === 1) {
-            this.l1.set(key, '__NULL__', { ttl: negTtl * 1000 });
+            this.l1.set(key, data, { ttl: l1Ttl });
           }
-        } catch (_) {}
-      } else {
-        this.l1.set(key, '__NULL__', { ttl: negTtl * 1000 });
-      }
-      return null;
-    }
-
-    // 6. Monotonic CAS write to L2 Redis
-    const l1Ttl = options.l1TtlMs || Math.min(ttlSeconds, 15) * 1000;
-    if (this.isRedisReady) {
-      try {
-        const serialized = JSON.stringify(data);
-        const casResult = await this.redis.eval(
-          CAS_SET_SCRIPT,
-          2,
-          slotKey,
-          verKey,
-          serialized,
-          expectedVer,
-          ttlSeconds
-        );
-        // L1 Population Guard: only populate L1 if CAS confirmed data was not superseded
-        if (casResult === 1) {
-          this.l1.set(key, data, { ttl: l1Ttl });
+        } catch (err) {
+          console.warn(`[Cache] Redis CAS write failed on ${key}:`, err.message);
         }
-      } catch (err) {
-        console.warn(`[Cache] Redis CAS write failed on ${key}:`, err.message);
+        return data;
       }
-      return data;
-    }
 
-    // Pure fallback mode when Redis is not configured / offline
-    this.l1.set(key, data, { ttl: l1Ttl });
-    return data;
+      // Pure fallback mode when Redis is not configured / offline
+      this.l1.set(key, data, { ttl: l1Ttl });
+      return data;
+    });
   }
 
   /**

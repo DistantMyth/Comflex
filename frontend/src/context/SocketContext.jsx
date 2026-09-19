@@ -83,6 +83,24 @@ export function SocketProvider({ children }) {
     // Real-time client cache synchronization
     socket.on('message:new', (message) => {
       if (!message?.groupId) return;
+
+      // Mutate recent messages cache so navigation and SWR maintain real-time sync
+      clientCache.mutate(`messages:group:${message.groupId}:recent`, (current) => {
+        if (!current) return current;
+        const payload = current?.data?.data || current?.data || current;
+        const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+        if (!list) return current;
+
+        if (list.some((m) => m.id === message.id)) return current;
+        const updatedList = [message, ...list];
+
+        if (payload?.messages) {
+          if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+          if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+        }
+        return updatedList;
+      });
+
       clientCache.mutate('groups:list', (groups) => {
         if (!Array.isArray(groups)) return groups;
         const index = groups.findIndex((g) => g.id === message.groupId);
@@ -112,6 +130,42 @@ export function SocketProvider({ children }) {
         const nextGroups = [...groups];
         nextGroups.splice(index, 1);
         return [updatedGroup, ...nextGroups];
+      });
+    });
+
+    socket.on('message:reaction', ({ messageId, reactions, groupId }) => {
+      if (!groupId) return;
+      clientCache.mutate(`messages:group:${groupId}:recent`, (current) => {
+        if (!current) return current;
+        const payload = current?.data?.data || current?.data || current;
+        const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+        if (!list) return current;
+
+        const updatedList = list.map((m) => (m.id === messageId ? { ...m, reactions } : m));
+        if (payload?.messages) {
+          if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+          if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+        }
+        return updatedList;
+      });
+    });
+
+    socket.on('message:delete', ({ messageId, groupId }) => {
+      if (!groupId) return;
+      clientCache.mutate(`messages:group:${groupId}:recent`, (current) => {
+        if (!current) return current;
+        const payload = current?.data?.data || current?.data || current;
+        const list = Array.isArray(payload?.messages) ? payload.messages : (Array.isArray(payload) ? payload : null);
+        if (!list) return current;
+
+        const updatedList = list.map((m) =>
+          m.id === messageId ? { ...m, isDeleted: true, content: '[Message deleted]', fileUrl: null } : m
+        );
+        if (payload?.messages) {
+          if (current?.data?.data) return { ...current, data: { ...current.data, data: { ...payload, messages: updatedList } } };
+          if (current?.data) return { ...current, data: { ...payload, messages: updatedList } };
+        }
+        return updatedList;
       });
     });
 

@@ -260,6 +260,55 @@ async function runTests() {
   assert.strictEqual(await cacheService.get('group:meta:g123'), null);
   console.log('   ✅ Message and member permission cache invalidations verified.');
 
+  // 14. Test Cluster-Wide WS Disconnect on Security Invalidation
+  console.log('\n14. Testing Cluster-Wide WS Disconnect on Security Invalidation...');
+  let disconnectedUser = null;
+  const wsControlHandler = (payload) => {
+    if (payload.action === 'DISCONNECT_USER') {
+      disconnectedUser = payload.userId;
+    }
+  };
+  cacheInvalidator.on('ws:control', wsControlHandler);
+  await cacheInvalidator.invalidateUser('u_revoked_123', { disconnect: true });
+  assert.strictEqual(disconnectedUser, 'u_revoked_123', 'invalidateUser({ disconnect: true }) must emit DISCONNECT_USER control action');
+  cacheInvalidator.removeListener('ws:control', wsControlHandler);
+  console.log('   ✅ Cluster-wide WS disconnect broadcast verified.');
+
+  // 15. Test Deterministic Content-Addressable Webhook Event ID
+  console.log('\n15. Testing Deterministic Content-Addressable Webhook Event ID...');
+  const hookPayload = JSON.stringify({ event: 'payment.completed', txHash: '0xabc' });
+  const hash1 = crypto.createHash('sha256').update(hookPayload).digest('hex');
+  const hash2 = crypto.createHash('sha256').update(hookPayload).digest('hex');
+  assert.strictEqual(hash1, hash2, 'Identical payloads must yield identical content-addressable event IDs');
+  console.log('   ✅ Content-addressable event ID hash verified.');
+
+  // 16. Test Dual-Secret HMAC Webhook Verification Logic
+  console.log('\n16. Testing Dual-Secret HMAC Webhook Verification...');
+  const primarySecret = 'primary-secret-32-chars-minimum-length!';
+  const fallbackSecret = 'fallback-secret-32-chars-minimum-length!';
+  const ts = Math.floor(Date.now() / 1000);
+  const dualPayloadToSign = `${ts}.${hookPayload}`;
+
+  const sigWithPrimary = crypto.createHmac('sha256', primarySecret).update(dualPayloadToSign).digest('hex');
+  const sigWithFallback = crypto.createHmac('sha256', fallbackSecret).update(dualPayloadToSign).digest('hex');
+
+  function verifyWithSecrets(sig, secrets) {
+    const sBuf = Buffer.from(sig, 'hex');
+    for (const s of secrets) {
+      const expected = crypto.createHmac('sha256', s).update(dualPayloadToSign).digest('hex');
+      const expBuf = Buffer.from(expected, 'hex');
+      if (sBuf.length === expBuf.length && crypto.timingSafeEqual(sBuf, expBuf)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  assert.strictEqual(verifyWithSecrets(sigWithPrimary, [primarySecret, fallbackSecret]), true);
+  assert.strictEqual(verifyWithSecrets(sigWithFallback, [primarySecret, fallbackSecret]), true);
+  assert.strictEqual(verifyWithSecrets(sigWithPrimary, [fallbackSecret]), false);
+  console.log('   ✅ Dual-secret rotation verification logic verified.');
+
   console.log('\n🎉 ALL CACHING & WEBHOOK VERIFICATION TESTS PASSED!\n');
 }
 

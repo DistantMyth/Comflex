@@ -7,6 +7,8 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
+const IS_TOUCH_CAPABLE = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
 export default function LiquidGlassButton({
   children,
   to,
@@ -22,11 +24,6 @@ export default function LiquidGlassButton({
 }) {
   const [isPressed, setIsPressed] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
-  const [isTouch, setIsTouch] = useState(false);
-
-  useEffect(() => {
-    setIsTouch('ontouchstart' in window || navigator.maxTouchPoints > 0);
-  }, []);
 
   const sizeClasses = {
     sm: 'h-9 px-4 text-xs gap-1.5',
@@ -91,7 +88,7 @@ export default function LiquidGlassButton({
       <Link
         to={to}
         className={baseClasses}
-        onMouseEnter={() => !isTouch && setIsHovered(true)}
+        onMouseEnter={() => !IS_TOUCH_CAPABLE && setIsHovered(true)}
         onMouseLeave={() => { setIsHovered(false); setIsPressed(false); }}
         onMouseDown={() => setIsPressed(true)}
         onMouseUp={() => setIsPressed(false)}
@@ -109,7 +106,7 @@ export default function LiquidGlassButton({
       <a
         href={href}
         className={baseClasses}
-        onMouseEnter={() => !isTouch && setIsHovered(true)}
+        onMouseEnter={() => !IS_TOUCH_CAPABLE && setIsHovered(true)}
         onMouseLeave={() => { setIsHovered(false); setIsPressed(false); }}
         onMouseDown={() => setIsPressed(true)}
         onMouseUp={() => setIsPressed(false)}
@@ -128,7 +125,7 @@ export default function LiquidGlassButton({
       disabled={disabled}
       onClick={onClick}
       className={baseClasses}
-      onMouseEnter={() => !isTouch && setIsHovered(true)}
+      onMouseEnter={() => !IS_TOUCH_CAPABLE && setIsHovered(true)}
       onMouseLeave={() => { setIsHovered(false); setIsPressed(false); }}
       onMouseDown={() => setIsPressed(true)}
       onMouseUp={() => setIsPressed(false)}

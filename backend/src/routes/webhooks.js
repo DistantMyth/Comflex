@@ -20,10 +20,64 @@ const { success, error } = require('../utils/apiResponse');
 const router = express.Router();
 
 /**
+ * Two-phase idempotent webhook execution wrapper.
+ * Phase 1: In-flight lock with 30s TTL.
+ * Phase 2: On handler success, release lock and set done tombstone for 24h.
+ * On handler error, release lock immediately so external retries succeed.
+ */
+async function executeIdempotentWebhook(eventId, handler) {
+  const redis = cacheService.getRedisClient();
+  const lockKey = `webhook:lock:${eventId}`;
+  const doneKey = `webhook:done:${eventId}`;
+
+  if (redis) {
+    const isDone = await redis.get(doneKey);
+    if (isDone) return { status: 'duplicate_ignored', eventId };
+    const acquired = await redis.set(lockKey, '1', 'NX', 'EX', 30);
+    if (!acquired) return { status: 'concurrent_in_flight', eventId };
+  } else {
+    if (cacheService.l1.get(doneKey)) return { status: 'duplicate_ignored', eventId };
+    if (cacheService.l1.get(lockKey)) return { status: 'concurrent_in_flight', eventId };
+    cacheService.l1.set(lockKey, '1', { ttl: 30 * 1000 });
+  }
+
+  try {
+    const result = await handler();
+    if (redis) {
+      await redis.set(doneKey, '1', 'EX', 86400);
+      await redis.del(lockKey);
+    } else {
+      cacheService.l1.set(doneKey, '1', { ttl: 86400 * 1000 });
+      cacheService.l1.delete(lockKey);
+    }
+    return result;
+  } catch (err) {
+    if (redis) {
+      await redis.del(lockKey).catch(() => {});
+    } else {
+      cacheService.l1.delete(lockKey);
+    }
+    throw err;
+  }
+}
+
+function handleWebhookOutcome(res, outcome) {
+  if (outcome?.status === 'concurrent_in_flight') {
+    res.set('Retry-After', '5');
+    return error(res, 'CONCURRENT_WEBHOOK', 'Event is currently being processed. Please retry shortly.', 429);
+  }
+  return success(res, outcome);
+}
+
+/**
  * Webhook signature & replay verification middleware
  */
 async function verifyWebhook(req, res, next) {
   try {
+    if (!env.WEBHOOK_SECRET) {
+      return error(res, 'WEBHOOKS_DISABLED', 'Webhook receiver is not configured on this server.', 503);
+    }
+
     const signature = req.headers['x-comflex-signature'];
     const timestampStr = req.headers['x-comflex-timestamp'];
 
@@ -49,37 +103,36 @@ async function verifyWebhook(req, res, next) {
     // Compute expected HMAC over `${timestamp}.${rawBody}`
     const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
     const payloadToSign = `${timestamp}.${rawBody}`;
-    const computedHmac = crypto
-      .createHmac('sha256', env.WEBHOOK_SECRET)
-      .update(payloadToSign)
-      .digest('hex');
+
+    const secretsToTry = [env.WEBHOOK_SECRET];
+    if (env.WEBHOOK_SECRET_FALLBACK) {
+      secretsToTry.push(env.WEBHOOK_SECRET_FALLBACK);
+    }
 
     const sigBuf = Buffer.from(signature, 'hex');
-    const expectedBuf = Buffer.from(computedHmac, 'hex');
+    let isValid = false;
 
-    // Length guard prevents Node.js RangeError crashes
-    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    for (const secret of secretsToTry) {
+      const computedHmac = crypto
+        .createHmac('sha256', secret)
+        .update(payloadToSign)
+        .digest('hex');
+      const expectedBuf = Buffer.from(computedHmac, 'hex');
+
+      // Length guard prevents Node.js RangeError crashes
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        isValid = true;
+        break;
+      }
+    }
+
+    if (!isValid) {
       return error(res, 'INVALID_SIGNATURE', 'Webhook signature verification failed.', 401);
     }
 
-    // Atomic idempotency deduplication with dual-mode fallback
-    const eventId = req.headers['x-comflex-event-id'] || req.body?.eventId || crypto.createHash('sha256').update(`${timestamp}.${rawBody}`).digest('hex');
-    if (eventId && typeof eventId === 'string') {
-      const redis = cacheService.getRedisClient();
-      if (redis) {
-        const setOk = await redis.set(`webhook:processed:${eventId}`, '1', 'NX', 'EX', 86400);
-        if (!setOk) {
-          // Already processed — return idempotent success
-          return success(res, { status: 'duplicate_ignored', eventId });
-        }
-      } else {
-        // In-memory fallback using L1 cache
-        if (cacheService.l1.has(`webhook:processed:${eventId}`)) {
-          return success(res, { status: 'duplicate_ignored', eventId });
-        }
-        cacheService.l1.set(`webhook:processed:${eventId}`, '1', { ttl: 86400 * 1000 });
-      }
-    }
+    // Derive deterministic eventId: use header/body eventId, or content-addressable hash of rawBody
+    // (omits timestamp so retries with updated timestamp headers yield identical eventId)
+    req.eventId = req.headers['x-comflex-event-id'] || req.body?.eventId || crypto.createHash('sha256').update(rawBody).digest('hex');
 
     next();
   } catch (err) {
@@ -96,26 +149,30 @@ router.use(verifyWebhook);
  */
 router.post('/cache/invalidate', async (req, res, next) => {
   try {
-    const { key, clearAll, userId, groupId } = req.body;
+    const outcome = await executeIdempotentWebhook(req.eventId, async () => {
+      const { key, clearAll, userId, groupId } = req.body;
 
-    if (clearAll) {
-      cacheService.clearL1();
-      return success(res, { status: 'l1_cleared' });
-    }
+      if (clearAll) {
+        cacheService.clearL1();
+        return { status: 'l1_cleared' };
+      }
 
-    if (userId) {
-      await cacheInvalidator.invalidateUser(userId);
-    }
+      if (userId) {
+        await cacheInvalidator.invalidateUser(userId);
+      }
 
-    if (groupId) {
-      await cacheInvalidator.invalidateGroup(groupId);
-    }
+      if (groupId) {
+        await cacheInvalidator.invalidateGroup(groupId);
+      }
 
-    if (key) {
-      await cacheInvalidator.invalidateKey(key);
-    }
+      if (key) {
+        await cacheInvalidator.invalidateKey(key);
+      }
 
-    return success(res, { status: 'invalidated', key, userId, groupId });
+      return { status: 'invalidated', key, userId, groupId };
+    });
+
+    return handleWebhookOutcome(res, outcome);
   } catch (err) {
     next(err);
   }
@@ -133,34 +190,38 @@ router.post('/codeforces', async (req, res, next) => {
       return error(res, 'VALIDATION_ERROR', 'handle and rating are required.', 400);
     }
 
-    const cfKey = `cf:stats:${handle.toLowerCase()}`;
-    const cachedStats = await cacheService.get(cfKey);
+    const outcome = await executeIdempotentWebhook(req.eventId, async () => {
+      const cfKey = `cf:stats:${handle.toLowerCase()}`;
+      const cachedStats = await cacheService.get(cfKey);
 
-    // Monotonic timestamp check
-    if (cachedStats && cachedStats.timestamp && timestamp && timestamp < cachedStats.timestamp) {
-      return success(res, { status: 'ignored_stale_timestamp' });
-    }
+      // Monotonic timestamp check
+      if (cachedStats && cachedStats.timestamp && timestamp && timestamp < cachedStats.timestamp) {
+        return { status: 'ignored_stale_timestamp' };
+      }
 
-    const freshStats = {
-      handle,
-      rating: parseInt(rating, 10),
-      rank: rank || null,
-      timestamp: timestamp || Date.now(),
-    };
+      const freshStats = {
+        handle,
+        rating: parseInt(rating, 10),
+        rank: rank || null,
+        timestamp: timestamp || Date.now(),
+      };
 
-    // Cache stats for 1 hour
-    await cacheService.set(cfKey, freshStats, 3600);
+      // Cache stats for 1 hour
+      await cacheService.set(cfKey, freshStats, 3600);
 
-    // Update database user record if linked
-    await prisma.user.updateMany({
-      where: { cfHandle: { equals: handle, mode: 'insensitive' } },
-      data: { cfRating: freshStats.rating },
+      // Update database user record if linked
+      await prisma.user.updateMany({
+        where: { cfHandle: { equals: handle, mode: 'insensitive' } },
+        data: { cfRating: freshStats.rating },
+      });
+
+      // Invalidate leaderboard cache
+      await cacheInvalidator.invalidateKey('cf:leaderboard');
+
+      return { status: 'synced', stats: freshStats };
     });
 
-    // Invalidate leaderboard cache
-    await cacheInvalidator.invalidateKey('cf:leaderboard');
-
-    return success(res, { status: 'synced', stats: freshStats });
+    return handleWebhookOutcome(res, outcome);
   } catch (err) {
     next(err);
   }
@@ -168,20 +229,59 @@ router.post('/codeforces', async (req, res, next) => {
 
 /**
  * POST /api/v1/webhooks/payments
- * Inbound payment confirmation webhook.
+ * Inbound payment confirmation webhook with atomic credit fulfillment.
  */
 router.post('/payments', async (req, res, next) => {
   try {
     const { userId, credits, txHash, referenceId } = req.body;
+    const creditNum = parseInt(credits, 10);
 
-    if (!userId || !credits) {
-      return error(res, 'VALIDATION_ERROR', 'userId and credits are required.', 400);
+    if (!userId || isNaN(creditNum) || creditNum <= 0) {
+      return error(res, 'VALIDATION_ERROR', 'Valid userId and positive credits required.', 400);
     }
 
-    // Invalidate user cache to ensure fresh balance is visible immediately
-    await cacheInvalidator.invalidateUser(userId);
+    const paymentRef = txHash || referenceId;
+    if (!paymentRef) {
+      return error(res, 'VALIDATION_ERROR', 'External txHash or referenceId is required for payment webhooks.', 400);
+    }
 
-    return success(res, { status: 'acknowledged', userId, credits, txHash });
+    const outcome = await executeIdempotentWebhook(req.eventId, async () => {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: { creditBalance: { increment: creditNum } },
+            select: { id: true, creditBalance: true },
+          });
+
+          const transaction = await tx.transaction.create({
+            data: {
+              receiverId: userId,
+              amount: creditNum,
+              type: 'webhook_purchase',
+              referenceId: paymentRef,
+            },
+          });
+
+          return {
+            status: 'completed',
+            userId,
+            credits: creditNum,
+            newBalance: updatedUser.creditBalance,
+            transactionId: transaction.id,
+            txHash: paymentRef,
+          };
+        });
+      } catch (dbErr) {
+        if (dbErr.code === 'P2002' || String(dbErr.message).includes('duplicate')) {
+          return { status: 'duplicate_ignored', eventId: req.eventId, referenceId: paymentRef };
+        }
+        throw dbErr;
+      }
+    });
+
+    await cacheInvalidator.invalidateUser(userId);
+    return handleWebhookOutcome(res, outcome);
   } catch (err) {
     next(err);
   }

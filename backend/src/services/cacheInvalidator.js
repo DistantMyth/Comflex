@@ -113,10 +113,13 @@ class CacheInvalidator extends EventEmitter {
   /**
    * Invalidate user profile and permissions.
    */
-  async invalidateUser(userId) {
+  async invalidateUser(userId, options = {}) {
     await this.invalidateKey(`auth:user:${userId}`);
     await this.invalidateKey(`group:memberships:${userId}`);
     await this.invalidateKey(`user:read_cursors:${userId}`);
+    if (options && options.disconnect) {
+      await this.broadcastWsControl({ action: 'DISCONNECT_USER', userId });
+    }
   }
 
   /**

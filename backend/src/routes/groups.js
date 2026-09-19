@@ -1277,7 +1277,8 @@ router.get('/:id/messages', requireGroupMember, async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 100);
-    const result = await messageService.getMessages(req.params.id, { page, limit }, req.user.id, !!req.anonIdentity);
+    const isAnon = Boolean(req.group?.isAnonymous);
+    const result = await messageService.getMessages(req.params.id, { page, limit }, req.user.id, isAnon);
     return success(res, result);
   } catch (err) {
     next(err);
@@ -1301,7 +1302,8 @@ router.get('/:id/messages/pinned', requireGroupMember, async (req, res, next) =>
  */
 router.get('/:id/messages/:msgId', requireGroupMember, async (req, res, next) => {
   try {
-    const msg = await messageService.getMessage(req.params.msgId, req.params.id, !!req.anonIdentity);
+    const isAnon = Boolean(req.group?.isAnonymous);
+    const msg = await messageService.getMessage(req.params.msgId, req.params.id, isAnon);
     return success(res, msg);
   } catch (err) {
     if (err.statusCode) return error(res, err.code, err.message, err.statusCode);
@@ -1372,11 +1374,10 @@ router.post(
       }
 
       const rawReplyToId = typeof req.body.replyToId === 'string' ? req.body.replyToId.trim() : null;
-      const cleanReplyToId = (rawReplyToId && /^[0-9a-fA-F]{24}$/.test(rawReplyToId)) ? rawReplyToId : undefined;
-
+      const isAnonGroup = Boolean(req.group?.isAnonymous);
       const params = {
         content,
-        mentions: req.anonIdentity ? [] : parseMentions(req.body.mentions),
+        mentions: isAnonGroup ? [] : parseMentions(req.body.mentions),
         replyToId: cleanReplyToId,
         forwarded: req.body.forwarded === 'true' || req.body.forwarded === true,
         msgType: req.body.msgType || 'text',
@@ -1393,7 +1394,7 @@ router.post(
         }
         params.fileUrl = await storeFile(req.file, { folder: 'comflex/messages', localUrlPrefix: '/uploads/messages' });
         const ext = path.extname(req.file.originalname) || '';
-        params.fileName = req.anonIdentity ? `attachment${ext}` : req.file.originalname;
+        params.fileName = isAnonGroup ? `attachment${ext}` : req.file.originalname;
         params.fileSize = req.file.size;
         params.mimetype = req.file.mimetype;
         if (params.msgType === 'text') {
@@ -1413,7 +1414,7 @@ router.post(
 
       const msg = await messageService.sendMessage(
         req.params.id,
-        req.anonIdentity ? null : req.user.id,
+        isAnonGroup ? null : req.user.id,
         params,
         req.anonIdentity || null
       );

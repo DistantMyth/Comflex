@@ -26,19 +26,22 @@ export function useClientCache(key, fetcherFn, options = {}) {
 
   const prevDataRef = useRef(initialData);
 
+  const currentUid = clientCache.getCurrentUserId();
+  const epoch = clientCache.epoch;
+
   // Subscribe to external store via standard React 19 API
   const subscribe = useCallback(
     (onStoreChange) => {
       if (!enabled || !key) return () => {};
       return clientCache.subscribe(key, onStoreChange);
     },
-    [key, enabled]
+    [key, enabled, currentUid, epoch]
   );
 
   const getSnapshot = useCallback(() => {
     if (!enabled || !key) return clientCache.getServerSnapshot();
     return clientCache.getSnapshot(key);
-  }, [key, enabled]);
+  }, [key, enabled, currentUid, epoch]);
 
   const getServerSnapshot = useCallback(() => {
     return clientCache.getServerSnapshot();
